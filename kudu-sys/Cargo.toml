@@ -6,4 +6,6 @@ license = "MIT/Apache-2.0"
 description = "Rust bindings for the Apache Kudu (Incubating) C client"
 keywords = ["database"]
 
+build = "build.rs"
+
 [dependencies]

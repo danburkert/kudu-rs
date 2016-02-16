@@ -130,6 +130,12 @@ impl ClientBuilder {
     }
 }
 
+impl fmt::Debug for ClientBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientBuilder")
+    }
+}
+
 impl Drop for ClientBuilder {
     fn drop(&mut self) {
         unsafe {
@@ -161,6 +167,12 @@ impl Client {
     }
 }
 
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Client")
+    }
+}
+
 impl Drop for Client {
     fn drop(&mut self) {
         unsafe {
@@ -171,3 +183,17 @@ impl Drop for Client {
 
 unsafe impl Sync for Client {}
 unsafe impl Send for Client {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_unreachable_master() {
+        let mut builder = ClientBuilder::new();
+        builder.add_master_server_addr("kudu.example.com");
+        let client = builder.build();
+        println!("client: {:?}", client);
+        assert!(client.is_err());
+    }
+}

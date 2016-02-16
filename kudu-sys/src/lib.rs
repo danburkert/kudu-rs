@@ -7,6 +7,7 @@ pub enum kudu_client_t {}
 pub enum kudu_status_t {}
 pub enum kudu_table_list_t {}
 
+#[link(name="kudu_client")]
 extern "C" {
 
     ////////////////////////////////////////////////////////////////////////////
@@ -53,4 +54,23 @@ extern "C" {
     pub fn kudu_client_list_tables(client: *const kudu_client_t,
                                    tables: *const *mut kudu_table_list_t)
                                    -> *const kudu_status_t;
+}
+
+#[cfg(test)]
+mod test {
+
+    use std::ptr;
+    use std::ffi::CString;
+    use super::*;
+
+    #[test]
+    fn test_unreachable_master() {
+        unsafe {
+            let builder = kudu_client_builder_create();
+            let client = ptr::null_mut();
+            kudu_client_builder_add_master_server_addr(builder, CString::new("kudu.example.com").unwrap().as_ptr());
+            let status = kudu_client_builder_build(builder, &client);
+            assert!(status != ptr::null());
+        }
+    }
 }
