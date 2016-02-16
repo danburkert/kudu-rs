@@ -7,3 +7,4 @@ description = "Rust client for Apache Kudu (Incubating)"
 keywords = ["database"]
 
 [dependencies]
+kudu-sys = { path = "kudu-sys", version = "0.1.0" }
