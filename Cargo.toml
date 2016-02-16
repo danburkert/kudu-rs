@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Dan Burkert <dan@danburkert.com>"]
 license = "MIT/Apache-2.0"
 description = "Rust client for Apache Kudu (Incubating)"
-keywords = ["database"]
+keywords = ["kudu", "database"]
 
 [dependencies]
 kudu-sys = { path = "kudu-sys", version = "0.1.0" }
