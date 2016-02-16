@@ -1,3 +1,7 @@
+use std::env;
+
 fn main() {
-    println!("cargo:rustc-link-search=native=/Users/dan/src/cloudera/kudu/build/debug/lib/");
+    if let Ok(path) = env::var("KUDU_HOME") {
+        println!("cargo:rustc-link-search=native={}/lib", path);
+    }
 }
