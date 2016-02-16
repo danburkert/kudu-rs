@@ -1,0 +1,9 @@
+[package]
+name = "kudu-sys"
+version = "0.1.0"
+authors = ["Dan Burkert <dan@danburkert.com>"]
+license = "MIT/Apache-2.0"
+description = "Rust bindings for the Apache Kudu (Incubating) C client"
+keywords = ["database"]
+
+[dependencies]
