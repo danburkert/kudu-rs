@@ -9,6 +9,7 @@ pub enum kudu_schema {}
 pub enum kudu_status {}
 pub enum kudu_table_list {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub enum DataType {
     Int8 = 0,
@@ -23,6 +24,7 @@ pub enum DataType {
     Timestamp = 9,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub enum CompressionType {
   Default = 0,
@@ -32,6 +34,7 @@ pub enum CompressionType {
   ZLIB = 4,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
 pub enum EncodingType {
   Default = 0,
@@ -91,7 +94,7 @@ extern "C" {
     pub fn kudu_schema_destroy(schema: *mut kudu_schema);
     pub fn kudu_schema_num_columns(schema: *const kudu_schema) -> usize;
     pub fn kudu_schema_num_key_columns(schema: *const kudu_schema) -> usize;
-    pub fn kudu_schema_column(schema: *const kudu_schema) -> *mut kudu_column_schema;
+    pub fn kudu_schema_column(schema: *const kudu_schema, index: usize) -> *mut kudu_column_schema;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Column Schema

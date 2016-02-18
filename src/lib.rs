@@ -8,6 +8,8 @@ use std::slice;
 use std::str;
 use std::time::Duration;
 
+pub use kudu_sys::{DataType, CompressionType, EncodingType};
+
 pub struct Error {
     inner: *const kudu_sys::kudu_status,
 }
@@ -66,7 +68,6 @@ impl Drop for Error {
         }
     }
 }
-
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -184,8 +185,84 @@ impl Drop for Client {
     }
 }
 
-unsafe impl Sync for Client {}
-unsafe impl Send for Client {}
+pub struct Schema {
+    inner: *mut kudu_sys::kudu_schema,
+}
+
+impl Schema {
+    pub fn num_columns(&self) -> usize {
+        unsafe {
+            return kudu_sys::kudu_schema_num_columns(self.inner);
+        }
+    }
+
+    pub fn num_primary_key_columns(&self) -> usize {
+        unsafe {
+            return kudu_sys::kudu_schema_num_key_columns(self.inner);
+        }
+    }
+
+    pub fn column(&self, index: usize) -> ColumnSchema {
+        ColumnSchema {
+            inner: unsafe { kudu_sys::kudu_schema_column(self.inner, index) },
+        }
+    }
+}
+
+impl fmt::Debug for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Schema")
+    }
+}
+
+impl Drop for Schema {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_schema_destroy(self.inner);
+        }
+    }
+}
+
+pub struct ColumnSchema {
+    inner: *mut kudu_sys::kudu_column_schema,
+}
+
+impl ColumnSchema {
+    pub fn name(&self) -> &str {
+        unsafe {
+            let mut len: usize = 0;
+            let name_ptr = kudu_sys::kudu_column_schema_name(self.inner, &mut len);
+            // TODO: Check if Kudu actually has a UTF-8 invariant (and fix it if not).
+            str::from_utf8(slice::from_raw_parts(name_ptr as *const _, len)).unwrap()
+        }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        unsafe {
+            kudu_sys::kudu_column_schema_type(self.inner)
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        unsafe {
+            kudu_sys::kudu_column_schema_is_nullable(self.inner) != 0
+        }
+    }
+}
+
+impl fmt::Debug for ColumnSchema {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ColumnSchema({})", self.name())
+    }
+}
+
+impl Drop for ColumnSchema {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_column_schema_destroy(self.inner);
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
