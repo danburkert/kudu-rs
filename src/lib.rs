@@ -1,7 +1,6 @@
 extern crate kudu_sys;
 
 use std::error;
-use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ptr;
 use std::result;
@@ -10,7 +9,7 @@ use std::str;
 use std::time::Duration;
 
 pub struct Error {
-    inner: *const kudu_sys::kudu_status_t,
+    inner: *const kudu_sys::kudu_status,
 }
 
 impl Error {
@@ -28,11 +27,11 @@ impl Error {
         unsafe {
             let mut len = 0;
             let msg = kudu_sys::kudu_status_message(self.inner, &mut len);
-            // TODO: handle UTF8 errors
+            // TODO: Check if Kudu has a UTF-8 invariant (and fix it if not).
             str::from_utf8(slice::from_raw_parts(msg as *const _, len)).unwrap()
         }
     }
-    fn from_status(status: *const kudu_sys::kudu_status_t) -> Result<()> {
+    fn from_status(status: *const kudu_sys::kudu_status) -> Result<()> {
         if status == ptr::null() { return Ok(()) }
         else { return Err(Error { inner: status }) }
     }
@@ -72,7 +71,7 @@ impl Drop for Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct ClientBuilder {
-    inner: *mut kudu_sys::kudu_client_builder_t,
+    inner: *mut kudu_sys::kudu_client_builder,
 }
 
 impl ClientBuilder {
@@ -85,9 +84,10 @@ impl ClientBuilder {
     pub fn add_master_server_addr(&mut self, addr: &str) -> &mut ClientBuilder {
         // TODO: consider taking ToSocketAddrs instead
         // TODO: handle null error properly
-        let addr = CString::new(addr).unwrap();
         unsafe {
-            kudu_sys::kudu_client_builder_add_master_server_addr(self.inner, addr.as_ptr());
+            kudu_sys::kudu_client_builder_add_master_server_addr(self.inner,
+                                                                 addr.as_ptr() as *const _,
+                                                                 addr.len());
         }
         self
     }
@@ -145,7 +145,7 @@ impl Drop for ClientBuilder {
 }
 
 pub struct Client {
-    inner: *mut kudu_sys::kudu_client_t,
+    inner: *mut kudu_sys::kudu_client,
 }
 
 impl Client {
@@ -157,9 +157,12 @@ impl Client {
             let mut tables = Vec::with_capacity(size);
 
             for i in 0..size {
-                tables.push(CStr::from_ptr(kudu_sys::kudu_table_list_table_name(list, i))
-                                .to_string_lossy()
-                                .into_owned());
+                let mut len: usize = 0;
+                let name_ptr = kudu_sys::kudu_table_list_table_name(list, i, &mut len);
+                // TODO: Check if Kudu actually has a UTF-8 invariant (and fix it if not).
+                let name = str::from_utf8(slice::from_raw_parts(name_ptr as *const _, len)).unwrap();
+
+                tables.push(name.to_string());
             }
             kudu_sys::kudu_table_list_destroy(list);
             Ok(tables)
