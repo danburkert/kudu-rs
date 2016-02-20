@@ -10,6 +10,19 @@ use std::time::Duration;
 
 pub use kudu_sys::{DataType, CompressionType, EncodingType};
 
+unsafe fn str_into_kudu_slice(s: &str) -> kudu_sys::kudu_slice {
+    kudu_sys::kudu_slice { data: s.as_ptr(), len: s.len() }
+}
+
+unsafe fn kudu_slice_into_slice<'a>(s: kudu_sys::kudu_slice) -> &'a [u8] {
+    slice::from_raw_parts(s.data, s.len)
+}
+
+unsafe fn kudu_slice_into_str<'a>(s: kudu_sys::kudu_slice) -> &'a str {
+    // TODO: Check if Kudu has a UTF-8 invariant (and fix it if not).
+    str::from_utf8(kudu_slice_into_slice(s)).unwrap()
+}
+
 pub struct Error {
     inner: *const kudu_sys::kudu_status,
 }
@@ -27,10 +40,7 @@ impl Error {
     }
     pub fn message(&self) -> &str {
         unsafe {
-            let mut len = 0;
-            let msg = kudu_sys::kudu_status_message(self.inner, &mut len);
-            // TODO: Check if Kudu has a UTF-8 invariant (and fix it if not).
-            str::from_utf8(slice::from_raw_parts(msg as *const _, len)).unwrap()
+            kudu_slice_into_str(kudu_sys::kudu_status_message(self.inner))
         }
     }
     fn from_status(status: *const kudu_sys::kudu_status) -> Result<()> {
@@ -87,8 +97,7 @@ impl ClientBuilder {
         // TODO: handle null error properly
         unsafe {
             kudu_sys::kudu_client_builder_add_master_server_addr(self.inner,
-                                                                 addr.as_ptr() as *const _,
-                                                                 addr.len());
+                                                                 str_into_kudu_slice(addr));
         }
         self
     }
@@ -150,7 +159,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn list_tables(&self) -> Result<Vec<String>> {
+    pub fn list_tables(&self) -> Result<Vec<&str>> {
         unsafe {
             let list = ptr::null_mut();
             try!(Error::from_status(kudu_sys::kudu_client_list_tables(self.inner, &list)));
@@ -158,12 +167,7 @@ impl Client {
             let mut tables = Vec::with_capacity(size);
 
             for i in 0..size {
-                let mut len: usize = 0;
-                let name_ptr = kudu_sys::kudu_table_list_table_name(list, i, &mut len);
-                // TODO: Check if Kudu actually has a UTF-8 invariant (and fix it if not).
-                let name = str::from_utf8(slice::from_raw_parts(name_ptr as *const _, len)).unwrap();
-
-                tables.push(name.to_string());
+                tables.push(kudu_slice_into_str(kudu_sys::kudu_table_list_table_name(list, i)));
             }
             kudu_sys::kudu_table_list_destroy(list);
             Ok(tables)
@@ -230,10 +234,7 @@ pub struct ColumnSchema {
 impl ColumnSchema {
     pub fn name(&self) -> &str {
         unsafe {
-            let mut len: usize = 0;
-            let name_ptr = kudu_sys::kudu_column_schema_name(self.inner, &mut len);
-            // TODO: Check if Kudu actually has a UTF-8 invariant (and fix it if not).
-            str::from_utf8(slice::from_raw_parts(name_ptr as *const _, len)).unwrap()
+            kudu_slice_into_str(kudu_sys::kudu_column_schema_name(self.inner))
         }
     }
 

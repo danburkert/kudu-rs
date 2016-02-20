@@ -1,13 +1,17 @@
 #![allow(non_camel_case_types)]
 
-use std::os::raw::c_char;
-
 pub enum kudu_client {}
 pub enum kudu_client_builder {}
 pub enum kudu_column_schema {}
 pub enum kudu_schema {}
 pub enum kudu_status {}
 pub enum kudu_table_list {}
+
+#[repr(C)]
+pub struct kudu_slice {
+    pub data: *const u8,
+    pub len: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
@@ -56,7 +60,7 @@ extern "C" {
     pub fn kudu_status_destroy(status: *const kudu_status);
     pub fn kudu_status_code(status: *const kudu_status) -> i8;
     pub fn kudu_status_posix_code(status: *const kudu_status) -> i16;
-    pub fn kudu_status_message(status: *const kudu_status, len: *mut usize) -> *const c_char;
+    pub fn kudu_status_message(status: *const kudu_status) -> kudu_slice;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Client Builder
@@ -65,8 +69,7 @@ extern "C" {
     pub fn kudu_client_builder_create() -> *mut kudu_client_builder;
     pub fn kudu_client_builder_destroy(builder: *mut kudu_client_builder);
     pub fn kudu_client_builder_add_master_server_addr(builder: *mut kudu_client_builder,
-                                                      addr: *const c_char,
-                                                      len: usize);
+                                                      addr: kudu_slice);
     pub fn kudu_client_builder_clear_master_server_addrs(builder: *mut kudu_client_builder);
     pub fn kudu_client_builder_set_default_admin_operation_timeout(builder: *mut kudu_client_builder,
                                                                    timeout_millis: i64);
@@ -83,9 +86,8 @@ extern "C" {
     pub fn kudu_table_list_destroy(list: *mut kudu_table_list);
     pub fn kudu_table_list_size(list: *const kudu_table_list) -> usize;
     pub fn kudu_table_list_table_name(list: *const kudu_table_list,
-                                      index: usize,
-                                      len: *mut usize)
-                                      -> *const c_char;
+                                      index: usize)
+                                      -> kudu_slice;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Schema
@@ -101,9 +103,7 @@ extern "C" {
     ////////////////////////////////////////////////////////////////////////////////
 
     pub fn kudu_column_schema_destroy(column_schema: *mut kudu_column_schema);
-    pub fn kudu_column_schema_name(column_schema: *const kudu_column_schema,
-                                   len: *mut usize)
-                                   -> *const c_char;
+    pub fn kudu_column_schema_name(column_schema: *const kudu_column_schema) -> kudu_slice;
     pub fn kudu_column_schema_is_nullable(column_schema: *const kudu_column_schema) -> i32;
     pub fn kudu_column_schema_type(column_schema: *const kudu_column_schema) -> DataType;
 
