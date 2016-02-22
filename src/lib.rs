@@ -159,6 +159,7 @@ pub struct Client {
 }
 
 impl Client {
+
     pub fn list_tables(&self) -> Result<Vec<&str>> {
         unsafe {
             let list = ptr::null_mut();
@@ -171,6 +172,17 @@ impl Client {
             }
             kudu_sys::kudu_table_list_destroy(list);
             Ok(tables)
+        }
+    }
+
+    pub fn table_schema(&self, table: &str) -> Result<Schema> {
+        unsafe {
+            let schema = ptr::null_mut();
+            try!(Error::from_status(kudu_sys::kudu_client_table_schema(self.inner,
+                                                                       str_into_kudu_slice(table),
+                                                                       &schema)));
+
+            Ok(Schema { inner: schema })
         }
     }
 }

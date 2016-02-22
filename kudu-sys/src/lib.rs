@@ -115,6 +115,10 @@ extern "C" {
     pub fn kudu_client_list_tables(client: *const kudu_client,
                                    tables: *const *mut kudu_table_list)
                                    -> *const kudu_status;
+    pub fn kudu_client_table_schema(client: *const kudu_client,
+                                    table: kudu_slice,
+                                    schema: *const *mut kudu_schema)
+                                    -> *const kudu_status;
 }
 
 #[cfg(test)]
