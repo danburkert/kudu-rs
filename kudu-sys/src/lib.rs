@@ -105,7 +105,9 @@ extern "C" {
     pub fn kudu_column_schema_destroy(column_schema: *mut kudu_column_schema);
     pub fn kudu_column_schema_name(column_schema: *const kudu_column_schema) -> kudu_slice;
     pub fn kudu_column_schema_is_nullable(column_schema: *const kudu_column_schema) -> i32;
-    pub fn kudu_column_schema_type(column_schema: *const kudu_column_schema) -> DataType;
+    pub fn kudu_column_schema_data_type(column_schema: *const kudu_column_schema) -> DataType;
+    pub fn kudu_column_schema_encoding_type(column_schema: *const kudu_column_schema) -> EncodingType;
+    pub fn kudu_column_schema_compression_type(column_schema: *const kudu_column_schema) -> CompressionType;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Client

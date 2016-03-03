@@ -252,13 +252,25 @@ impl ColumnSchema {
 
     pub fn data_type(&self) -> DataType {
         unsafe {
-            kudu_sys::kudu_column_schema_type(self.inner)
+            kudu_sys::kudu_column_schema_data_type(self.inner)
         }
     }
 
     pub fn is_nullable(&self) -> bool {
         unsafe {
             kudu_sys::kudu_column_schema_is_nullable(self.inner) != 0
+        }
+    }
+
+    pub fn encoding_type(&self) -> EncodingType {
+        unsafe {
+            kudu_sys::kudu_column_schema_encoding_type(self.inner)
+        }
+    }
+
+    pub fn compression_type(&self) -> CompressionType {
+        unsafe {
+            kudu_sys::kudu_column_schema_compression_type(self.inner)
         }
     }
 }
