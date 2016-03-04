@@ -2,6 +2,7 @@ extern crate kudu_sys;
 
 use std::error;
 use std::fmt;
+use std::marker::PhantomData;
 use std::ptr;
 use std::result;
 use std::slice;
@@ -21,6 +22,10 @@ unsafe fn kudu_slice_into_slice<'a>(s: kudu_sys::kudu_slice) -> &'a [u8] {
 unsafe fn kudu_slice_into_str<'a>(s: kudu_sys::kudu_slice) -> &'a str {
     // TODO: Check if Kudu has a UTF-8 invariant (and fix it if not).
     str::from_utf8(kudu_slice_into_slice(s)).unwrap()
+}
+
+unsafe fn slice_into_kudu_slice_list(s: &[kudu_sys::kudu_slice]) -> kudu_sys::kudu_slice_list {
+    kudu_sys::kudu_slice_list { data: s.as_ptr(), len: s.len() }
 }
 
 pub struct Error {
@@ -286,6 +291,201 @@ impl Drop for ColumnSchema {
         unsafe {
             kudu_sys::kudu_column_schema_destroy(self.inner);
         }
+    }
+}
+
+pub struct SchemaBuilder {
+    inner: *mut kudu_sys::kudu_schema_builder,
+}
+
+impl SchemaBuilder {
+    pub fn new(&mut self) -> SchemaBuilder {
+        SchemaBuilder {
+            inner: unsafe { kudu_sys::kudu_schema_builder_create() },
+        }
+    }
+
+    pub fn add_column<'a>(&'a mut self, name: &str) -> ColumnSchemaBuilder<'a> {
+        unsafe {
+            ColumnSchemaBuilder {
+                inner: kudu_sys::kudu_schema_builder_add_column(self.inner,
+                                                                str_into_kudu_slice(name)),
+                phantom: PhantomData,
+            }
+        }
+    }
+
+    pub fn set_primary_key_columns<S>(&mut self, column_names: &[S]) where S: AsRef<str> {
+        unsafe {
+            let slices = column_names.iter()
+                                    .map(|name| str_into_kudu_slice(name.as_ref()))
+                                    .collect::<Vec<_>>();
+            kudu_sys::kudu_schema_builder_set_primary_key_columns(
+                self.inner, slice_into_kudu_slice_list(&slices));
+        }
+    }
+
+    pub fn kudu_schema_builder_build(&mut self) -> Result<Schema> {
+        unsafe {
+            let schema = ptr::null_mut();
+            try!(Error::from_status(kudu_sys::kudu_schema_builder_build(self.inner, &schema)));
+            Ok(Schema { inner: schema })
+        }
+    }
+}
+
+impl fmt::Debug for SchemaBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SchemaBuilder")
+    }
+}
+
+impl Drop for SchemaBuilder {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_schema_builder_destroy(self.inner);
+        }
+    }
+}
+
+pub struct ColumnSchemaBuilder<'a> {
+    inner: *mut kudu_sys::kudu_column_schema_builder,
+    phantom: PhantomData<&'a ()>,
+}
+
+impl <'a> ColumnSchemaBuilder<'a> {
+    pub fn data_type(&mut self, data_type: DataType) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_column_schema_builder_data_type(self.inner, data_type);
+        }
+        self
+    }
+
+    pub fn encoding_type(&mut self, encoding_type: EncodingType) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_column_schema_builder_encoding_type(self.inner, encoding_type);
+        }
+        self
+    }
+
+    pub fn compression_type(&mut self, compression_type: CompressionType) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_column_schema_builder_compression_type(self.inner, compression_type);
+        }
+        self
+    }
+
+    pub fn block_size(&mut self, block_size: i32) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_column_schema_builder_block_size(self.inner, block_size);
+        }
+        self
+    }
+
+    pub fn nullable(&mut self, nullable: bool) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_column_schema_builder_nullable(self.inner, if nullable { 1 } else { 0 });
+        }
+        self
+    }
+}
+
+impl <'a> fmt::Debug for ColumnSchemaBuilder<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ColumnSchemaBuilder")
+    }
+}
+
+pub struct TableCreator {
+    inner: *mut kudu_sys::kudu_table_creator,
+}
+
+impl TableCreator {
+    pub fn table_name(&mut self, table_name: &str) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_table_name(self.inner, str_into_kudu_slice(table_name))
+        }
+        self
+    }
+
+    // TODO: this is unsafe, because it doesn't ensure that the schema outlives
+    // the table creator.
+    pub fn schema(&mut self, schema: &Schema) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_schema(self.inner, schema.inner)
+        }
+        self
+    }
+
+    pub fn add_hash_partitions<S>(&mut self,
+                                  column_names: &[S],
+                                  num_buckets: i32,
+                                  seed: i32)
+                                  -> &mut Self
+    where S: AsRef<str> {
+        unsafe {
+            let slices = column_names.iter()
+                                     .map(|name| str_into_kudu_slice(name.as_ref()))
+                                     .collect::<Vec<_>>();
+            kudu_sys::kudu_table_creator_add_hash_partitions(
+                self.inner, slice_into_kudu_slice_list(&slices), num_buckets, seed);
+        }
+        self
+    }
+
+    pub fn set_range_partition_columns<S>(&mut self, column_names: &[S]) -> &mut Self
+    where S: AsRef<str> {
+        unsafe {
+            let slices = column_names.iter()
+                                     .map(|name| str_into_kudu_slice(name.as_ref()))
+                                     .collect::<Vec<_>>();
+            kudu_sys::kudu_table_creator_set_range_partition_columns(
+                self.inner, slice_into_kudu_slice_list(&slices));
+        }
+        self
+    }
+
+    pub fn num_replicas(&mut self, num_replicas: i32) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_num_replicas(self.inner, num_replicas);
+        }
+        self
+    }
+
+    pub fn timeout(&mut self, timeout: &Duration) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_timeout(
+                self.inner,
+                timeout.as_secs() as i64 * 1_000 + timeout.subsec_nanos() as i64 / 1_000_000);
+        }
+        self
+    }
+
+    pub fn wait(&mut self, wait: bool) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_wait(self.inner, if wait { 1 } else { 0 });
+        }
+        self
+    }
+
+    pub fn create(&mut self) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_table_creator_create(self.inner))
+        }
+    }
+}
+
+impl Drop for TableCreator {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_table_creator_destroy(self.inner);
+        }
+    }
+}
+
+impl fmt::Debug for TableCreator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TableCreator")
     }
 }
 

@@ -6,10 +6,19 @@ pub enum kudu_column_schema {}
 pub enum kudu_schema {}
 pub enum kudu_status {}
 pub enum kudu_table_list {}
+pub enum kudu_schema_builder {}
+pub enum kudu_column_schema_builder {}
+pub enum kudu_table_creator {}
 
 #[repr(C)]
 pub struct kudu_slice {
     pub data: *const u8,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct kudu_slice_list {
+    pub data: *const kudu_slice,
     pub len: usize,
 }
 
@@ -110,6 +119,35 @@ extern "C" {
     pub fn kudu_column_schema_compression_type(column_schema: *const kudu_column_schema) -> CompressionType;
 
     ////////////////////////////////////////////////////////////////////////////
+    // Kudu Schema Builder
+    ////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_schema_builder_create() -> *mut kudu_schema_builder;
+    pub fn kudu_schema_builder_destroy(builder: *mut kudu_schema_builder);
+    pub fn kudu_schema_builder_add_column(builder: *mut kudu_schema_builder,
+                                          name: kudu_slice)
+                                          -> *mut kudu_column_schema_builder;
+    pub fn kudu_schema_builder_set_primary_key_columns(builder: *mut kudu_schema_builder,
+                                                       column_names: kudu_slice_list);
+    pub fn kudu_schema_builder_build(builder: *mut kudu_schema_builder,
+                                     schema: *const *mut kudu_schema) -> *const kudu_status;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Kudu Column Schema Builder
+    ////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_column_schema_builder_data_type(builder: *mut kudu_column_schema_builder,
+                                                data_type: DataType);
+    pub fn kudu_column_schema_builder_encoding_type(builder: *mut kudu_column_schema_builder,
+                                                    encoding_type: EncodingType);
+    pub fn kudu_column_schema_builder_compression_type(builder: *mut kudu_column_schema_builder,
+                                                       compression_type: CompressionType);
+    pub fn kudu_column_schema_builder_block_size(builder: *mut kudu_column_schema_builder,
+                                                 block_size: i32);
+    pub fn kudu_column_schema_builder_nullable(builder: *mut kudu_column_schema_builder,
+                                               nullable: /*bool*/i32);
+
+    ////////////////////////////////////////////////////////////////////////////
     // Kudu Client
     ////////////////////////////////////////////////////////////////////////////
 
@@ -121,6 +159,25 @@ extern "C" {
                                     table: kudu_slice,
                                     schema: *const *mut kudu_schema)
                                     -> *const kudu_status;
+    pub fn kudu_client_new_table_creator(client: *mut kudu_client) -> *mut kudu_table_creator;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Kudu Table Creator
+    ////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_table_creator_destroy(creator: *mut kudu_table_creator);
+    pub fn kudu_table_creator_table_name(creator: *mut kudu_table_creator, table_name: kudu_slice);
+    pub fn kudu_table_creator_schema(creator: *mut kudu_table_creator, schema: *const kudu_schema);
+    pub fn kudu_table_creator_add_hash_partitions(creator: *mut kudu_table_creator,
+                                                  columns: kudu_slice_list,
+                                                  num_buckets: i32,
+                                                  seed: i32);
+    pub fn kudu_table_creator_set_range_partition_columns(creator: *mut kudu_table_creator,
+                                                          columns: kudu_slice_list);
+    pub fn kudu_table_creator_num_replicas(creator: *mut kudu_table_creator, num_replicas: i32);
+    pub fn kudu_table_creator_timeout(creator: *mut kudu_table_creator, timeout_ms: i64);
+    pub fn kudu_table_creator_wait(creator: *mut kudu_table_creator, wait: /*bool*/i32);
+    pub fn kudu_table_creator_create(creator: *mut kudu_table_creator) -> *const kudu_status;
 }
 
 #[cfg(test)]
