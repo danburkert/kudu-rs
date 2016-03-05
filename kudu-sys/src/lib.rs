@@ -43,8 +43,8 @@ pub enum CompressionType {
   Default = 0,
   None = 1,
   Snappy = 2,
-  LZ4 = 3,
-  ZLIB = 4,
+  Lz4 = 3,
+  Zlib = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
