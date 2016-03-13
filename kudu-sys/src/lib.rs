@@ -9,6 +9,7 @@ pub enum kudu_table_list {}
 pub enum kudu_schema_builder {}
 pub enum kudu_column_schema_builder {}
 pub enum kudu_table_creator {}
+pub enum kudu_partial_row {}
 
 #[repr(C)]
 pub struct kudu_slice {
@@ -66,7 +67,7 @@ extern "C" {
     // Kudu Status
     ////////////////////////////////////////////////////////////////////////////
 
-    pub fn kudu_status_destroy(status: *const kudu_status);
+    pub fn kudu_status_destroy(status: *mut kudu_status);
     pub fn kudu_status_code(status: *const kudu_status) -> i8;
     pub fn kudu_status_posix_code(status: *const kudu_status) -> i16;
     pub fn kudu_status_message(status: *const kudu_status) -> kudu_slice;
@@ -86,7 +87,7 @@ extern "C" {
                                                        timeout_millis: i64);
     pub fn kudu_client_builder_build(builder: *mut kudu_client_builder,
                                      client: *const *mut kudu_client)
-                                     -> *const kudu_status;
+                                     -> *mut kudu_status;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Table List
@@ -94,9 +95,7 @@ extern "C" {
 
     pub fn kudu_table_list_destroy(list: *mut kudu_table_list);
     pub fn kudu_table_list_size(list: *const kudu_table_list) -> usize;
-    pub fn kudu_table_list_table_name(list: *const kudu_table_list,
-                                      index: usize)
-                                      -> kudu_slice;
+    pub fn kudu_table_list_table_name(list: *const kudu_table_list, index: usize) -> kudu_slice;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Schema
@@ -106,6 +105,7 @@ extern "C" {
     pub fn kudu_schema_num_columns(schema: *const kudu_schema) -> usize;
     pub fn kudu_schema_num_key_columns(schema: *const kudu_schema) -> usize;
     pub fn kudu_schema_column(schema: *const kudu_schema, index: usize) -> *mut kudu_column_schema;
+    pub fn kudu_schema_new_row(schema: *const kudu_schema) -> *mut kudu_partial_row;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Column Schema
@@ -130,7 +130,7 @@ extern "C" {
     pub fn kudu_schema_builder_set_primary_key_columns(builder: *mut kudu_schema_builder,
                                                        column_names: kudu_slice_list);
     pub fn kudu_schema_builder_build(builder: *mut kudu_schema_builder,
-                                     schema: *const *mut kudu_schema) -> *const kudu_status;
+                                     schema: *const *mut kudu_schema) -> *mut kudu_status;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Column Schema Builder
@@ -154,11 +154,11 @@ extern "C" {
     pub fn kudu_client_destroy(client: *mut kudu_client);
     pub fn kudu_client_list_tables(client: *const kudu_client,
                                    tables: *const *mut kudu_table_list)
-                                   -> *const kudu_status;
+                                   -> *mut kudu_status;
     pub fn kudu_client_table_schema(client: *const kudu_client,
                                     table: kudu_slice,
                                     schema: *const *mut kudu_schema)
-                                    -> *const kudu_status;
+                                    -> *mut kudu_status;
     pub fn kudu_client_new_table_creator(client: *mut kudu_client) -> *mut kudu_table_creator;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -177,7 +177,72 @@ extern "C" {
     pub fn kudu_table_creator_num_replicas(creator: *mut kudu_table_creator, num_replicas: i32);
     pub fn kudu_table_creator_timeout(creator: *mut kudu_table_creator, timeout_ms: i64);
     pub fn kudu_table_creator_wait(creator: *mut kudu_table_creator, wait: /*bool*/i32);
-    pub fn kudu_table_creator_create(creator: *mut kudu_table_creator) -> *const kudu_status;
+    pub fn kudu_table_creator_create(creator: *mut kudu_table_creator) -> *mut kudu_status;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Partial Row
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_partial_row_destroy(row: *mut kudu_partial_row);
+
+    pub fn kudu_partial_row_is_key_set(row: *const kudu_partial_row) -> i32/*bool*/ ;
+    pub fn kudu_partial_row_all_columns_set(row: *const kudu_partial_row) -> i32/*bool*/;
+
+    pub fn kudu_partial_row_set_bool_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int8_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int16_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int32_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int64_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_timestamp_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_float_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_double_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string_copy_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary_copy_by_name(row: *mut kudu_partial_row, column_name: kudu_slice, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_null_by_name(row: *mut kudu_partial_row, column_name: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_unset_by_name(row: *mut kudu_partial_row, column_name: kudu_slice) -> *mut kudu_status;
+
+    pub fn kudu_partial_row_set_bool(row: *mut kudu_partial_row, column_idx: i32, val: i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int8(row: *mut kudu_partial_row, column_idx: i32, val: i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int16(row: *mut kudu_partial_row, column_idx: i32, val: i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int32(row: *mut kudu_partial_row, column_idx: i32, val: i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int64(row: *mut kudu_partial_row, column_idx: i32, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_timestamp(row: *mut kudu_partial_row, column_idx: i32, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_float(row: *mut kudu_partial_row, column_idx: i32, val: f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_double(row: *mut kudu_partial_row, column_idx: i32, val: f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string_copy(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary_copy(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_null(row: *mut kudu_partial_row, column_idx: i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_unset(row: *mut kudu_partial_row, column_idx: i32) -> *mut kudu_status;
+
+    pub fn kudu_partial_row_get_bool_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int8_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int16_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int32_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int64_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_timestamp_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_float_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_double_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_string_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_binary_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_is_null_by_name(row: *const kudu_partial_row, column_name: kudu_slice) -> i32/*bool*/;
+    pub fn kudu_partial_row_is_set_by_name(row: *const kudu_partial_row, column_name: kudu_slice) -> i32/*bool*/;
+
+    pub fn kudu_partial_row_get_bool(row: *const kudu_partial_row, column_idx: i32, val: *mut i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int8(row: *const kudu_partial_row, column_idx: i32, val: *mut i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int16(row: *const kudu_partial_row, column_idx: i32, val: *mut i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int32(row: *const kudu_partial_row, column_idx: i32, val: *mut i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int64(row: *const kudu_partial_row, column_idx: i32, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_timestamp(row: *const kudu_partial_row, column_idx: i32, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_float(row: *const kudu_partial_row, column_idx: i32, val: *mut f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_double(row: *const kudu_partial_row, column_idx: i32, val: *mut f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_string(row: *const kudu_partial_row, column_idx: i32, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_binary(row: *const kudu_partial_row, column_idx: i32, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_is_null(row: *const kudu_partial_row, column_idx: i32) -> i32/*bool*/;
+    pub fn kudu_partial_row_is_set(row: *const kudu_partial_row, column_idx: i32) -> i32/*bool*/;
 }
 
 #[cfg(test)]
