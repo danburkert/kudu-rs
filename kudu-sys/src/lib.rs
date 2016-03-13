@@ -174,6 +174,7 @@ extern "C" {
                                                   seed: i32);
     pub fn kudu_table_creator_set_range_partition_columns(creator: *mut kudu_table_creator,
                                                           columns: kudu_slice_list);
+    pub fn kudu_table_creator_add_split_row(creator: *mut kudu_table_creator, split_row: *mut kudu_partial_row);
     pub fn kudu_table_creator_num_replicas(creator: *mut kudu_table_creator, num_replicas: i32);
     pub fn kudu_table_creator_timeout(creator: *mut kudu_table_creator, timeout_ms: i64);
     pub fn kudu_table_creator_wait(creator: *mut kudu_table_creator, wait: /*bool*/i32);

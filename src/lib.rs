@@ -3,6 +3,7 @@ extern crate kudu_sys;
 use std::error;
 use std::fmt;
 use std::marker::PhantomData;
+use std::mem;
 use std::ptr;
 use std::result;
 use std::slice;
@@ -464,6 +465,14 @@ impl TableCreator {
         self
     }
 
+    pub fn add_split_row(&mut self, split_row: PartialRow) -> &mut Self {
+        unsafe {
+            kudu_sys::kudu_table_creator_add_split_row(self.inner, split_row.inner);
+            mem::forget(split_row);
+        }
+        self
+    }
+
     pub fn num_replicas(&mut self, num_replicas: i32) -> &mut Self {
         unsafe {
             kudu_sys::kudu_table_creator_num_replicas(self.inner, num_replicas);
@@ -515,14 +524,13 @@ pub struct PartialRow<'a> {
 
 pub trait ColumnType<'a>: Sized {
     fn get(&'a PartialRow, column_idx: i32) -> Result<Self>;
-    fn set(self, row: &mut PartialRow<'a>, column_idx: i32) -> Result<()> {
-        self.set_copy(row, column_idx)
-    }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()>;
+    fn set(self, row: &mut PartialRow<'a>, column_idx: i32) -> Result<()>;
     fn get_by_name(&'a PartialRow, column: &str) -> Result<Self>;
-    fn set_by_name(self, row: &mut PartialRow<'a>, column: &str) -> Result<()> {
-        self.set_copy_by_name(row, column)
-    }
+    fn set_by_name(self, row: &mut PartialRow<'a>, column: &str) -> Result<()>;
+}
+
+pub trait VarLengthColumnType<'a>: Sized + ColumnType<'a> {
+    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()>;
     fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()>;
 }
 
@@ -534,7 +542,7 @@ impl <'a> ColumnType<'a> for bool {
         }
         Ok(if value == 0 { false } else { true })
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_bool(row.inner, column_idx, if self { 1 } else { 0 })) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<bool> {
@@ -544,7 +552,7 @@ impl <'a> ColumnType<'a> for bool {
         }
         Ok(if value == 0 { false } else { true })
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_bool_by_name(row.inner, str_into_kudu_slice(column), if self { 1 } else { 0 })) }
     }
 }
@@ -557,7 +565,7 @@ impl <'a> ColumnType<'a> for i8 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int8(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<i8> {
@@ -567,7 +575,7 @@ impl <'a> ColumnType<'a> for i8 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int8_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -580,7 +588,7 @@ impl <'a> ColumnType<'a> for i16 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int16(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<i16> {
@@ -590,7 +598,7 @@ impl <'a> ColumnType<'a> for i16 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int16_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -603,7 +611,7 @@ impl <'a> ColumnType<'a> for i32 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int32(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<i32> {
@@ -613,7 +621,7 @@ impl <'a> ColumnType<'a> for i32 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int32_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -626,7 +634,7 @@ impl <'a> ColumnType<'a> for i64 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int64(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<i64> {
@@ -636,7 +644,7 @@ impl <'a> ColumnType<'a> for i64 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int64_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -656,7 +664,7 @@ impl <'a> ColumnType<'a> for SystemTime {
             Ok(UNIX_EPOCH + Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
         }
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         let value = match self.duration_since(UNIX_EPOCH) {
             Ok(duration) => {
                 (duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) as i64
@@ -684,7 +692,7 @@ impl <'a> ColumnType<'a> for SystemTime {
             Ok(UNIX_EPOCH + Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
         }
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         let value = match self.duration_since(UNIX_EPOCH) {
             Ok(duration) => {
                 (duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) as i64
@@ -708,7 +716,7 @@ impl <'a> ColumnType<'a> for f32 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_float(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<f32> {
@@ -718,7 +726,7 @@ impl <'a> ColumnType<'a> for f32 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_float_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -731,7 +739,7 @@ impl <'a> ColumnType<'a> for f64 {
         }
         Ok(value)
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+    fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_double(row.inner, column_idx, self)) }
     }
     fn get_by_name(row: &PartialRow, column: &str) -> Result<f64> {
@@ -741,7 +749,7 @@ impl <'a> ColumnType<'a> for f64 {
         }
         Ok(value)
     }
-    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+    fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_double_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
 }
@@ -757,9 +765,6 @@ impl <'a> ColumnType<'a> for &'a str {
     fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string(row.inner, column_idx, str_into_kudu_slice(self))) }
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
-        unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_copy(row.inner, column_idx, str_into_kudu_slice(self))) }
-    }
     fn get_by_name(row: &'a PartialRow, column: &str) -> Result<&'a str> {
         let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
         unsafe {
@@ -769,6 +774,12 @@ impl <'a> ColumnType<'a> for &'a str {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_by_name(row.inner, str_into_kudu_slice(column), str_into_kudu_slice(self))) }
+    }
+}
+
+impl <'a> VarLengthColumnType<'a> for &'a str {
+    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+        unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_copy(row.inner, column_idx, str_into_kudu_slice(self))) }
     }
     fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_copy_by_name(row.inner, str_into_kudu_slice(column), str_into_kudu_slice(self))) }
@@ -786,9 +797,6 @@ impl <'a> ColumnType<'a> for &'a [u8] {
     fn set(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string(row.inner, column_idx, slice_into_kudu_slice(self))) }
     }
-    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
-        unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_binary_copy(row.inner, column_idx, slice_into_kudu_slice(self))) }
-    }
     fn get_by_name(row: &'a PartialRow, column: &str) -> Result<&'a [u8]> {
         let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
         unsafe {
@@ -799,8 +807,58 @@ impl <'a> ColumnType<'a> for &'a [u8] {
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_by_name(row.inner, str_into_kudu_slice(column), slice_into_kudu_slice(self))) }
     }
+}
+
+impl <'a> VarLengthColumnType<'a> for &'a [u8] {
+    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+        unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_binary_copy(row.inner, column_idx, slice_into_kudu_slice(self))) }
+    }
     fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_binary_copy_by_name(row.inner, str_into_kudu_slice(column), slice_into_kudu_slice(self))) }
+    }
+}
+
+impl <'a, T> ColumnType<'a> for Option<T> where T: ColumnType<'a> {
+    fn get(row: &'a PartialRow, column_idx: i32) -> Result<Option<T>> {
+        if row.is_null(column_idx) {
+            Ok(None)
+        } else {
+            ColumnType::get(row, column_idx).map(|t| Some(t))
+        }
+    }
+    fn set(self, row: &mut PartialRow<'a>, column_idx: i32) -> Result<()> {
+        match self {
+            Some(t) => t.set(row, column_idx),
+            None => row.set_null(column_idx),
+        }
+    }
+    fn get_by_name(row: &'a PartialRow, column: &str) -> Result<Option<T>> {
+        if row.is_null_by_name(column) {
+            Ok(None)
+        } else {
+            ColumnType::get_by_name(row, column).map(|t| Some(t))
+        }
+    }
+    fn set_by_name(self, row: &mut PartialRow<'a>, column: &str) -> Result<()> {
+        match self {
+            Some(t) => t.set_by_name(row, column),
+            None => row.set_null_by_name(column),
+        }
+    }
+}
+
+impl <'a, T> VarLengthColumnType<'a> for Option<T> where T: VarLengthColumnType<'a> {
+    fn set_copy(self, row: &mut PartialRow, column_idx: i32) -> Result<()> {
+        match self {
+            Some(t) => t.set_copy(row, column_idx),
+            None => row.set_null(column_idx),
+        }
+    }
+    fn set_copy_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
+        match self {
+            Some(t) => t.set_copy_by_name(row, column),
+            None => row.set_null_by_name(column),
+        }
     }
 }
 
@@ -812,7 +870,7 @@ impl <'a> PartialRow<'a> {
         T::set(value, self, column_idx)
     }
 
-    pub fn set_copy<'b, T>(&mut self, column_idx: i32, value: T) -> Result<()> where T: ColumnType<'b> {
+    pub fn set_copy<'b, T>(&mut self, column_idx: i32, value: T) -> Result<()> where T: VarLengthColumnType<'b> {
         T::set_copy(value, self, column_idx)
     }
 
@@ -846,7 +904,7 @@ impl <'a> PartialRow<'a> {
         T::set_by_name(value, self, column)
     }
 
-    pub fn set_copy_by_name<'b, T>(&mut self, column: &str, value: T) -> Result<()> where T: ColumnType<'b> {
+    pub fn set_copy_by_name<'b, T>(&mut self, column: &str, value: T) -> Result<()> where T: VarLengthColumnType<'b> {
         T::set_copy_by_name(value, self, column)
     }
 
