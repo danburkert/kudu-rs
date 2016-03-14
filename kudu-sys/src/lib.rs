@@ -204,20 +204,20 @@ extern "C" {
     pub fn kudu_partial_row_set_null_by_name(row: *mut kudu_partial_row, column_name: kudu_slice) -> *mut kudu_status;
     pub fn kudu_partial_row_unset_by_name(row: *mut kudu_partial_row, column_name: kudu_slice) -> *mut kudu_status;
 
-    pub fn kudu_partial_row_set_bool(row: *mut kudu_partial_row, column_idx: i32, val: i32/*bool*/) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_int8(row: *mut kudu_partial_row, column_idx: i32, val: i8) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_int16(row: *mut kudu_partial_row, column_idx: i32, val: i16) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_int32(row: *mut kudu_partial_row, column_idx: i32, val: i32) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_int64(row: *mut kudu_partial_row, column_idx: i32, val: i64) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_timestamp(row: *mut kudu_partial_row, column_idx: i32, val: i64) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_float(row: *mut kudu_partial_row, column_idx: i32, val: f32) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_double(row: *mut kudu_partial_row, column_idx: i32, val: f64) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_string(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_string_copy(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_binary(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_binary_copy(row: *mut kudu_partial_row, column_idx: i32, val: kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_set_null(row: *mut kudu_partial_row, column_idx: i32) -> *mut kudu_status;
-    pub fn kudu_partial_row_unset(row: *mut kudu_partial_row, column_idx: i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_bool(row: *mut kudu_partial_row, column_idx: usize, val: i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int8(row: *mut kudu_partial_row, column_idx: usize, val: i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int16(row: *mut kudu_partial_row, column_idx: usize, val: i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int32(row: *mut kudu_partial_row, column_idx: usize, val: i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_int64(row: *mut kudu_partial_row, column_idx: usize, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_timestamp(row: *mut kudu_partial_row, column_idx: usize, val: i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_float(row: *mut kudu_partial_row, column_idx: usize, val: f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_double(row: *mut kudu_partial_row, column_idx: usize, val: f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string(row: *mut kudu_partial_row, column_idx: usize, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_string_copy(row: *mut kudu_partial_row, column_idx: usize, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary(row: *mut kudu_partial_row, column_idx: usize, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_binary_copy(row: *mut kudu_partial_row, column_idx: usize, val: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_set_null(row: *mut kudu_partial_row, column_idx: usize) -> *mut kudu_status;
+    pub fn kudu_partial_row_unset(row: *mut kudu_partial_row, column_idx: usize) -> *mut kudu_status;
 
     pub fn kudu_partial_row_get_bool_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i32/*bool*/) -> *mut kudu_status;
     pub fn kudu_partial_row_get_int8_by_name(row: *const kudu_partial_row, column_name: kudu_slice, val: *mut i8) -> *mut kudu_status;
@@ -232,18 +232,18 @@ extern "C" {
     pub fn kudu_partial_row_is_null_by_name(row: *const kudu_partial_row, column_name: kudu_slice) -> i32/*bool*/;
     pub fn kudu_partial_row_is_set_by_name(row: *const kudu_partial_row, column_name: kudu_slice) -> i32/*bool*/;
 
-    pub fn kudu_partial_row_get_bool(row: *const kudu_partial_row, column_idx: i32, val: *mut i32/*bool*/) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_int8(row: *const kudu_partial_row, column_idx: i32, val: *mut i8) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_int16(row: *const kudu_partial_row, column_idx: i32, val: *mut i16) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_int32(row: *const kudu_partial_row, column_idx: i32, val: *mut i32) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_int64(row: *const kudu_partial_row, column_idx: i32, val: *mut i64) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_timestamp(row: *const kudu_partial_row, column_idx: i32, val: *mut i64) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_float(row: *const kudu_partial_row, column_idx: i32, val: *mut f32) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_double(row: *const kudu_partial_row, column_idx: i32, val: *mut f64) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_string(row: *const kudu_partial_row, column_idx: i32, val: *mut kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_get_binary(row: *const kudu_partial_row, column_idx: i32, val: *mut kudu_slice) -> *mut kudu_status;
-    pub fn kudu_partial_row_is_null(row: *const kudu_partial_row, column_idx: i32) -> i32/*bool*/;
-    pub fn kudu_partial_row_is_set(row: *const kudu_partial_row, column_idx: i32) -> i32/*bool*/;
+    pub fn kudu_partial_row_get_bool(row: *const kudu_partial_row, column_idx: usize, val: *mut i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int8(row: *const kudu_partial_row, column_idx: usize, val: *mut i8) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int16(row: *const kudu_partial_row, column_idx: usize, val: *mut i16) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int32(row: *const kudu_partial_row, column_idx: usize, val: *mut i32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_int64(row: *const kudu_partial_row, column_idx: usize, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_timestamp(row: *const kudu_partial_row, column_idx: usize, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_float(row: *const kudu_partial_row, column_idx: usize, val: *mut f32) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_double(row: *const kudu_partial_row, column_idx: usize, val: *mut f64) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_string(row: *const kudu_partial_row, column_idx: usize, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_get_binary(row: *const kudu_partial_row, column_idx: usize, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_partial_row_is_null(row: *const kudu_partial_row, column_idx: usize) -> i32/*bool*/;
+    pub fn kudu_partial_row_is_set(row: *const kudu_partial_row, column_idx: usize) -> i32/*bool*/;
 }
 
 #[cfg(test)]
