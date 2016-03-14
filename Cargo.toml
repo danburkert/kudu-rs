@@ -11,3 +11,4 @@ kudu-sys = { path = "kudu-sys", version = "0.1.0" }
 
 [dev-dependencies]
 compiletest_rs = "0.0"
+tempdir = "0.3"

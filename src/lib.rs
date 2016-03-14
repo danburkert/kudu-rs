@@ -1,4 +1,7 @@
 extern crate kudu_sys;
+#[cfg(test)] extern crate tempdir;
+
+#[cfg(test)] mod test;
 
 use std::error;
 use std::fmt;
@@ -948,8 +951,9 @@ impl <'a> fmt::Debug for PartialRow<'a> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    use test::{MiniCluster, MiniClusterConfig};
 
     #[test]
     fn test_unreachable_master() {
@@ -958,5 +962,15 @@ mod test {
         let client = builder.build();
         println!("client: {:?}", client);
         assert!(client.is_err());
+    }
+
+    #[test]
+    fn test_create_client() {
+        let cluster = MiniCluster::new(MiniClusterConfig::default());
+        let mut builder = ClientBuilder::new();
+        for addr in cluster.master_addrs() {
+            builder.add_master_server_addr(&addr.to_string());
+        }
+        builder.build().unwrap();
     }
 }
