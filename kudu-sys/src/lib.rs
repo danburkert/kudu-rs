@@ -3,13 +3,22 @@
 pub enum kudu_client {}
 pub enum kudu_client_builder {}
 pub enum kudu_column_schema {}
-pub enum kudu_schema {}
-pub enum kudu_status {}
-pub enum kudu_table_list {}
-pub enum kudu_schema_builder {}
 pub enum kudu_column_schema_builder {}
-pub enum kudu_table_creator {}
+pub enum kudu_delete {}
+pub enum kudu_insert {}
 pub enum kudu_partial_row {}
+pub enum kudu_predicate {}
+pub enum kudu_schema {}
+pub enum kudu_schema_builder {}
+pub enum kudu_session {}
+pub enum kudu_status {}
+pub enum kudu_table {}
+pub enum kudu_table_creator {}
+pub enum kudu_table_list {}
+pub enum kudu_tablet_server {}
+pub enum kudu_tablet_server_list {}
+pub enum kudu_update {}
+
 
 #[repr(C)]
 pub struct kudu_slice {
@@ -60,6 +69,21 @@ pub enum EncodingType {
   BitShuffle = 6,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(C)]
+pub enum FlushMode {
+  AutoFlushSync,
+  AutoFlushBackground,
+  ManualFlush,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(C)]
+pub enum ExternalConsistencyMode {
+  ClientPropogated,
+  CommitWait,
+}
+
 #[link(name="kudu_client")]
 extern "C" {
 
@@ -86,7 +110,7 @@ extern "C" {
     pub fn kudu_client_builder_set_default_rpc_timeout(builder: *mut kudu_client_builder,
                                                        timeout_millis: i64);
     pub fn kudu_client_builder_build(builder: *mut kudu_client_builder,
-                                     client: *const *mut kudu_client)
+                                     client: *mut *mut kudu_client)
                                      -> *mut kudu_status;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -105,6 +129,10 @@ extern "C" {
     pub fn kudu_schema_num_columns(schema: *const kudu_schema) -> usize;
     pub fn kudu_schema_num_key_columns(schema: *const kudu_schema) -> usize;
     pub fn kudu_schema_column(schema: *const kudu_schema, index: usize) -> *mut kudu_column_schema;
+    pub fn kudu_schema_find_column(schema: *const kudu_schema,
+                                   column_name: kudu_slice,
+                                   index: *mut usize)
+                                   -> *mut kudu_status;
     pub fn kudu_schema_new_row(schema: *const kudu_schema) -> *mut kudu_partial_row;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -130,7 +158,7 @@ extern "C" {
     pub fn kudu_schema_builder_set_primary_key_columns(builder: *mut kudu_schema_builder,
                                                        column_names: kudu_slice_list);
     pub fn kudu_schema_builder_build(builder: *mut kudu_schema_builder,
-                                     schema: *const *mut kudu_schema) -> *mut kudu_status;
+                                     schema: *mut *mut kudu_schema) -> *mut kudu_status;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Column Schema Builder
@@ -152,14 +180,42 @@ extern "C" {
     ////////////////////////////////////////////////////////////////////////////
 
     pub fn kudu_client_destroy(client: *mut kudu_client);
-    pub fn kudu_client_list_tables(client: *const kudu_client,
-                                   tables: *const *mut kudu_table_list)
-                                   -> *mut kudu_status;
-    pub fn kudu_client_table_schema(client: *const kudu_client,
-                                    table: kudu_slice,
-                                    schema: *const *mut kudu_schema)
-                                    -> *mut kudu_status;
     pub fn kudu_client_new_table_creator(client: *mut kudu_client) -> *mut kudu_table_creator;
+    pub fn kudu_client_delete_table(client: *mut kudu_client, table_name: kudu_slice) -> *mut kudu_status;
+    pub fn kudu_client_get_table_schema(client: *mut kudu_client,
+                                        table: kudu_slice,
+                                        schema: *mut *mut kudu_schema)
+                                        -> *mut kudu_status;
+    pub fn kudu_client_list_tables(client: *mut kudu_client,
+                                   filter: kudu_slice,
+                                   tables: *mut *mut kudu_table_list)
+                                   -> *mut kudu_status;
+    pub fn kudu_client_list_tablet_servers(client: *mut kudu_client,
+                                           tservers: *mut *mut kudu_tablet_server_list)
+                                           -> *mut kudu_status;
+
+    pub fn kudu_client_new_session(client: *mut kudu_client) -> *mut kudu_session;
+    pub fn kudu_client_open_table(client: *mut kudu_client,
+                                  table_name: kudu_slice,
+                                  table: *mut *mut kudu_table)
+                                  -> *mut kudu_status;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Kudu Tablet Server List
+    ////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_tablet_server_list_destroy(tservers: *mut kudu_tablet_server_list);
+    pub fn kudu_tablet_server_list_size(tservers: *const kudu_tablet_server_list) -> usize;
+    pub fn kudu_tablet_server_list_get(tservers: *const kudu_tablet_server_list,
+                                       idx: usize)
+                                       -> *const kudu_tablet_server;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Kudu Tablet Server
+    ////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_tablet_server_hostname(tserver: *const kudu_tablet_server) -> kudu_slice;
+    pub fn kudu_tablet_server_uuid(tserver: *const kudu_tablet_server) -> kudu_slice;
 
     ////////////////////////////////////////////////////////////////////////////
     // Kudu Table Creator
@@ -179,6 +235,58 @@ extern "C" {
     pub fn kudu_table_creator_timeout(creator: *mut kudu_table_creator, timeout_ms: i64);
     pub fn kudu_table_creator_wait(creator: *mut kudu_table_creator, wait: /*bool*/i32);
     pub fn kudu_table_creator_create(creator: *mut kudu_table_creator) -> *mut kudu_status;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Session
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_session_destroy(session: *mut kudu_session);
+    pub fn kudu_session_set_flush_mode(session: *mut kudu_session, mode: FlushMode) -> *mut kudu_status;
+    pub fn kudu_session_set_external_consistency_mode(session: *mut kudu_session, mode: ExternalConsistencyMode) -> *mut kudu_status;
+    pub fn kudu_session_set_timeout_millis(session: *mut kudu_session, millis: i32);
+    pub fn kudu_session_insert(session: *mut kudu_session, insert: *mut kudu_insert) -> *mut kudu_status;
+    pub fn kudu_session_update(session: *mut kudu_session, update: *mut kudu_update) -> *mut kudu_status;
+    pub fn kudu_session_delete(session: *mut kudu_session, delete: *mut kudu_delete) -> *mut kudu_status;
+    pub fn kudu_session_flush(session: *mut kudu_session) -> *mut kudu_status;
+    pub fn kudu_session_close(session: *mut kudu_session) -> *mut kudu_status;
+    pub fn kudu_session_has_pending_operations(session: *mut kudu_session) -> /*bool*/i32;
+    pub fn kudu_session_count_buffered_operations(session: *mut kudu_session) -> i32;
+    pub fn kudu_session_count_pending_errors(session: *mut kudu_session) -> i32;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Table
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_table_destroy(table: *mut kudu_table);
+    pub fn kudu_table_name(table: *const kudu_table) -> kudu_slice;
+    pub fn kudu_table_id(table: *const kudu_table) -> kudu_slice;
+    pub fn kudu_table_new_insert(table: *mut kudu_table) -> *mut kudu_insert;
+    pub fn kudu_table_new_update(table: *mut kudu_table) -> *mut kudu_update;
+    pub fn kudu_table_new_delete(table: *mut kudu_table) -> *mut kudu_delete;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Insert
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_insert_destroy(insert: *mut kudu_insert);
+    pub fn kudu_insert_row(insert: *const kudu_insert) -> *const kudu_partial_row;
+    pub fn kudu_insert_mutable_row(insert: *mut kudu_insert) -> *mut kudu_partial_row;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Update
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_update_destroy(update: *mut kudu_update);
+    pub fn kudu_update_row(update: *const kudu_update) -> *const kudu_partial_row;
+    pub fn kudu_update_mutable_row(update: *mut kudu_update) -> *mut kudu_partial_row;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Delete
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_delete_destroy(delete: *mut kudu_delete);
+    pub fn kudu_delete_row(delete: *const kudu_delete) -> *const kudu_partial_row;
+    pub fn kudu_delete_mutable_row(delete: *mut kudu_delete) -> *mut kudu_partial_row;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Partial Row

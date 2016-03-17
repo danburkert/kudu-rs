@@ -10,5 +10,5 @@ keywords = ["kudu", "database"]
 kudu-sys = { path = "kudu-sys", version = "0.1.0" }
 
 [dev-dependencies]
-compiletest_rs = "0.0"
+compiletest_rs = { git = "https://github.com/laumann/compiletest-rs" }
 tempdir = "0.3"

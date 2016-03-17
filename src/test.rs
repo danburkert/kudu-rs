@@ -3,18 +3,40 @@ use std::fs;
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::{Command, Child};
+use std::thread;
+use std::time::Duration;
+use std::sync::{StaticMutex, MUTEX_INIT};
 
 use tempdir::TempDir;
 
+use Client;
+use ClientBuilder;
+
+static LOCK: StaticMutex = MUTEX_INIT;
+
+/// A process handle that will kill the process when it goes out of scope.
+pub struct ProcessHandle(Child);
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+    }
+}
+
+#[allow(dead_code)]
 pub struct MiniCluster {
-    _dir: TempDir,
-    master_procs: Vec<Child>,
+    dir: TempDir,
+    client: Client,
+    master_procs: Vec<ProcessHandle>,
     master_addrs: Vec<SocketAddr>,
-    tserver_procs: Vec<Child>,
+    tserver_procs: Vec<ProcessHandle>,
 }
 
 impl MiniCluster {
     pub fn new(conf: MiniClusterConfig) -> MiniCluster {
+        // TODO: this prevents a deadlock which seamingly originates in TCMalloc. Figure out why
+        // this is necessary.
+        let _lock = LOCK.lock().unwrap();
+
         let kudu_home = env::var("KUDU_HOME").expect("KUDU_HOME environment variable must be set");
         let mut bin_dir = PathBuf::from(&kudu_home);
         bin_dir.push("build");
@@ -44,13 +66,13 @@ impl MiniCluster {
                                                   .arg(format!("--log_dir={}", logs.to_str().unwrap()))
                                                   .arg(format!("--rpc_bind_addresses={}", addr))
                                                   .spawn().expect("unable to start master");
-            master_procs.push(process);
+            master_procs.push(ProcessHandle(process));
             master_addrs.push(addr);
         }
 
         let mut tserver_procs = Vec::with_capacity(conf.num_tservers);
         let masters = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
-        for i in 0..conf.num_masters {
+        for i in 0..conf.num_tservers {
             let addr = get_unbound_address();
             let path = dir.path().join(format!("tserver-{}", i));
             let logs = dir.path().join(format!("tserver-{}-logs", i));
@@ -65,19 +87,38 @@ impl MiniCluster {
                                                    .arg(format!("--log_dir={}", logs.to_str().unwrap()))
                                                    .arg(format!("--rpc_bind_addresses={}", addr))
                                                    .arg(format!("--tserver_master_addrs={}", masters))
-                                                   .spawn().expect("unable to start master");
-            tserver_procs.push(process);
+                                                   .spawn().expect("unable to start tablet server");
+            tserver_procs.push(ProcessHandle(process));
+        }
+
+        let client = {
+            let mut builder = ClientBuilder::new();
+            for addr in &master_addrs {
+                builder.add_master_server_addr(&addr.to_string());
+            }
+            builder.build().expect("unable to build client")
+        };
+
+        while client.list_tablet_servers()
+                    .expect("unable to list tablet servers")
+                    .len() < conf.num_tservers {
+            thread::sleep(Duration::from_millis(100));
         }
 
         MiniCluster {
-            _dir: dir,
+            dir: dir,
+            client: client,
             master_procs: master_procs,
             master_addrs: master_addrs,
             tserver_procs: tserver_procs,
         }
-
     }
 
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    #[allow(dead_code)]
     pub fn master_addrs(&self) -> &[SocketAddr] {
         &self.master_addrs
     }
@@ -86,20 +127,6 @@ impl MiniCluster {
 /// Attempts to get a local unbound socket address for testing.
 fn get_unbound_address() -> SocketAddr {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
-}
-
-impl Drop for MiniCluster {
-    fn drop(&mut self) {
-        for mut tserver in &mut self.tserver_procs {
-            tserver.kill().expect("unable to shutdown tablet server");
-            tserver.wait().expect("unable to wait for tablet server shutdown");
-        }
-
-        for mut master in &mut self.master_procs {
-            master.kill().expect("unable to shutdown master server");
-            master.wait().expect("unable to wait for master server shutdown");
-        }
-    }
 }
 
 pub struct MiniClusterConfig {
