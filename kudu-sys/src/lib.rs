@@ -1,5 +1,7 @@
 #![allow(non_camel_case_types)]
 
+use std::os::raw::c_void;
+
 pub enum kudu_client {}
 pub enum kudu_client_builder {}
 pub enum kudu_column_schema {}
@@ -8,6 +10,8 @@ pub enum kudu_delete {}
 pub enum kudu_insert {}
 pub enum kudu_partial_row {}
 pub enum kudu_predicate {}
+pub enum kudu_scan_batch {}
+pub enum kudu_scanner {}
 pub enum kudu_schema {}
 pub enum kudu_schema_builder {}
 pub enum kudu_session {}
@@ -19,6 +23,11 @@ pub enum kudu_tablet_server {}
 pub enum kudu_tablet_server_list {}
 pub enum kudu_update {}
 
+#[repr(C)]
+pub struct kudu_scan_batch_row_ptr {
+    schema: c_void,
+    data: c_void,
+}
 
 #[repr(C)]
 pub struct kudu_slice {
@@ -82,6 +91,20 @@ pub enum FlushMode {
 pub enum ExternalConsistencyMode {
   ClientPropogated,
   CommitWait,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(C)]
+pub enum ReadMode {
+    Latest,
+    Snapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(C)]
+pub enum OrderMode {
+    Unordered,
+    Ordered,
 }
 
 #[link(name="kudu_client")]
@@ -287,6 +310,69 @@ extern "C" {
     pub fn kudu_delete_destroy(delete: *mut kudu_delete);
     pub fn kudu_delete_row(delete: *const kudu_delete) -> *const kudu_partial_row;
     pub fn kudu_delete_mutable_row(delete: *mut kudu_delete) -> *mut kudu_partial_row;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Scanner
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_scanner_create(table: *mut kudu_table) -> *mut kudu_scanner;
+    pub fn kudu_scanner_destroy(scanner: *mut kudu_scanner);
+    pub fn kudu_scanner_set_projected_column_names(scanner: *mut kudu_scanner, col_names: kudu_slice_list) -> *mut kudu_status;
+    pub fn kudu_scanner_set_projected_column_indexes(scanner: *mut kudu_scanner, indexes: *const usize, num_indexes: usize) -> *mut kudu_status;
+    pub fn kudu_scanner_add_lower_bound(scanner: *mut kudu_scanner, bound: *const kudu_partial_row) -> *mut kudu_status;
+    pub fn kudu_scanner_add_upper_bound(scanner: *mut kudu_scanner, bound: *const kudu_partial_row) -> *mut kudu_status;
+    pub fn kudu_scanner_set_cache_blocks(scanner: *mut kudu_scanner, cache_blocks: /*bool*/i32) -> *mut kudu_status;
+    pub fn kudu_scanner_open(scanner: *mut kudu_scanner) -> *mut kudu_status;
+    pub fn kudu_scanner_close(scanner: *mut kudu_scanner);
+    pub fn kudu_scanner_has_more_rows(scanner: *mut kudu_scanner) -> /*bool*/i32;
+    pub fn kudu_scanner_next_batch(scanner: *mut kudu_scanner, batch: *mut kudu_scan_batch) -> *mut kudu_status;
+    //pub fn kudu_scanner_get_current_server(scanner: *mut kudu_scanner, tserver: *mut *mut kudu_table_server) -> *mut kudu_status;
+    pub fn kudu_scanner_set_batch_size_bytes(scanner: *mut kudu_scanner, batch_size: usize) -> *mut kudu_status;
+    pub fn kudu_scanner_set_read_mode(scanner: *mut kudu_scanner, mode: ReadMode) -> *mut kudu_status;
+    pub fn kudu_scanner_set_order_mode(scanner: *mut kudu_scanner, mode: OrderMode) -> *mut kudu_status;
+    pub fn kudu_scanner_set_fault_tolerant(scanner: *mut kudu_scanner) -> *mut kudu_status;
+    pub fn kudu_scanner_set_snapshot_micros(scanner: *mut kudu_scanner, timestamp: u64) -> *mut kudu_status;
+    pub fn kudu_scanner_set_snapshot_raw(scanner: *mut kudu_scanner, timestamp: u64) -> *mut kudu_status;
+    pub fn kudu_scanner_set_timeout_millis(scanner: *mut kudu_scanner, timeout: i32) -> *mut kudu_status;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Scan Batch
+    ////////////////////////////////////////////////////////////////////////////////
+
+    pub fn kudu_scan_batch_create() -> *mut kudu_scan_batch;
+    pub fn kudu_scan_batch_destroy(batch: *mut kudu_scan_batch);
+    pub fn kudu_scan_batch_num_rows(batch: *const kudu_scan_batch) -> usize;
+    pub fn kudu_scan_batch_row(batch: *const kudu_scan_batch, idx: usize) -> kudu_scan_batch_row_ptr;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Kudu Scan Batch Row Ptr
+    ////////////////////////////////////////////////////////////////////////////////
+
+
+    pub fn kudu_scan_batch_row_ptr_get_bool_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int8_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i8) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int16_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i16) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int32_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i32) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int64_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_timestamp_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_float_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut f32) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_double_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut f64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_string_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_binary_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_is_null_by_name(row: *const kudu_scan_batch_row_ptr, column_name: kudu_slice) -> i32/*bool*/;
+
+    pub fn kudu_scan_batch_row_ptr_get_bool(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i32/*bool*/) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int8(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i8) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int16(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i16) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int32(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i32) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_int64(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_timestamp(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut i64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_float(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut f32) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_double(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut f64) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_string(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_get_binary(row: *const kudu_scan_batch_row_ptr, column_idx: usize, val: *mut kudu_slice) -> *mut kudu_status;
+    pub fn kudu_scan_batch_row_ptr_is_null(row: *const kudu_scan_batch_row_ptr, column_idx: usize) -> i32/*bool*/;
+
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Partial Row

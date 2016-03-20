@@ -14,7 +14,16 @@ use std::slice;
 use std::str;
 use std::time::{SystemTime, Duration, UNIX_EPOCH};
 
-pub use kudu_sys::{DataType, CompressionType, EncodingType, FlushMode, ExternalConsistencyMode};
+pub use kudu_sys::{
+    CompressionType,
+    DataType,
+    EncodingType,
+    ExternalConsistencyMode,
+    FlushMode,
+    OrderMode,
+    ReadMode,
+};
+
 
 unsafe fn str_into_kudu_slice(s: &str) -> kudu_sys::kudu_slice {
     kudu_sys::kudu_slice { data: s.as_ptr(), len: s.len() }
@@ -837,10 +846,213 @@ impl <'a> fmt::Debug for TableCreator<'a> {
     }
 }
 
-pub struct PartialRow<'a> {
-    inner: *mut kudu_sys::kudu_partial_row,
-    drop: bool,
-    marker: PhantomData<&'a Schema>,
+pub struct ScanBuilder<'a> {
+    inner: *mut kudu_sys::kudu_scanner,
+    marker: PhantomData<Table<'a>>,
+}
+
+impl <'a> ScanBuilder<'a> {
+    pub fn new(table: &'a Table) -> ScanBuilder<'a> {
+        unsafe {
+            ScanBuilder {
+                inner: kudu_sys::kudu_scanner_create(table.inner),
+                marker: PhantomData,
+            }
+        }
+    }
+
+    pub fn set_projected_column_names<S>(&mut self, column_names: &[S]) -> Result<()>
+    where S: AsRef<str> {
+        unsafe {
+            let slices = column_names.iter()
+                                     .map(|name| str_into_kudu_slice(name.as_ref()))
+                                     .collect::<Vec<_>>();
+            Error::from_status(kudu_sys::kudu_scanner_set_projected_column_names(
+                    self.inner, slice_into_kudu_slice_list(&slices)))
+        }
+    }
+
+    pub fn set_projected_column_indexes(&mut self, column_idxs: &[usize]) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_projected_column_indexes(
+                    self.inner, column_idxs.as_ptr(), column_idxs.len()))
+        }
+    }
+
+    pub fn add_lower_bound(&mut self, bound: &PartialRow) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_add_lower_bound(self.inner, bound.inner))
+        }
+    }
+
+    pub fn add_upper_bound(&mut self, bound: &PartialRow) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_add_upper_bound(self.inner, bound.inner))
+        }
+    }
+
+    pub fn set_cache_blocks(&mut self, cache_blocks: bool) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_cache_blocks(self.inner, if cache_blocks { 1 } else { 0 }))
+        }
+    }
+
+    pub fn set_batch_size_bytes(&mut self, batch_size: usize) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_batch_size_bytes(self.inner, batch_size))
+        }
+    }
+
+    pub fn set_read_mode(&mut self, mode: ReadMode) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_read_mode(self.inner, mode))
+        }
+    }
+
+    pub fn set_order_mode(&mut self, mode: OrderMode) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_order_mode(self.inner, mode))
+        }
+    }
+
+    pub fn set_fault_tolerant(&mut self) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_fault_tolerant(self.inner))
+        }
+    }
+
+    pub fn set_snapshot(&mut self, timestamp: &SystemTime) -> Result<()> {
+        unsafe {
+            // TODO: handle this better
+            let duration = timestamp.duration_since(UNIX_EPOCH).unwrap();
+            let value = duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000;
+            Error::from_status(kudu_sys::kudu_scanner_set_snapshot_micros(self.inner, value))
+        }
+    }
+
+    pub fn set_snapshot_raw(&mut self, timestamp: u64) -> Result<()> {
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_snapshot_raw(self.inner, timestamp))
+        }
+    }
+
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
+        let millis = timeout.as_secs() as i32 * 1_000 + timeout.subsec_nanos() as i32 / 1_000_000;
+        unsafe {
+            Error::from_status(kudu_sys::kudu_scanner_set_timeout_millis(self.inner, millis))
+        }
+    }
+
+    pub fn build(self) -> Result<Scanner<'a>> {
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scanner_open(self.inner)));
+        }
+        let scanner = Scanner {
+            inner: self.inner,
+            marker: PhantomData,
+        };
+        mem::forget(self);
+        Ok(scanner)
+    }
+}
+
+impl <'a> Drop for ScanBuilder<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_scanner_destroy(self.inner);
+        }
+    }
+}
+
+impl <'a> fmt::Debug for ScanBuilder<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ScanBuilder")
+    }
+}
+
+pub struct Scanner<'a> {
+    inner: *mut kudu_sys::kudu_scanner,
+    marker: PhantomData<Table<'a>>,
+}
+
+impl <'a> Scanner<'a> {
+    pub fn has_more_rows(&mut self) -> bool {
+        unsafe {
+            if kudu_sys::kudu_scanner_has_more_rows(self.inner) == 0 { false } else { true }
+        }
+    }
+    pub fn next_batch(&mut self, batch: ScanBatch) -> Result<ScanBatch<'a>> {
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scanner_next_batch(self.inner, batch.inner)));
+        }
+        let b = ScanBatch {
+            inner: batch.inner,
+            marker: PhantomData,
+        };
+        mem::forget(batch);
+        Ok(b)
+    }
+}
+
+impl <'a> Drop for Scanner<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_scanner_close(self.inner);
+            kudu_sys::kudu_scanner_destroy(self.inner);
+        }
+    }
+}
+
+impl <'a> fmt::Debug for Scanner<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Scanner")
+    }
+}
+
+pub struct ScanBatch<'a> {
+    inner: *mut kudu_sys::kudu_scan_batch,
+    marker: PhantomData<Scanner<'a>>,
+}
+
+impl <'a> ScanBatch<'a> {
+    pub fn new() -> ScanBatch<'static> {
+        unsafe {
+            ScanBatch {
+                inner: kudu_sys::kudu_scan_batch_create(),
+                marker: PhantomData,
+            }
+        }
+    }
+    pub fn len(&self) -> usize {
+        unsafe { kudu_sys::kudu_scan_batch_num_rows(self.inner) }
+    }
+    pub fn get<'b>(&'b self, index: usize) -> Option<ScanBatchRow<'b>> {
+        if index < self.len() {
+            Some(unsafe { self.get_unchecked(index) })
+        } else {
+            None
+        }
+    }
+    pub unsafe fn get_unchecked<'b>(&'b self, index: usize) -> ScanBatchRow<'b> {
+        ScanBatchRow {
+            inner: kudu_sys::kudu_scan_batch_row(self.inner, index),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl <'a> fmt::Debug for ScanBatch<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ScanBatch")
+    }
+}
+
+impl <'a> Drop for ScanBatch<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            kudu_sys::kudu_scan_batch_destroy(self.inner);
+        }
+    }
 }
 
 pub trait ColumnType<'a>: Sized {
@@ -848,6 +1060,8 @@ pub trait ColumnType<'a>: Sized {
     fn set(self, row: &mut PartialRow<'a>, column_idx: usize) -> Result<()>;
     fn get_by_name(&'a PartialRow, column: &str) -> Result<Self>;
     fn set_by_name(self, row: &mut PartialRow<'a>, column: &str) -> Result<()>;
+    fn get_batch(&'a ScanBatchRow, column_idx: usize) -> Result<Self>;
+    fn get_batch_by_name(&'a ScanBatchRow, column: &str) -> Result<Self>;
 }
 
 pub trait VarLengthColumnType<'a>: Sized + ColumnType<'a> {
@@ -876,6 +1090,20 @@ impl <'a> ColumnType<'a> for bool {
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_bool_by_name(row.inner, str_into_kudu_slice(column), if self { 1 } else { 0 })) }
     }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<bool> {
+        let mut value: i32 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_bool(&row.inner, column_idx, &mut value)));
+        }
+        Ok(if value == 0 { false } else { true })
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<bool> {
+        let mut value: i32 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_bool_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(if value == 0 { false } else { true })
+    }
 }
 
 impl <'a> ColumnType<'a> for i8 {
@@ -898,6 +1126,20 @@ impl <'a> ColumnType<'a> for i8 {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int8_by_name(row.inner, str_into_kudu_slice(column), self)) }
+    }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<i8> {
+        let mut value: i8 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int8(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<i8> {
+        let mut value: i8 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int8_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
     }
 }
 
@@ -922,6 +1164,20 @@ impl <'a> ColumnType<'a> for i16 {
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int16_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<i16> {
+        let mut value: i16 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int16(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<i16> {
+        let mut value: i16 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int16_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
+    }
 }
 
 impl <'a> ColumnType<'a> for i32 {
@@ -945,6 +1201,20 @@ impl <'a> ColumnType<'a> for i32 {
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int32_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<i32> {
+        let mut value: i32 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int32(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<i32> {
+        let mut value: i32 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int32_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
+    }
 }
 
 impl <'a> ColumnType<'a> for i64 {
@@ -967,6 +1237,20 @@ impl <'a> ColumnType<'a> for i64 {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_int64_by_name(row.inner, str_into_kudu_slice(column), self)) }
+    }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<i64> {
+        let mut value: i64 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int64(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<i64> {
+        let mut value: i64 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_int64_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
     }
 }
 
@@ -1027,6 +1311,34 @@ impl <'a> ColumnType<'a> for SystemTime {
 
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_timestamp_by_name(row.inner, str_into_kudu_slice(column), value)) }
     }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<SystemTime> {
+        let mut value: i64 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_timestamp(&row.inner, column_idx, &mut value)));
+        }
+
+        if value < 0 {
+            let value = !(value as u64) + 1;
+            Ok(UNIX_EPOCH - Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
+        } else {
+            let value = value as u64;
+            Ok(UNIX_EPOCH + Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
+        }
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<SystemTime> {
+        let mut value: i64 = 0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_timestamp_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+
+        if value < 0 {
+            let value = !(value as u64) + 1;
+            Ok(UNIX_EPOCH - Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
+        } else {
+            let value = value as u64;
+            Ok(UNIX_EPOCH + Duration::new(value / 1000_000, (value % 1000_000) as u32 * 1000))
+        }
+    }
 }
 
 impl <'a> ColumnType<'a> for f32 {
@@ -1049,6 +1361,20 @@ impl <'a> ColumnType<'a> for f32 {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_float_by_name(row.inner, str_into_kudu_slice(column), self)) }
+    }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<f32> {
+        let mut value: f32 = 0.0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_float(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<f32> {
+        let mut value: f32 = 0.0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_float_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
     }
 }
 
@@ -1073,6 +1399,20 @@ impl <'a> ColumnType<'a> for f64 {
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_double_by_name(row.inner, str_into_kudu_slice(column), self)) }
     }
+    fn get_batch(row: &ScanBatchRow, column_idx: usize) -> Result<f64> {
+        let mut value: f64 = 0.0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_double(&row.inner, column_idx, &mut value)));
+        }
+        Ok(value)
+    }
+    fn get_batch_by_name(row: &ScanBatchRow, column: &str) -> Result<f64> {
+        let mut value: f64 = 0.0;
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_double_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+        }
+        Ok(value)
+    }
 }
 
 impl <'a> ColumnType<'a> for &'a str {
@@ -1095,6 +1435,20 @@ impl <'a> ColumnType<'a> for &'a str {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_string_by_name(row.inner, str_into_kudu_slice(column), str_into_kudu_slice(self))) }
+    }
+    fn get_batch(row: &'a ScanBatchRow, column_idx: usize) -> Result<&'a str> {
+        let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_string(&row.inner, column_idx, &mut value)));
+            Ok(kudu_slice_into_str(value))
+        }
+    }
+    fn get_batch_by_name(row: &'a ScanBatchRow, column: &str) -> Result<&'a str> {
+        let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_string_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+            Ok(kudu_slice_into_str(value))
+        }
     }
 }
 
@@ -1127,6 +1481,20 @@ impl <'a> ColumnType<'a> for &'a [u8] {
     }
     fn set_by_name(self, row: &mut PartialRow, column: &str) -> Result<()> {
         unsafe { Error::from_status(kudu_sys::kudu_partial_row_set_binary_by_name(row.inner, str_into_kudu_slice(column), slice_into_kudu_slice(self))) }
+    }
+    fn get_batch(row: &'a ScanBatchRow, column_idx: usize) -> Result<&'a [u8]> {
+        let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_binary(&row.inner, column_idx, &mut value)));
+            Ok(kudu_slice_into_slice(value))
+        }
+    }
+    fn get_batch_by_name(row: &'a ScanBatchRow, column: &str) -> Result<&'a [u8]> {
+        let mut value: kudu_sys::kudu_slice = empty_kudu_slice();
+        unsafe {
+            try!(Error::from_status(kudu_sys::kudu_scan_batch_row_ptr_get_binary_by_name(&row.inner, str_into_kudu_slice(column), &mut value)));
+            Ok(kudu_slice_into_slice(value))
+        }
     }
 }
 
@@ -1166,6 +1534,20 @@ impl <'a, T> ColumnType<'a> for Option<T> where T: ColumnType<'a> {
             None => row.set_null_by_name(column),
         }
     }
+    fn get_batch(row: &'a ScanBatchRow, column_idx: usize) -> Result<Option<T>> {
+        if row.is_null(column_idx) {
+            Ok(None)
+        } else {
+            ColumnType::get_batch(row, column_idx).map(|t| Some(t))
+        }
+    }
+    fn get_batch_by_name(row: &'a ScanBatchRow, column: &str) -> Result<Option<T>> {
+        if row.is_null_by_name(column) {
+            Ok(None)
+        } else {
+            ColumnType::get_batch_by_name(row, column).map(|t| Some(t))
+        }
+    }
 }
 
 impl <'a, T> VarLengthColumnType<'a> for Option<T> where T: VarLengthColumnType<'a> {
@@ -1181,6 +1563,12 @@ impl <'a, T> VarLengthColumnType<'a> for Option<T> where T: VarLengthColumnType<
             None => row.set_null_by_name(column),
         }
     }
+}
+
+pub struct PartialRow<'a> {
+    inner: *mut kudu_sys::kudu_partial_row,
+    drop: bool,
+    marker: PhantomData<&'a Schema>,
 }
 
 impl <'a> PartialRow<'a> {
@@ -1265,6 +1653,40 @@ impl <'a> Drop for PartialRow<'a> {
 impl <'a> fmt::Debug for PartialRow<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "PartialRow")
+    }
+}
+
+pub struct ScanBatchRow<'a> {
+    inner: kudu_sys::kudu_scan_batch_row_ptr,
+    marker: PhantomData<&'a Schema>,
+}
+
+impl <'a> ScanBatchRow<'a> {
+
+    pub fn get<T>(&'a self, column_idx: usize) -> Result<T> where T: ColumnType<'a> {
+        T::get_batch(self, column_idx)
+    }
+
+    pub fn is_null(&self, column_idx: usize) -> bool {
+        unsafe {
+            if kudu_sys::kudu_scan_batch_row_ptr_is_null(&self.inner, column_idx) == 0 { false } else { true }
+        }
+    }
+
+    pub fn get_by_name<T>(&'a self, column: &str) -> Result<T> where T: ColumnType<'a> {
+        T::get_batch_by_name(self, column)
+    }
+
+    pub fn is_null_by_name(&self, column: &str) -> bool {
+        unsafe {
+            if kudu_sys::kudu_scan_batch_row_ptr_is_null_by_name(&self.inner, str_into_kudu_slice(column)) == 0 { false } else { true }
+        }
+    }
+}
+
+impl <'a> fmt::Debug for ScanBatchRow<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ScanBatchRow")
     }
 }
 
@@ -1555,5 +1977,80 @@ mod tests {
         session.flush().unwrap();
 
         session.close().unwrap();
+    }
+
+    #[test]
+    fn test_scan() {
+        let cluster = MiniCluster::new(MiniClusterConfig::default());
+        let client = cluster.client();
+
+        let schema = kv_schema();
+        client.new_table_creator()
+              .table_name("table")
+              .schema(&schema)
+              .num_replicas(1)
+              .wait(true)
+              .create()
+              .unwrap();
+
+        let table = client.open_table("table").unwrap();
+        assert_eq!("table", table.name());
+
+        let mut session = client.new_session();
+        session.set_timeout(&Duration::from_secs(10));
+
+        for i in 0..100 {
+            let mut insert = table.new_insert();
+            insert.row().set_copy(0, &format!("key-{:0>2}", i)[..]).unwrap();
+            insert.row().set_copy(1, &format!("val-{:0>2}", i)[..]).unwrap();
+            session.insert(insert).unwrap();
+        }
+        session.flush().unwrap();
+        session.close().unwrap();
+
+        { // no bounds, no predicates
+            let mut scanner = ScanBuilder::new(&table).build().unwrap();
+            let mut batch = ScanBatch::new();
+            let mut count = 0;
+            while scanner.has_more_rows() {
+                batch = scanner.next_batch(batch).unwrap();
+                count += batch.len();
+            }
+            assert_eq!(100, count);
+        }
+
+        { // lower bound
+            let mut bound = schema.new_row();
+            bound.set(0, "key-50").unwrap();
+            let mut scanner = {
+                let mut builder = ScanBuilder::new(&table);
+                builder.add_lower_bound(&bound).unwrap();
+                builder.build().unwrap()
+            };
+            let mut batch = ScanBatch::new();
+            let mut count = 0;
+            while scanner.has_more_rows() {
+                batch = scanner.next_batch(batch).unwrap();
+                count += batch.len();
+            }
+            assert_eq!(50, count);
+        }
+
+        { // upper bound
+            let mut bound = schema.new_row();
+            bound.set(0, "key-50").unwrap();
+            let mut scanner = {
+                let mut builder = ScanBuilder::new(&table);
+                builder.add_upper_bound(&bound).unwrap();
+                builder.build().unwrap()
+            };
+            let mut batch = ScanBatch::new();
+            let mut count = 0;
+            while scanner.has_more_rows() {
+                batch = scanner.next_batch(batch).unwrap();
+                count += batch.len();
+            }
+            assert_eq!(50, count);
+        }
     }
 }
