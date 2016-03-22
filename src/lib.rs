@@ -369,27 +369,15 @@ impl <'a> Session<'a> {
     }
 
     pub fn insert(&self, insert: Insert) -> Result<()> {
-        unsafe {
-            try!(Error::from_status(kudu_sys::kudu_session_insert(self.inner, insert.inner)));
-            mem::forget(insert);
-            Ok(())
-        }
+        unsafe { Error::from_status(kudu_sys::kudu_session_insert(self.inner, insert.into_inner())) }
     }
 
     pub fn update(&self, update: Update) -> Result<()> {
-        unsafe {
-            try!(Error::from_status(kudu_sys::kudu_session_update(self.inner, update.inner)));
-            mem::forget(update);
-            Ok(())
-        }
+        unsafe { Error::from_status(kudu_sys::kudu_session_update(self.inner, update.into_inner())) }
     }
 
     pub fn delete(&self, delete: Delete) -> Result<()> {
-        unsafe {
-            try!(Error::from_status(kudu_sys::kudu_session_delete(self.inner, delete.inner)));
-            mem::forget(delete);
-            Ok(())
-        }
+        unsafe { Error::from_status(kudu_sys::kudu_session_delete(self.inner, delete.into_inner())) }
     }
 
     pub fn flush(&self) -> Result<()> {
@@ -454,6 +442,11 @@ impl <'a> Insert<'a> {
             }
         }
     }
+    fn into_inner(self) -> *mut kudu_sys::kudu_insert {
+        let inner = self.inner;
+        mem::forget(self);
+        inner
+    }
 }
 
 impl <'a> fmt::Debug for Insert<'a> {
@@ -485,6 +478,11 @@ impl <'a> Update<'a> {
             }
         }
     }
+    fn into_inner(self) -> *mut kudu_sys::kudu_update {
+        let inner = self.inner;
+        mem::forget(self);
+        inner
+    }
 }
 
 impl <'a> fmt::Debug for Update<'a> {
@@ -515,6 +513,11 @@ impl <'a> Delete<'a> {
                 marker: PhantomData,
             }
         }
+    }
+    fn into_inner(self) -> *mut kudu_sys::kudu_delete {
+        let inner = self.inner;
+        mem::forget(self);
+        inner
     }
 }
 
@@ -555,6 +558,7 @@ impl Schema {
         }
     }
 
+    // TODO: this should return an Option
     pub fn column(&self, index: usize) -> ColumnSchema {
         ColumnSchema {
             inner: unsafe { kudu_sys::kudu_schema_column(self.inner, index) },
@@ -943,16 +947,18 @@ impl <'a> ScanBuilder<'a> {
         }
     }
 
-    pub fn build(self) -> Result<Scanner<'a>> {
-        unsafe {
-            try!(Error::from_status(kudu_sys::kudu_scanner_open(self.inner)));
-        }
-        let scanner = Scanner {
-            inner: self.inner,
-            marker: PhantomData,
-        };
+    fn into_inner(self) -> *mut kudu_sys::kudu_scanner {
+        let inner = self.inner;
         mem::forget(self);
-        Ok(scanner)
+        inner
+    }
+
+    pub fn build(self) -> Result<Scanner<'a>> {
+        unsafe { try!(Error::from_status(kudu_sys::kudu_scanner_open(self.inner))); }
+        Ok(Scanner {
+            inner: self.into_inner(),
+            marker: PhantomData,
+        })
     }
 }
 
@@ -986,11 +992,17 @@ impl <'a> Scanner<'a> {
             try!(Error::from_status(kudu_sys::kudu_scanner_next_batch(self.inner, batch.inner)));
         }
         let b = ScanBatch {
-            inner: batch.inner,
+            inner: batch.into_inner(),
             marker: PhantomData,
         };
-        mem::forget(batch);
         Ok(b)
+    }
+    pub fn get_projection_schema(&self) -> Schema {
+        unsafe {
+            Schema {
+                inner: kudu_sys::kudu_scanner_get_projection_schema(self.inner),
+            }
+        }
     }
 }
 
@@ -1038,6 +1050,11 @@ impl <'a> ScanBatch<'a> {
             inner: kudu_sys::kudu_scan_batch_row(self.inner, index),
             marker: PhantomData,
         }
+    }
+    fn into_inner(self) -> *mut kudu_sys::kudu_scan_batch {
+        let inner = self.inner;
+        mem::forget(self);
+        inner
     }
 }
 
@@ -1693,6 +1710,7 @@ impl <'a> fmt::Debug for ScanBatchRow<'a> {
 #[cfg(test)]
 mod tests {
 
+    use std::collections::HashSet;
     use std::time::{Duration, SystemTime};
 
     use super::*;
@@ -1947,6 +1965,11 @@ mod tests {
         update.row().set(1, "new-val").unwrap();
         session.update(update).unwrap();
 
+        let mut insert = table.new_insert();
+        insert.row().set(0, "my-key").unwrap();
+        insert.row().set(1, "duplicate").unwrap();
+        assert!(session.insert(insert).is_err());
+
         session.set_flush_mode(FlushMode::ManualFlush).unwrap();
 
         let mut insert = table.new_insert();
@@ -1999,9 +2022,13 @@ mod tests {
         let mut session = client.new_session();
         session.set_timeout(&Duration::from_secs(10));
 
+        let mut keys = HashSet::new();
+
         for i in 0..100 {
             let mut insert = table.new_insert();
-            insert.row().set_copy(0, &format!("key-{:0>2}", i)[..]).unwrap();
+            let key = format!("key-{:0>2}", i);
+            insert.row().set_copy(0, &key[..]).unwrap();
+            keys.insert(key);
             insert.row().set_copy(1, &format!("val-{:0>2}", i)[..]).unwrap();
             session.insert(insert).unwrap();
         }
@@ -2010,13 +2037,23 @@ mod tests {
 
         { // no bounds, no predicates
             let mut scanner = ScanBuilder::new(&table).build().unwrap();
+            let projection_schema = scanner.get_projection_schema();
+            assert_eq!(2, projection_schema.num_columns());
+
             let mut batch = ScanBatch::new();
             let mut count = 0;
+            let mut scanned_keys = HashSet::new();
             while scanner.has_more_rows() {
                 batch = scanner.next_batch(batch).unwrap();
+                for offset in 0..batch.len() {
+                    let row = batch.get(offset).unwrap();
+                    let k = row.get::<&str>(0).unwrap();
+                    scanned_keys.insert(k.to_owned());
+                }
                 count += batch.len();
             }
             assert_eq!(100, count);
+            assert_eq!(keys, scanned_keys);
         }
 
         { // lower bound
@@ -2025,6 +2062,23 @@ mod tests {
             let mut scanner = {
                 let mut builder = ScanBuilder::new(&table);
                 builder.add_lower_bound(&bound).unwrap();
+                builder.build().unwrap()
+            };
+            let mut batch = ScanBatch::new();
+            let mut count = 0;
+            while scanner.has_more_rows() {
+                batch = scanner.next_batch(batch).unwrap();
+                count += batch.len();
+            }
+            assert_eq!(50, count);
+        }
+
+        { // upper bound
+            let mut bound = schema.new_row();
+            bound.set(0, "key-50").unwrap();
+            let mut scanner = {
+                let mut builder = ScanBuilder::new(&table);
+                builder.add_upper_bound(&bound).unwrap();
                 builder.build().unwrap()
             };
             let mut batch = ScanBatch::new();

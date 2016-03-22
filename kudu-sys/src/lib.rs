@@ -25,8 +25,8 @@ pub enum kudu_update {}
 
 #[repr(C)]
 pub struct kudu_scan_batch_row_ptr {
-    schema: c_void,
-    data: c_void,
+    schema: *const c_void,
+    data: *const c_void,
 }
 
 #[repr(C)]
@@ -334,6 +334,7 @@ extern "C" {
     pub fn kudu_scanner_set_snapshot_micros(scanner: *mut kudu_scanner, timestamp: u64) -> *mut kudu_status;
     pub fn kudu_scanner_set_snapshot_raw(scanner: *mut kudu_scanner, timestamp: u64) -> *mut kudu_status;
     pub fn kudu_scanner_set_timeout_millis(scanner: *mut kudu_scanner, timeout: i32) -> *mut kudu_status;
+    pub fn kudu_scanner_get_projection_schema(scanner: *const kudu_scanner) -> *mut kudu_schema;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Kudu Scan Batch
