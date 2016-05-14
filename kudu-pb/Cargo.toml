@@ -1,0 +1,7 @@
+[package]
+name = "kudu-pb"
+version = "0.1.0"
+authors = ["Dan Burkert <dan@cloudera.com>"]
+
+[dependencies]
+protobuf = "1.0.20"

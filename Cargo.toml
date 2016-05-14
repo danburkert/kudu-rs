@@ -7,8 +7,8 @@ description = "Rust client for Apache Kudu (Incubating)"
 keywords = ["kudu", "database"]
 
 [dependencies]
-kudu-sys = { path = "kudu-sys", version = "0.1.0" }
+kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 
 [dev-dependencies]
-compiletest_rs = { git = "https://github.com/laumann/compiletest-rs" }
+compiletest_rs = "0.1.1"
 tempdir = "0.3"

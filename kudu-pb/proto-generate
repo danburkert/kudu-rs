@@ -1,0 +1,34 @@
+#! /bin/bash
+
+set -euo pipefail
+IFS=$'\n\t'
+set -x
+
+PROTOC=${PROTOC:-protoc}
+
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/client/client.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/common.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/wire_protocol.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/opid.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/fs/fs.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/master/master.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/rpc/rpc_header.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/tablet.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver.proto
+
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/metadata.proto
+mv src/metadata.rs src/consensus_metadata.rs
+
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/metadata.proto
+mv src/metadata.rs src/tablet_metadata.rs
+
+sed -i.bak 's/metadata/consensus_metadata/' src/wire_protocol.rs
+rm src/wire_protocol.rs.bak
+
+sed -i.bak 's/metadata/tablet_metadata/' src/tablet.rs
+rm src/tablet.rs.bak
+
+sed -i.bak 's/metadata::Tablet/tablet_metadata::Tablet/' src/master.rs
+sed -i.bak 's/metadata::Raft/consensus_metadata::Raft/' src/master.rs
+sed -i.bak 's/metadata::Consensus/consensus_metadata::Consensus/' src/master.rs
+rm src/master.rs.bak
