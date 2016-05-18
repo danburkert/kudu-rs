@@ -13,6 +13,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(unused_imports)]
 
+use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
@@ -581,54 +582,54 @@ impl ::protobuf::Message for ScanTokenPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         for v in self.feature_flags.iter() {
-            try!(os.write_enum(1, v.value()));
+            try!(w.write_enum(1, v.value()));
         };
         if let Some(v) = self.table_name.as_ref() {
-            try!(os.write_string(2, &v));
+            try!(w.write_string(2, &v));
         };
         for v in self.projected_columns.iter() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.column_predicates.iter() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.lower_bound_primary_key.as_ref() {
-            try!(os.write_bytes(5, &v));
+            try!(w.write_bytes(5, &v));
         };
         if let Some(v) = self.upper_bound_primary_key.as_ref() {
-            try!(os.write_bytes(6, &v));
+            try!(w.write_bytes(6, &v));
         };
         if let Some(v) = self.lower_bound_partition_key.as_ref() {
-            try!(os.write_bytes(7, &v));
+            try!(w.write_bytes(7, &v));
         };
         if let Some(v) = self.upper_bound_partition_key.as_ref() {
-            try!(os.write_bytes(8, &v));
+            try!(w.write_bytes(8, &v));
         };
         if let Some(v) = self.limit {
-            try!(os.write_uint64(9, v));
+            try!(w.write_uint64(9, v));
         };
         if let Some(v) = self.read_mode {
-            try!(os.write_enum(10, v.value()));
+            try!(w.write_enum(10, v.value()));
         };
         if let Some(v) = self.snap_timestamp {
-            try!(os.write_fixed64(11, v));
+            try!(w.write_fixed64(11, v));
         };
         if let Some(v) = self.propagated_timestamp {
-            try!(os.write_fixed64(12, v));
+            try!(w.write_fixed64(12, v));
         };
         if let Some(v) = self.cache_blocks {
-            try!(os.write_bool(13, v));
+            try!(w.write_bool(13, v));
         };
         if let Some(v) = self.fault_tolerant {
-            try!(os.write_bool(14, v));
+            try!(w.write_bool(14, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 

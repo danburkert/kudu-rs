@@ -13,6 +13,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(unused_imports)]
 
+use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
@@ -153,16 +154,16 @@ impl ::protobuf::Message for MasterErrorPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.code {
-            try!(os.write_enum(1, v.value()));
+            try!(w.write_enum(1, v.value()));
         };
         if let Some(v) = self.status.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -410,13 +411,13 @@ impl ::protobuf::Message for TSToMasterCommonPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.ts_instance.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -639,14 +640,14 @@ impl ::protobuf::Message for TableIdentifierPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table_id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.table_name.as_ref() {
-            try!(os.write_string(2, &v));
+            try!(w.write_string(2, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -1082,33 +1083,33 @@ impl ::protobuf::Message for SysTabletsEntryPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.DEPRECATED_start_key.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.DEPRECATED_end_key.as_ref() {
-            try!(os.write_bytes(2, &v));
+            try!(w.write_bytes(2, &v));
         };
         if let Some(v) = self.partition.as_ref() {
-            try!(os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.committed_consensus_state.as_ref() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.state {
-            try!(os.write_enum(4, v.value()));
+            try!(w.write_enum(4, v.value()));
         };
         if let Some(v) = self.state_msg.as_ref() {
-            try!(os.write_bytes(5, &v));
+            try!(w.write_bytes(5, &v));
         };
         if let Some(v) = self.table_id.as_ref() {
-            try!(os.write_bytes(6, &v));
+            try!(w.write_bytes(6, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -1690,41 +1691,41 @@ impl ::protobuf::Message for SysTablesEntryPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.name.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.version {
-            try!(os.write_uint32(2, v));
+            try!(w.write_uint32(2, v));
         };
         if let Some(v) = self.schema.as_ref() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.fully_applied_schema.as_ref() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.partition_schema.as_ref() {
-            try!(os.write_tag(9, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(9, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.next_column_id {
-            try!(os.write_int32(8, v));
+            try!(w.write_int32(8, v));
         };
         if let Some(v) = self.num_replicas {
-            try!(os.write_int32(5, v));
+            try!(w.write_int32(5, v));
         };
         if let Some(v) = self.state {
-            try!(os.write_enum(6, v.value()));
+            try!(w.write_enum(6, v.value()));
         };
         if let Some(v) = self.state_msg.as_ref() {
-            try!(os.write_bytes(7, &v));
+            try!(w.write_bytes(7, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -1966,8 +1967,8 @@ impl ::protobuf::Message for PingRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -2094,8 +2095,8 @@ impl ::protobuf::Message for PingResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -2291,18 +2292,18 @@ impl ::protobuf::Message for TSRegistrationPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         for v in self.rpc_addresses.iter() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.http_addresses.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -2666,30 +2667,30 @@ impl ::protobuf::Message for ReportedTabletPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.tablet_id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.state {
-            try!(os.write_enum(2, v.value()));
+            try!(w.write_enum(2, v.value()));
         };
         if let Some(v) = self.tablet_data_state {
-            try!(os.write_enum(6, v.value()));
+            try!(w.write_enum(6, v.value()));
         };
         if let Some(v) = self.committed_consensus_state.as_ref() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.schema_version {
-            try!(os.write_uint32(5, v));
+            try!(w.write_uint32(5, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -2994,22 +2995,22 @@ impl ::protobuf::Message for TabletReportPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.is_incremental {
-            try!(os.write_bool(1, v));
+            try!(w.write_bool(1, v));
         };
         for v in self.updated_tablets.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.removed_tablet_ids.iter() {
-            try!(os.write_bytes(3, &v));
+            try!(w.write_bytes(3, &v));
         };
         if let Some(v) = self.sequence_number {
-            try!(os.write_int32(4, v));
+            try!(w.write_int32(4, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -3254,14 +3255,14 @@ impl ::protobuf::Message for ReportedTabletUpdatesPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.tablet_id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.state_msg.as_ref() {
-            try!(os.write_string(2, &v));
+            try!(w.write_string(2, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -3437,13 +3438,13 @@ impl ::protobuf::Message for TabletReportUpdatesPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         for v in self.tablets.iter() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -3737,26 +3738,26 @@ impl ::protobuf::Message for TSHeartbeatRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.common.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.registration.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.tablet_report.as_ref() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.num_live_tablets {
-            try!(os.write_int32(4, v));
+            try!(w.write_int32(4, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -4131,32 +4132,32 @@ impl ::protobuf::Message for TSHeartbeatResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.master_instance.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.needs_reregister {
-            try!(os.write_bool(3, v));
+            try!(w.write_bool(3, v));
         };
         if let Some(v) = self.needs_full_tablet_report {
-            try!(os.write_bool(4, v));
+            try!(w.write_bool(4, v));
         };
         if let Some(v) = self.tablet_report.as_ref() {
-            try!(os.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.leader_master {
-            try!(os.write_bool(6, v));
+            try!(w.write_bool(6, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -4571,30 +4572,30 @@ impl ::protobuf::Message for TabletLocationsPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.tablet_id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.start_key.as_ref() {
-            try!(os.write_bytes(2, &v));
+            try!(w.write_bytes(2, &v));
         };
         if let Some(v) = self.end_key.as_ref() {
-            try!(os.write_bytes(3, &v));
+            try!(w.write_bytes(3, &v));
         };
         if let Some(v) = self.partition.as_ref() {
-            try!(os.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.replicas.iter() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.stale {
-            try!(os.write_bool(5, v));
+            try!(w.write_bool(5, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -4842,16 +4843,16 @@ impl ::protobuf::Message for TabletLocationsPB_ReplicaPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.ts_info.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.role {
-            try!(os.write_enum(2, v.value()));
+            try!(w.write_enum(2, v.value()));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -5074,16 +5075,16 @@ impl ::protobuf::Message for TSInfoPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.permanent_uuid.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         for v in self.rpc_addresses.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -5257,11 +5258,11 @@ impl ::protobuf::Message for GetTabletLocationsRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         for v in self.tablet_ids.iter() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -5505,23 +5506,23 @@ impl ::protobuf::Message for GetTabletLocationsResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.tablet_locations.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.errors.iter() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -5760,16 +5761,16 @@ impl ::protobuf::Message for GetTabletLocationsResponsePB_Error {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.tablet_id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.status.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -6118,29 +6119,29 @@ impl ::protobuf::Message for CreateTableRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.name.as_ref() {
-            try!(os.write_string(1, &v));
+            try!(w.write_string(1, &v));
         };
         if let Some(v) = self.schema.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.split_rows.as_ref() {
-            try!(os.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.partition_schema.as_ref() {
-            try!(os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.num_replicas {
-            try!(os.write_int32(4, v));
+            try!(w.write_int32(4, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -6389,16 +6390,16 @@ impl ::protobuf::Message for CreateTableResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.table_id.as_ref() {
-            try!(os.write_bytes(2, &v));
+            try!(w.write_bytes(2, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -6585,13 +6586,13 @@ impl ::protobuf::Message for IsCreateTableDoneRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -6799,16 +6800,16 @@ impl ::protobuf::Message for IsCreateTableDoneResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.done {
-            try!(os.write_bool(3, v));
+            try!(w.write_bool(3, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -6995,13 +6996,13 @@ impl ::protobuf::Message for DeleteTableRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -7178,13 +7179,13 @@ impl ::protobuf::Message for DeleteTableResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -7363,11 +7364,11 @@ impl ::protobuf::Message for ListTablesRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.name_filter.as_ref() {
-            try!(os.write_string(1, &v));
+            try!(w.write_string(1, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -7578,18 +7579,18 @@ impl ::protobuf::Message for ListTablesResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.tables.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -7824,14 +7825,14 @@ impl ::protobuf::Message for ListTablesResponsePB_TableInfo {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.id.as_ref() {
-            try!(os.write_bytes(1, &v));
+            try!(w.write_bytes(1, &v));
         };
         if let Some(v) = self.name.as_ref() {
-            try!(os.write_string(2, &v));
+            try!(w.write_string(2, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -8137,22 +8138,22 @@ impl ::protobuf::Message for GetTableLocationsRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.partition_key_start.as_ref() {
-            try!(os.write_bytes(3, &v));
+            try!(w.write_bytes(3, &v));
         };
         if let Some(v) = self.partition_key_end.as_ref() {
-            try!(os.write_bytes(4, &v));
+            try!(w.write_bytes(4, &v));
         };
         if let Some(v) = self.max_returned_locations {
-            try!(os.write_uint32(5, v));
+            try!(w.write_uint32(5, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -8384,18 +8385,18 @@ impl ::protobuf::Message for GetTableLocationsResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.tablet_locations.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -8659,21 +8660,21 @@ impl ::protobuf::Message for AlterTableRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.alter_schema_steps.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.new_table_name.as_ref() {
-            try!(os.write_string(3, &v));
+            try!(w.write_string(3, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -8866,13 +8867,13 @@ impl ::protobuf::Message for AlterTableRequestPB_AddColumn {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.schema.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -9054,11 +9055,11 @@ impl ::protobuf::Message for AlterTableRequestPB_DropColumn {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.name.as_ref() {
-            try!(os.write_string(1, &v));
+            try!(w.write_string(1, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -9287,14 +9288,14 @@ impl ::protobuf::Message for AlterTableRequestPB_RenameColumn {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.old_name.as_ref() {
-            try!(os.write_string(1, &v));
+            try!(w.write_string(1, &v));
         };
         if let Some(v) = self.new_name.as_ref() {
-            try!(os.write_string(2, &v));
+            try!(w.write_string(2, &v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -9593,26 +9594,26 @@ impl ::protobuf::Message for AlterTableRequestPB_Step {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.field_type {
-            try!(os.write_enum(1, v.value()));
+            try!(w.write_enum(1, v.value()));
         };
         if let Some(v) = self.add_column.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.drop_column.as_ref() {
-            try!(os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.rename_column.as_ref() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -9893,16 +9894,16 @@ impl ::protobuf::Message for AlterTableResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.schema_version {
-            try!(os.write_uint32(2, v));
+            try!(w.write_uint32(2, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -10089,13 +10090,13 @@ impl ::protobuf::Message for IsAlterTableDoneRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -10334,19 +10335,19 @@ impl ::protobuf::Message for IsAlterTableDoneResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.schema_version {
-            try!(os.write_uint32(2, v));
+            try!(w.write_uint32(2, v));
         };
         if let Some(v) = self.done {
-            try!(os.write_bool(3, v));
+            try!(w.write_bool(3, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -10540,13 +10541,13 @@ impl ::protobuf::Message for GetTableSchemaRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.table.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -10913,32 +10914,32 @@ impl ::protobuf::Message for GetTableSchemaResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.schema.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.partition_schema.as_ref() {
-            try!(os.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.num_replicas {
-            try!(os.write_int32(3, v));
+            try!(w.write_int32(3, v));
         };
         if let Some(v) = self.table_id.as_ref() {
-            try!(os.write_bytes(4, &v));
+            try!(w.write_bytes(4, &v));
         };
         if let Some(v) = self.create_table_done {
-            try!(os.write_bool(6, v));
+            try!(w.write_bool(6, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -11107,8 +11108,8 @@ impl ::protobuf::Message for ListTabletServersRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -11312,18 +11313,18 @@ impl ::protobuf::Message for ListTabletServersResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         for v in self.servers.iter() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -11582,21 +11583,21 @@ impl ::protobuf::Message for ListTabletServersResponsePB_Entry {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.instance_id.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.registration.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.millis_since_heartbeat {
-            try!(os.write_int32(3, v));
+            try!(w.write_int32(3, v));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -11744,8 +11745,8 @@ impl ::protobuf::Message for GetMasterRegistrationRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -12033,26 +12034,26 @@ impl ::protobuf::Message for GetMasterRegistrationResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         if let Some(v) = self.instance_id.as_ref() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.registration.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.role {
-            try!(os.write_enum(3, v.value()));
+            try!(w.write_enum(3, v.value()));
         };
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -12207,8 +12208,8 @@ impl ::protobuf::Message for ListMastersRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
@@ -12412,18 +12413,18 @@ impl ::protobuf::Message for ListMastersResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
         for v in self.masters.iter() {
-            try!(os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
         if let Some(v) = self.error.as_ref() {
-            try!(os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(os.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(os));
+            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
+            try!(w.write_raw_varint32(v.get_cached_size()));
+            try!(v.write_to_with_cached_sizes(w));
         };
-        try!(os.write_unknown_fields(self.get_unknown_fields()));
+        try!(w.write_unknown_fields(self.get_unknown_fields()));
         ::std::result::Result::Ok(())
     }
 
