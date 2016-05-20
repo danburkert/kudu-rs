@@ -3,6 +3,9 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::io::{self, ErrorKind, Write};
 use std::thread::{self, JoinHandle};
+use std::error;
+use std::fmt;
+use std::time::Instant;
 
 use kudu_pb::rpc_header;
 
@@ -21,6 +24,94 @@ use protobuf::{parse_length_delimited_from, CodedInputStream, Message, ProtobufE
 use protobuf::rt::ProtobufVarint;
 use slab::Slab;
 use netbuf::Buf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RpcErrorCode {
+    // Non-fatal RPC errors. Connection should be left open for future RPC calls.
+
+    /// The application generated an error status. See the message field for
+    /// more details.
+    ApplicationError,
+    /// The specified method was not valid.
+    NoSuchMethod,
+    /// The specified service was not valid.
+    NoSuchService,
+    /// The server is overloaded - the client should try again shortly.
+    ServerTooBusy,
+    /// The request parameter was not parseable, was missing required fields,
+    /// or the server does not support the required feature flags.
+    InvalidRequest,
+
+    // Fatal errors indicate that the client should shut down the connection.
+
+    FatalUnknown,
+    /// The RPC server is already shutting down.
+    FatalServerShuttingDown,
+    /// Fields of RpcHeader are invalid.
+    FatalInvalidRpcHeader,
+    /// Could not deserialize RPC request.
+    FatalDeserializingRequest,
+    /// IPC Layer version mismatch.
+    FatalVersionMismatch,
+    /// Auth failed.
+    FatalUnauthorized,
+}
+
+/// An internal error type returned by RPC operations.
+#[derive(Debug)]
+pub enum Error {
+    /// An IO error.
+    Io(io::Error),
+    /// A Protobuf error.
+    Pb(String),
+    /// The RPC completed, but the server was not able to service the request.
+    Rpc {
+        code: RpcErrorCode,
+        message: String,
+        unsupported_feature_flags: Vec<u32>,
+    },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::Io(ref error) => error.description(),
+            Error::Pb(ref msg) => msg,
+            Error::Rpc { ref message, .. } => message,
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            Error::Io(ref error) => error.cause(),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Error {
+        Error::Io(error)
+    }
+}
+
+impl From<ProtobufError> for Error {
+    fn from(error: ProtobufError) -> Error {
+        match error {
+            ProtobufError::IoError(error) => Error::Io(error),
+            ProtobufError::WireError(msg) => Error::Pb(msg),
+            ProtobufError::MessageNotInitialized { message } =>
+                // This should never happen, all Protobuf messages are initialized internally.
+                panic!("Protobuf message not initialized: {}", message),
+        }
+    }
+}
 
 type Loop = EventLoop<ConnectionManager>;
 
@@ -43,9 +134,23 @@ impl Messenger {
         })
     }
 
-    pub fn send(&self, addr: SocketAddr, rpc: Rpc) -> Future<Rpc, ProtobufError> {
+    pub fn send(&self,
+                addr: SocketAddr,
+                service_name: &'static str,
+                method_name: &'static str,
+                timeout: Instant,
+                request: Box<Message>,
+                response: Box<Message>) -> Future<Response, Error> {
         let (complete, future) = Future::pair();
-        let request = Command::Request { addr: addr, rpc: rpc, complete: complete };
+        let request = Command::Request {
+            addr: addr,
+            service_name: service_name,
+            method_name: method_name,
+            timeout: timeout,
+            request_message: request,
+            response_message: response,
+            complete: complete,
+        };
 
         self.channel.send(request).unwrap();
         future
@@ -90,7 +195,7 @@ impl Handler for ConnectionManager {
             Command::Shutdown => {
                 event_loop.shutdown();
             },
-            Command::Request { addr, rpc, complete } => {
+            Command::Request { .. } => {
             },
         }
     }
@@ -280,18 +385,17 @@ enum Command {
     Shutdown,
     Request {
         addr: SocketAddr,
-        rpc: Rpc,
-        complete: Complete<Rpc, ProtobufError>,
+        service_name: &'static str,
+        method_name: &'static str,
+        timeout: Instant,
+        request_message: Box<Message>,
+        response_message: Box<Message>,
+        complete: Complete<Response, Error>,
     },
 }
 
-/// `RPC` holds the data necessary to send and recieve a remote procedure call
-/// from a Kudu server.
-#[derive(Debug)]
-struct Rpc {
-    request_header: rpc_header::RequestHeader,
+struct Response {
     request_message: Box<Message>,
-    response_header: rpc_header::ResponseHeader,
     response_message: Box<Message>,
-    reponse_sidecars: Vec<Vec<u8>>,
+    sidecars: Vec<Vec<u8>>,
 }

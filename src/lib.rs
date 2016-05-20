@@ -10,4 +10,5 @@ extern crate slab;
 #[macro_use]
 extern crate log;
 
+mod error;
 mod rpc;
