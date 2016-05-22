@@ -151,7 +151,7 @@ impl ::protobuf::Message for ColumnDataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block.as_ref() {
             try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
             try!(w.write_raw_varint32(v.get_cached_size()));
@@ -347,7 +347,7 @@ impl ::protobuf::Message for DeltaDataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block.as_ref() {
             try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
             try!(w.write_raw_varint32(v.get_cached_size()));
@@ -742,7 +742,7 @@ impl ::protobuf::Message for RowSetDataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.id {
             try!(w.write_uint64(1, v));
         };
@@ -1515,7 +1515,7 @@ impl ::protobuf::Message for TabletSuperBlockPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.table_id.as_ref() {
             try!(w.write_bytes(1, &v));
         };

@@ -582,7 +582,7 @@ impl ::protobuf::Message for ScanTokenPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         for v in self.feature_flags.iter() {
             try!(w.write_enum(1, v.value()));
         };

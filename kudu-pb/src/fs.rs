@@ -169,7 +169,7 @@ impl ::protobuf::Message for InstanceMetadataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.uuid.as_ref() {
             try!(w.write_bytes(1, &v));
         };
@@ -398,7 +398,7 @@ impl ::protobuf::Message for PathSetPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.uuid.as_ref() {
             try!(w.write_bytes(1, &v));
         };
@@ -672,7 +672,7 @@ impl ::protobuf::Message for PathInstanceMetadataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.path_set.as_ref() {
             try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
             try!(w.write_raw_varint32(v.get_cached_size()));
@@ -867,7 +867,7 @@ impl ::protobuf::Message for BlockIdPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.id {
             try!(w.write_fixed64(1, v));
         };
@@ -1181,7 +1181,7 @@ impl ::protobuf::Message for BlockRecordPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes<W>(&self, w: &mut W) -> ::protobuf::ProtobufResult<()> where W: ::std::io::Write {
+    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block_id.as_ref() {
             try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
             try!(w.write_raw_varint32(v.get_cached_size()));
