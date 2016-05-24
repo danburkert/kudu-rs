@@ -9,9 +9,6 @@ use std::sync::{StaticMutex, MUTEX_INIT};
 
 use tempdir::TempDir;
 
-use Client;
-use ClientBuilder;
-
 static LOCK: StaticMutex = MUTEX_INIT;
 
 /// A process handle that will kill the process when it goes out of scope.
@@ -25,7 +22,6 @@ impl Drop for ProcessHandle {
 #[allow(dead_code)]
 pub struct MiniCluster {
     dir: TempDir,
-    client: Client,
     master_procs: Vec<ProcessHandle>,
     master_addrs: Vec<SocketAddr>,
     tserver_procs: Vec<ProcessHandle>,
@@ -91,31 +87,12 @@ impl MiniCluster {
             tserver_procs.push(ProcessHandle(process));
         }
 
-        let client = {
-            let mut builder = ClientBuilder::new();
-            for addr in &master_addrs {
-                builder.add_master_server_addr(&addr.to_string());
-            }
-            builder.build().expect("unable to build client")
-        };
-
-        while client.list_tablet_servers()
-                    .expect("unable to list tablet servers")
-                    .len() < conf.num_tservers {
-            thread::sleep(Duration::from_millis(100));
-        }
-
         MiniCluster {
             dir: dir,
-            client: client,
             master_procs: master_procs,
             master_addrs: master_addrs,
             tserver_procs: tserver_procs,
         }
-    }
-
-    pub fn client(&self) -> &Client {
-        &self.client
     }
 
     #[allow(dead_code)]

@@ -14,8 +14,9 @@ eventual = "0.1.7"
 log = "0.3"
 mio = "0.5"
 netbuf = "0.3"
-protobuf = { path = "../rust-protobuf" }
+protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
 slab = "0.1"
 
 [dev-dependencies]
 tempdir = "0.3"
+env_logger = "*"

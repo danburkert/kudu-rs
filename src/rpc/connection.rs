@@ -35,7 +35,6 @@ pub enum ConnectionState {
     Connected
 }
 
-#[derive(Debug)]
 pub struct Connection {
     state: ConnectionState,
     stream: TcpStream,
@@ -48,11 +47,17 @@ pub struct Connection {
     send_buf: Buf,
 }
 
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Connection {{ state: {:?}, addr: {}, queue (send/recv): {}/{}, buf (send/recv): {}/{} }}",
+               self.state, self.addr, self.send_queue.len(), self.recv_queue.len(),
+               self.send_buf.len(), self.recv_buf.len())
+    }
+}
+
 impl Connection {
 
     pub fn new(event_loop: &mut Loop, token: Token, addr: SocketAddr) -> RpcResult<Connection> {
-        debug!("initiating new new connection to remote address {:?}", addr);
-
         let mut cxn = Connection {
             state: ConnectionState::Initiating,
             stream: try!(TcpStream::connect(&addr)),
@@ -64,6 +69,8 @@ impl Connection {
             recv_buf: Buf::new(),
             send_buf: Buf::new(),
         };
+
+        debug!("{:?}: connecting", cxn);
 
         // Optimistically flush the connection header and SASL negotiation to the TCP socket. Even
         // though the socket hasn't yet been registered, and the connection is probably not yet
@@ -82,6 +89,7 @@ impl Connection {
     /// Initiates message reads and writes bsaed on the provided event set, and connection state.
     /// If an error is returned, the connection should be torn down.
     pub fn ready(&mut self, events: EventSet) -> RpcResult<()> {
+        debug!("{:?}: ready; event: {:?}", self, events);
         match self.state {
             ConnectionState::Initiating => {
                 if events.is_readable() {
@@ -93,15 +101,21 @@ impl Connection {
                     assert!(self.recv_buf.is_empty());
                     try!(self.send())
                 }
+
             },
             ConnectionState::Connected => {
-
+                if events.is_readable() {
+                    try!(self.recv())
+                } else if events.is_writable() {
+                    try!(self.send())
+                }
             },
         };
         Ok(())
     }
 
     pub fn send_request(&mut self, request: Request) -> RpcResult<()> {
+        trace!("{:?}: queueing request: {:?}", self, request);
         // TODO: implement maximum queue size
         self.send_queue.push_back(request);
         if self.state == ConnectionState::Connected && self.send_buf.is_empty() && self.send_queue.len() == 1 {
@@ -110,24 +124,30 @@ impl Connection {
         Ok(())
     }
 
+    pub fn register(&mut self, event_loop: &mut Loop, token: Token) -> RpcResult<()> {
+        let event_set = self.event_set();
+        let poll_opt = self.poll_opt();
+        trace!("{:?}: register event_set: {:?}, poll_opt: {:?}", self, event_set, poll_opt);
+        try!(event_loop.register(&mut self.stream, token, event_set, poll_opt));
+        Ok(())
+    }
+
     /// Adds the message to the send buffer with connection's request header. Does not flush the
     /// buffer. If an error is returned, the connection should be torn down.
-    fn send_message(&mut self, msg: &mut Message) -> RpcResult<()> {
-        trace!("Adding message to send buffer; header: {:?}, message: {:?}",
-               self.request_header, msg);
+    fn send_message(&mut self, msg: &Message) -> RpcResult<()> {
         let header_len = self.request_header.compute_size();
         let msg_len = msg.compute_size();
         let len = header_len + header_len.len_varint() + msg_len + msg_len.len_varint();
-
         try!(self.send_buf.write_u32::<BigEndian>(len));
-        try!(self.request_header.write_to_with_cached_sizes(&mut self.send_buf));
-        try!(msg.write_to_with_cached_sizes(&mut self.send_buf));
+        try!(self.request_header.write_length_delimited_to(&mut self.send_buf));
+        try!(msg.write_length_delimited_to(&mut self.send_buf));
         Ok(())
     }
 
     /// Adds the KRPC connection header to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
     fn send_connection_header(&mut self) -> RpcResult<()> {
+        trace!("{:?}: sending connection header to server", self);
         try!(self.send_buf.write(b"hrpc\x09\0\0"));
         Ok(())
     }
@@ -135,38 +155,43 @@ impl Connection {
     /// Adds a SASL negotiate message to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
     fn send_sasl_negotiate(&mut self) -> RpcResult<()> {
+        trace!("{:?}: sending SASL NEGOTIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
         let mut msg = rpc_header::SaslMessagePB::new();
         msg.set_state(SaslState::NEGOTIATE);
-        self.send_message(&mut msg)
+        self.send_message(&msg)
     }
 
     /// Adds a SASL initiate message to the send buffer. Does not flush the buffer. If an error is
     /// returned, the connection should be torn down.
     fn send_sasl_initiate(&mut self) -> RpcResult<()> {
+        trace!("{:?}: sending SASL INITIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
         let mut msg = rpc_header::SaslMessagePB::new();
         msg.set_state(SaslState::INITIATE);
+        msg.mut_token().extend_from_slice(b"\0user\0");
         let mut auth = rpc_header::SaslMessagePB_SaslAuth::new();
         auth.mut_mechanism().push_str("PLAIN");
         msg.mut_auths().push(auth);
-        self.send_message(&mut msg)
+        self.send_message(&msg)
     }
 
     /// Adds a session context message to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
     fn send_connection_context(&mut self) -> RpcResult<()> {
+        trace!("{:?}: sending connection context to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-3);
         let mut msg = rpc_header::ConnectionContextPB::new();
-        msg.mut_user_info().mut_effective_user().push_str("user");
-        msg.mut_user_info().mut_real_user().push_str("user");
-        self.send_message(&mut msg)
+        msg.mut_user_info().set_effective_user("user".to_string());
+        msg.mut_user_info().set_real_user("user".to_string());
+        self.send_message(&msg)
     }
 
     fn handle_sasl_message(&mut self, msg: rpc_header::SaslMessagePB) -> RpcResult<()> {
+        trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
         match msg.get_state() {
             SaslState::NEGOTIATE => {
                 if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
@@ -200,20 +225,16 @@ impl Connection {
             // Read, or continue reading, a message from the socket into the receive buffer.
             if self.recv_buf.len() < 4 {
                 let needed = 4 - self.recv_buf.len();
-                if try!(self.read(needed)) < needed {
-                    debug!("incomplete message length read");
-                    return Ok(());
-                }
+                let read = try!(self.read(needed));
+                if read < needed { return Ok(()); }
             }
 
             let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
             // TODO: inject max message length configuration
             if self.recv_buf.len() - 4 < msg_len {
                 let needed = msg_len + 4 - self.recv_buf.len();
-                if try!(self.read(needed)) < needed {
-                    debug!("incomplete message read");
-                    return Ok(());
-                }
+                let read = try!(self.read(needed));
+                if read < needed { return Ok(()); }
             }
 
             // The whole message has been read
@@ -239,7 +260,6 @@ impl Connection {
                         let error = RpcError::from(try!(
                                 parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
                                     &mut CodedInputStream::from_bytes(&self.recv_buf[..]))));
-                        self.recv_buf.consume(msg_len - header_len);
                         // All errors during SASL negotiation should result in tearing down the
                         // connection.
                         return Err(error)
@@ -247,10 +267,10 @@ impl Connection {
 
                     let msg: rpc_header::SaslMessagePB = try!(parse_length_delimited_from(
                             &mut CodedInputStream::from_bytes(&self.recv_buf[..])));
-                    self.recv_buf.consume(msg_len - header_len);
                     self.handle_sasl_message(msg);
                 },
                 ConnectionState::Connected => {
+                    trace!("{:?}: received response from server: {:?}", self, self.response_header);
                     if self.response_header.get_is_error() {
                         let error = RpcError::from(try!(
                                 parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
@@ -271,8 +291,10 @@ impl Connection {
                         // retried when the error is bubbled up to the MessengerHandler.
                         match self.recv_queue.entry(self.response_header.get_call_id()) {
                             Entry::Occupied(mut entry) => {
-                                try!(entry.get_mut().response_message.merge_from(
-                                        &mut CodedInputStream::from_bytes(&self.recv_buf[..])));
+                                {
+                                    try!(CodedInputStream::from_bytes(&self.recv_buf[..])
+                                                          .merge_message(&mut *entry.get_mut().response_message));
+                                }
 
                                 let Request { request_message, mut response_message, mut complete, .. } = entry.remove();
                                 if !self.response_header.get_sidecar_offsets().is_empty() {
@@ -301,45 +323,35 @@ impl Connection {
     /// Send messages until either there are no more messages to send, or the socket can not accept
     /// any more writes. If an error is returned, the connection should be torn down.
     fn send(&mut self) -> RpcResult<()> {
-        loop {
-            match self.state {
-                ConnectionState::Initiating => {
-                    try!(self.flush());
-                    return Ok(());
-                },
-                ConnectionState::Connected => {
-                    try!(self.flush());
-                    if !self.send_buf.is_empty() { return Ok(()); }
+        assert_eq!(self.state, ConnectionState::Connected);
 
-                    if let Some(req) = self.send_queue.pop_front() {
-                        let Request { service_name, method_name, timeout,
-                                      required_feature_flags, request_message,
-                                      response_message, complete } = req;
+        while !self.send_buf.is_empty() && !self.send_queue.is_empty() {
+            while self.send_buf.len() < 4096 && !self.send_queue.is_empty() {
+                let request = self.send_queue.pop_front().unwrap();
 
-                        // TODO: handle timeout
+                // TODO: handle timeout
 
-                        let call_id = self.request_header.get_call_id() + 1;
-                        self.request_header.set_call_id(call_id);
-                        self.request_header.mut_remote_method().mut_service_name().clear();
-                        self.request_header.mut_remote_method().mut_method_name().clear();
-                        self.request_header.mut_remote_method().mut_service_name().push_str(service_name);
-                        self.request_header.mut_remote_method().mut_method_name().push_str(method_name);
-                        self.request_header.set_timeout_millis(10000);
-                        self.request_header.set_required_feature_flags(required_feature_flags);
+                let call_id = self.request_header.get_call_id() + 1;
+                self.request_header.set_call_id(call_id);
+                self.request_header.mut_remote_method().mut_service_name().clear();
+                self.request_header.mut_remote_method().mut_method_name().clear();
+                self.request_header.mut_remote_method().mut_service_name().push_str(&request.service_name);
+                self.request_header.mut_remote_method().mut_method_name().push_str(&request.method_name);
+                self.request_header.set_timeout_millis(10000);
+                self.request_header.mut_required_feature_flags().clear();
+                self.request_header.mut_required_feature_flags().extend_from_slice(&request.required_feature_flags);
 
-                        let header_len = self.request_header.compute_size();
-                        let msg_len = request_message.compute_size();
-                        let len = header_len + header_len.len_varint() +
-                                  msg_len + msg_len.len_varint();
+                trace!("{:?}: sending request to server; call ID: {}", self, call_id);
 
-                        try!(self.send_buf.write_u32::<BigEndian>(len));
-                        try!(self.request_header.write_to_with_cached_sizes(&mut self.send_buf));
-                        try!(request_message.write_to_with_cached_sizes(&mut self.send_buf));
-                        assert_eq!(4 + len as usize, self.send_buf.len());
-                    }
-                },
-            };
+                try!(self.send_message(&*request.request_message));
+                self.recv_queue.insert(call_id, request);
+            }
+
+            if try!(self.flush()) == 0 {
+                break;
+            }
         }
+        Ok(())
     }
 
     /// Attempts to read at least `min` bytes from the socket into the receive buffer.
@@ -359,6 +371,7 @@ impl Connection {
 
     /// Flushes the send buffer to the socket, returning the total number of bytes sent.
     fn flush(&mut self) -> io::Result<usize> {
+        trace!("{:?}: flush", self);
         let Connection { ref mut stream, ref mut send_buf, .. } = *self;
         let mut sent = 0;
         while !send_buf.is_empty() {
@@ -377,8 +390,17 @@ impl Connection {
 
     fn event_set(&self) -> EventSet {
         let mut event_set = EventSet::hup() | EventSet::error() | EventSet::readable();
-        if !self.send_buf.is_empty() || !self.send_queue.is_empty() {
-            event_set | EventSet::writable()
-        } else { event_set }
+
+        if (self.state == ConnectionState::Initiating) {
+            if !self.send_buf.is_empty() {
+                event_set = event_set | EventSet::writable();
+            }
+        } else {
+            if !self.send_buf.is_empty() || !self.send_queue.is_empty() {
+                event_set = event_set | EventSet::writable();
+            }
+        }
+
+        event_set
     }
 }

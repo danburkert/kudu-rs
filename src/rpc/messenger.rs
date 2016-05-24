@@ -113,8 +113,8 @@ impl Handler for MessengerHandler {
             warn!("error; connection: {:?}, events: {:?}", connection, events);
         } else {
             let connection = &mut self.slab[token];
-            trace!("ready; connection: {:?}, events: {:?}", connection, events);
-            connection.ready(events);
+            connection.ready(events).unwrap();
+            connection.register(event_loop, token).unwrap()
         }
     }
 
@@ -130,10 +130,15 @@ impl Handler for MessengerHandler {
                         let count = self.slab.count();
                         self.slab.grow(count);
                     }
-                    self.slab.insert_with(|token| Connection::new(event_loop, token, addr).unwrap())
-                             .unwrap()
+                    self.slab.insert_with(|token| {
+                        match Connection::new(event_loop, token, addr) {
+                            Ok(connection) => connection,
+                            Err(error) => panic!("unable to create new connection: {:?}", error),
+                        }
+                    }).unwrap()
                 });
-                self.slab[token].send_request(request).unwrap()
+                self.slab[token].send_request(request).unwrap();
+                self.slab[token].register(event_loop, token);
             },
         }
     }

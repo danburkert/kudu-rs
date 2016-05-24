@@ -213,8 +213,53 @@ pub struct Response {
 #[cfg(test)]
 mod test {
 
+    use super::*;
+    use test::{MiniCluster, MiniClusterConfig};
+    use rpc::messenger;
+    use std::time::Instant;
+    use env_logger;
+    use kudu_pb;
+    use eventual::Async;
+    use std::thread;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    fn threadsafe<T>(_: T) where T: Sync + Send { }
+
     #[test]
-    fn ping_master() {
-        MiniCluster::new(MiniClusterConfig::default());
+    fn test_ping_master() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default());
+        let messenger = messenger::Messenger::new().unwrap();
+        let master_addr = cluster.master_addrs()[0];
+        thread::sleep_ms(1000);
+
+        let future = messenger.send(master_addr,
+                                    "kudu.master.MasterService",
+                                    "Ping",
+                                    Instant::now(),
+                                    vec![],
+                                    Box::new(kudu_pb::master::PingRequestPB::new()),
+                                    Box::new(kudu_pb::master::PingResponsePB::new()));
+
+        let response = future.await().unwrap();
+    }
+
+    #[test]
+    fn test_get_tablet_servers() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default());
+        let messenger = messenger::Messenger::new().unwrap();
+        let master_addr = cluster.master_addrs()[0];
+        thread::sleep_ms(1000);
+        let future = messenger.send(master_addr,
+                                    "kudu.master.MasterService",
+                                    "ListTabletServers",
+                                    Instant::now(),
+                                    vec![],
+                                    Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
+                                    Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
+
+        let response = future.await().unwrap();
     }
 }

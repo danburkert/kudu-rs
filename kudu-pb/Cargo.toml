@@ -4,4 +4,4 @@ version = "0.1.0"
 authors = ["Dan Burkert <dan@cloudera.com>"]
 
 [dependencies]
-protobuf = { path = "../../rust-protobuf" }
+protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
