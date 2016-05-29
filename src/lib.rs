@@ -1,4 +1,4 @@
-#![feature(static_mutex)]
+#![cfg_attr(test, feature(static_mutex))]
 extern crate kudu_pb;
 
 extern crate byteorder;
@@ -6,6 +6,7 @@ extern crate eventual;
 extern crate mio;
 extern crate netbuf;
 extern crate protobuf;
+extern crate rand;
 extern crate slab;
 
 #[cfg(test)]
@@ -20,5 +21,6 @@ mod error;
 mod rpc;
 
 #[cfg(test)]
-mod test;
+mod mini_cluster;
 
+pub use error::*;

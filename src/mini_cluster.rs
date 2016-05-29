@@ -53,15 +53,15 @@ impl MiniCluster {
             let logs = dir.path().join(format!("master-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create master log directory");
             let process = Command::new(&master_bin).arg("--webserver_port=0")
-                                                  .arg("--minloglevel=0")
-                                                  .arg("--v=2")
-                                                  .arg("--enable_data_block_fsync=false")
-                                                  .arg("--enable_leader_failure_detection=true")
-                                                  .arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
-                                                  .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
-                                                  .arg(format!("--log_dir={}", logs.to_str().unwrap()))
-                                                  .arg(format!("--rpc_bind_addresses={}", addr))
-                                                  .spawn().expect("unable to start master");
+                                                   .arg("--minloglevel=0")
+                                                   .arg("--v=2")
+                                                   .arg("--enable_data_block_fsync=false")
+                                                   .arg("--enable_leader_failure_detection=true")
+                                                   .arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
+                                                   .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
+                                                   .arg(format!("--log_dir={}", logs.to_str().unwrap()))
+                                                   .arg(format!("--rpc_bind_addresses={}", addr))
+                                                   .spawn().expect("unable to start master");
             master_procs.push(ProcessHandle(process));
             master_addrs.push(addr);
         }
@@ -74,16 +74,16 @@ impl MiniCluster {
             let logs = dir.path().join(format!("tserver-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create tserver log directory");
             let process = Command::new(&tserver_bin).arg("--webserver_port=0")
-                                                   .arg("--minloglevel=0")
-                                                   .arg("--v=2")
-                                                   .arg("--enable_data_block_fsync=false")
-                                                   .arg("--enable_leader_failure_detection=true")
-                                                   .arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
-                                                   .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
-                                                   .arg(format!("--log_dir={}", logs.to_str().unwrap()))
-                                                   .arg(format!("--rpc_bind_addresses={}", addr))
-                                                   .arg(format!("--tserver_master_addrs={}", masters))
-                                                   .spawn().expect("unable to start tablet server");
+                                                    .arg("--minloglevel=0")
+                                                    .arg("--v=2")
+                                                    .arg("--enable_data_block_fsync=false")
+                                                    .arg("--enable_leader_failure_detection=true")
+                                                    .arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
+                                                    .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
+                                                    .arg(format!("--log_dir={}", logs.to_str().unwrap()))
+                                                    .arg(format!("--rpc_bind_addresses={}", addr))
+                                                    .arg(format!("--tserver_master_addrs={}", masters))
+                                                    .spawn().expect("unable to start tablet server");
             tserver_procs.push(ProcessHandle(process));
         }
 

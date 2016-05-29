@@ -1,35 +1,19 @@
-use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::error;
 use std::fmt;
-use std::io::{self, ErrorKind, Write};
+use std::io;
 use std::mem;
-use std::net::SocketAddr;
 use std::result;
-use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use kudu_pb::rpc_header;
 use kudu_pb::rpc_header::{ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB};
 
-use byteorder::{BigEndian, ByteOrder, LittleEndian, WriteBytesExt};
-use eventual::{Future, Complete};
-use mio::{
-    EventLoop,
-    EventSet,
-    Handler,
-    PollOpt,
-    Sender,
-    Token,
-};
-use mio::tcp::TcpStream;
-use protobuf::{parse_length_delimited_from, CodedInputStream, Message, ProtobufError};
-use protobuf::rt::ProtobufVarint;
-use slab::Slab;
-use netbuf::Buf;
+use eventual::Complete;
+use protobuf::{Message, ProtobufError};
 
-mod messenger;
+mod backoff;
 mod connection;
+mod messenger;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RpcErrorCode {
@@ -90,6 +74,10 @@ pub enum RpcError {
         message: String,
         unsupported_feature_flags: Vec<u32>,
     },
+    /// The `Connection` send queue is full.
+    ConnectionQueueFull,
+    /// The RPC timed out.
+    TimedOut,
 }
 
 
@@ -99,6 +87,8 @@ impl RpcError {
             RpcError::Io(..) => true,
             RpcError::Pb(..) => true,
             RpcError::Rpc { code, .. } => code.is_fatal(),
+            RpcError::ConnectionQueueFull => false,
+            RpcError::TimedOut => false,
         }
     }
 }
@@ -116,6 +106,8 @@ impl Clone for RpcError {
                     unsupported_feature_flags: unsupported_feature_flags.clone()
                 }
             },
+            RpcError::ConnectionQueueFull => RpcError::ConnectionQueueFull,
+            RpcError::TimedOut => RpcError::TimedOut,
         }
     }
 }
@@ -133,6 +125,8 @@ impl error::Error for RpcError {
             RpcError::Io(ref error) => error.description(),
             RpcError::Pb(ref msg) => msg,
             RpcError::Rpc { ref message, .. } => message,
+            RpcError::ConnectionQueueFull => "connection queue full",
+            RpcError::TimedOut => "RPC timed out",
         }
     }
 
@@ -192,10 +186,11 @@ impl From<ProtobufError> for RpcError {
 pub type RpcResult<T> = result::Result<T, RpcError>;
 
 #[derive(Debug)]
-struct Request {
+pub struct Request {
     service_name: &'static str,
     method_name: &'static str,
-    timeout: Instant,
+    start: Instant,
+    deadline: Instant,
     required_feature_flags: Vec<u32>,
     request_message: Box<Message>,
     response_message: Box<Message>,
@@ -214,9 +209,9 @@ pub struct Response {
 mod test {
 
     use super::*;
-    use test::{MiniCluster, MiniClusterConfig};
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use rpc::messenger;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use env_logger;
     use kudu_pb;
     use eventual::Async;
@@ -232,12 +227,10 @@ mod test {
         let cluster = MiniCluster::new(MiniClusterConfig::default());
         let messenger = messenger::Messenger::new().unwrap();
         let master_addr = cluster.master_addrs()[0];
-        thread::sleep_ms(1000);
-
         let future = messenger.send(master_addr,
                                     "kudu.master.MasterService",
                                     "Ping",
-                                    Instant::now(),
+                                    Duration::from_millis(10000),
                                     vec![],
                                     Box::new(kudu_pb::master::PingRequestPB::new()),
                                     Box::new(kudu_pb::master::PingResponsePB::new()));
@@ -255,11 +248,27 @@ mod test {
         let future = messenger.send(master_addr,
                                     "kudu.master.MasterService",
                                     "ListTabletServers",
-                                    Instant::now(),
+                                    Duration::from_millis(100),
                                     vec![],
                                     Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
                                     Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
 
         let response = future.await().unwrap();
+    }
+
+    #[test]
+    fn test_rpc_timeout() {
+        let _ = env_logger::init();
+        let messenger = messenger::Messenger::new().unwrap();
+        let addr = SocketAddr::from_str("127.0.0.1:7051").unwrap();
+        let future = messenger.send(addr,
+                                    "kudu.master.MasterService",
+                                    "ListTabletServers",
+                                    Duration::from_millis(10),
+                                    vec![],
+                                    Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
+                                    Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
+
+        assert!(future.await().is_err());
     }
 }

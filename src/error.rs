@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum StatusCode {
+pub enum StatusCode {
     UnknownError,
     NotFound,
     Corruption,
@@ -22,14 +22,14 @@ enum StatusCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Status {
+pub struct Status {
     code: StatusCode,
     message: Option<String>,
     posix_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum TabletServerErrorCode {
+pub enum TabletServerErrorCode {
     /// An error which has no more specific error code. The code and message in 'status' may reveal
     /// more details.
     UnknownError,
@@ -74,13 +74,13 @@ enum TabletServerErrorCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TabletServerError {
+pub struct TabletServerError {
     code: TabletServerErrorCode,
     status: Status,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum MasterErrorCode {
+pub enum MasterErrorCode {
     /// An error which has no more specific error code. The `Status` code and message may reveal
     /// more details.
     UnknownError,
@@ -102,7 +102,7 @@ enum MasterErrorCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct MasterError {
+pub struct MasterError {
     code: MasterErrorCode,
     status: Status,
 }
