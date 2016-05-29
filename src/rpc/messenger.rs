@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use rpc::{Request, Response, RpcError};
-use rpc::connection::{Connection, ConnectionOptions};
+use rpc::connection::{Connection, ConnectionOptions, TimeoutKind};
 
 use eventual::Future;
 use mio::{
@@ -97,7 +97,7 @@ impl MessengerHandler {
 
 impl Handler for MessengerHandler {
 
-    type Timeout = Token;
+    type Timeout = (Token, TimeoutKind);
     type Message = Command;
 
     fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
@@ -124,9 +124,14 @@ impl Handler for MessengerHandler {
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut Loop, token: Token) {
-        if let Some(cxn) = self.slab.get_mut(token) {
-            cxn.timeout(event_loop, token);
+    fn timeout(&mut self, event_loop: &mut Loop, timeout: (Token, TimeoutKind)) {
+        let mut drop_cxn = false;
+        if let Some(cxn) = self.slab.get_mut(timeout.0) {
+            drop_cxn = cxn.timeout(event_loop, timeout.0, timeout.1);
+        };
+        if drop_cxn {
+            let cxn = self.slab.remove(timeout.0);
+            debug!("{:?}: closing", cxn.unwrap())
         }
     }
 }

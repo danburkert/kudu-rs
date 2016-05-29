@@ -91,6 +91,13 @@ impl RpcError {
             RpcError::TimedOut => false,
         }
     }
+    pub fn invalid_rpc_header(message: String) -> RpcError {
+        RpcError::Rpc {
+            code: RpcErrorCode::FatalInvalidRpcHeader,
+            message: message,
+            unsupported_feature_flags: Vec::new(),
+        }
+    }
 }
 
 impl Clone for RpcError {
@@ -264,7 +271,7 @@ mod test {
         let future = messenger.send(addr,
                                     "kudu.master.MasterService",
                                     "ListTabletServers",
-                                    Duration::from_millis(10),
+                                    Duration::from_millis(1000),
                                     vec![],
                                     Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
                                     Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
