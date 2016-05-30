@@ -5,6 +5,7 @@ extern crate byteorder;
 extern crate eventual;
 extern crate mio;
 extern crate netbuf;
+extern crate parking_lot;
 extern crate protobuf;
 extern crate rand;
 extern crate slab;
