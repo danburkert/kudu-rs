@@ -18,6 +18,7 @@ parking_lot = "0.2"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
 rand = "0.3.14"
 slab = "0.1"
+vec_map = "0.6"
 
 [dev-dependencies]
 tempdir = "0.3"

@@ -1,3 +1,45 @@
+use std::error;
+use std::fmt;
+use std::result;
+use std::str::Utf8Error;
+
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The operation failed because of an invalid argument.
+    InvalidArgument(String),
+    Utf8(Utf8Error),
+}
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::InvalidArgument(_) => "illegal argument",
+            Error::Utf8(ref error) => error.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            Error::InvalidArgument(_) => None,
+            Error::Utf8(ref error) => error.cause(),
+        }
+    }
+}
+
+impl From<Utf8Error> for Error {
+    fn from(error: Utf8Error) -> Error {
+        Error::Utf8(error)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StatusCode {
     UnknownError,
