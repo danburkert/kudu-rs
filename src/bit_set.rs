@@ -21,6 +21,10 @@ impl BitSet {
     pub fn remove(&mut self, idx: usize) {
         self.data[idx >> 3] &= !(1 << (idx & 7))
     }
+
+    pub fn data(&self) -> &[u8] {
+        &*self.data
+    }
 }
 
 #[cfg(test)]

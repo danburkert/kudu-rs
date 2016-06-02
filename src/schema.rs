@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use bit_set::BitSet;
+use kudu_pb::common::{ColumnSchemaPB, SchemaPB};
+
 use CompressionType;
 use DataType;
 use EncodingType;
@@ -11,20 +12,21 @@ use Result;
 pub struct Column {
     name: String,
     data_type: DataType,
-    nullable: bool,
+    is_nullable: bool,
     compression: CompressionType,
     encoding: EncodingType,
-    block_size: usize,
+    block_size: i32,
 }
 
 impl Column {
+
     fn new(name: String, data_type: DataType) -> Column {
         Column {
             name: name,
             data_type: data_type,
-            nullable: true,
+            is_nullable: true,
             compression: CompressionType::Default,
-            encoding: EncodingType::Default,
+            encoding: EncodingType::Auto,
             block_size: 0,
         }
     }
@@ -37,8 +39,8 @@ impl Column {
         self.data_type
     }
 
-    pub fn nullable(&self) -> bool {
-        self.nullable
+    pub fn is_nullable(&self) -> bool {
+        self.is_nullable
     }
 
     pub fn encoding(&self) -> EncodingType {
@@ -49,12 +51,24 @@ impl Column {
         self.compression
     }
 
-    pub fn block_size(&self) -> Option<usize> {
-        if self.block_size == 0 {
+    pub fn block_size(&self) -> Option<i32> {
+        if self.block_size <= 0 {
             None
         } else {
             Some(self.block_size)
         }
+    }
+
+    pub fn to_pb(&self, is_key: bool) -> ColumnSchemaPB {
+        let mut pb = ColumnSchemaPB::new();
+        pb.set_name(self.name.clone());
+        pb.set_field_type(self.data_type.to_pb());
+        pb.set_is_nullable(self.is_nullable);
+        pb.set_is_key(is_key);
+        pb.set_encoding(self.encoding.to_pb());
+        pb.set_compression(self.compression.to_pb());
+        pb.set_cfile_block_size(self.block_size);
+        pb
     }
 }
 
@@ -78,7 +92,11 @@ impl Schema {
     }
 
     pub fn column_by_name(&self, name: &str) -> Option<&Column> {
-        self.columns_by_name.get(name).and_then(|&idx| self.columns.get(idx))
+        self.column_index(name).map(|idx| &self.columns[idx])
+    }
+
+    pub fn column_index(&self, name: &str) -> Option<usize> {
+        self.columns_by_name.get(name).cloned()
     }
 
     pub fn primary_key(&self) -> &[Column] {
@@ -95,6 +113,14 @@ impl Schema {
 
     pub fn column_offsets(&self) -> &[usize] {
         &self.column_offsets
+    }
+
+    pub fn as_pb(&self) -> SchemaPB {
+        let mut pb = SchemaPB::new();
+        for (idx, column) in self.columns.iter().enumerate() {
+            pb.mut_columns().push(column.to_pb(idx < self.num_primary_key_columns));
+        }
+        pb
     }
 }
 
@@ -125,7 +151,7 @@ impl SchemaBuilder {
 
     pub fn add_column<S>(&mut self, name: S, data_type: DataType) -> &mut ColumnBuilder
     where S: Into<String> {
-        let mut column = ColumnBuilder::new(name.into(), data_type);
+        let column = ColumnBuilder::new(name.into(), data_type);
         self.columns.push(column);
         self.columns.last_mut().unwrap()
     }
@@ -172,7 +198,7 @@ impl SchemaBuilder {
             columns_by_name.insert(column.name().to_owned(), idx);
             column_offsets.push(row_size);
             row_size += column.data_type.size();
-            if column.nullable { has_nullable_columns = true; }
+            if column.is_nullable { has_nullable_columns = true; }
         }
 
         Ok(Schema {
@@ -190,10 +216,10 @@ impl SchemaBuilder {
 pub struct ColumnBuilder {
     name: String,
     data_type: DataType,
-    nullable: bool,
+    is_nullable: bool,
     compression: CompressionType,
     encoding: EncodingType,
-    block_size: usize,
+    block_size: i32,
 }
 
 impl ColumnBuilder {
@@ -202,9 +228,9 @@ impl ColumnBuilder {
         ColumnBuilder {
             name: name,
             data_type: data_type,
-            nullable: true,
+            is_nullable: true,
             compression: CompressionType::Default,
-            encoding: EncodingType::Default,
+            encoding: EncodingType::Auto,
             block_size: 0,
         }
     }
@@ -217,17 +243,17 @@ impl ColumnBuilder {
         self.data_type
     }
 
-    pub fn nullable(&self) -> bool {
-        self.nullable
+    pub fn is_nullable(&self) -> bool {
+        self.is_nullable
     }
 
     pub fn set_nullable(&mut self) -> &mut ColumnBuilder {
-        self.nullable = true;
+        self.is_nullable = true;
         self
     }
 
     pub fn set_not_null(&mut self) -> &mut ColumnBuilder {
-        self.nullable = false;
+        self.is_nullable = false;
         self
     }
 
@@ -249,25 +275,21 @@ impl ColumnBuilder {
         self
     }
 
-    pub fn block_size(&self) -> Option<usize> {
-        if self.block_size == 0 {
-            None
-        } else {
-            Some(self.block_size)
-        }
+    pub fn block_size(&self) -> i32 {
+        self.block_size
     }
 
-    pub fn set_block_size(&mut self, block_size: usize) -> &mut ColumnBuilder {
+    pub fn set_block_size(&mut self, block_size: i32) -> &mut ColumnBuilder {
         self.block_size = block_size;
         self
     }
 
     fn build(self) -> Column {
-        let ColumnBuilder { name, data_type, nullable, compression, encoding, block_size } = self;
+        let ColumnBuilder { name, data_type, is_nullable, compression, encoding, block_size } = self;
         Column {
             name: name,
             data_type: data_type,
-            nullable: nullable,
+            is_nullable: is_nullable,
             compression: compression,
             encoding: encoding,
             block_size: block_size,
@@ -279,10 +301,10 @@ impl ColumnBuilder {
 impl fmt::Debug for ColumnBuilder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         try!(write!(f, "'{}' {:?}", &self.name, self.data_type));
-        if !self.nullable {
+        if !self.is_nullable {
             try!(write!(f, " NOT NULL"));
         }
-        if self.encoding != EncodingType::Default {
+        if self.encoding != EncodingType::Auto {
             try!(write!(f, " ENCODING {:?}", self.encoding));
         }
         if self.compression != CompressionType::Default {

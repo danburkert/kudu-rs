@@ -10,9 +10,12 @@ pub trait Value<'a>: Sized {
     fn data_type() -> DataType;
     fn size() -> usize;
     fn is_var_len() -> bool { false }
-    fn copy_data(&self, dest: &mut [u8]) {}
+    fn is_nullable() -> bool { false }
+    fn is_null(&self) -> bool { false }
+    fn copy_data(&self, _dest: &mut [u8]) { unimplemented!() }
     fn indirect_data(self) -> Option<Cow<'a, [u8]>> { None }
     fn from_data(data: &'a [u8]) -> Result<Self>;
+    fn from_null() -> Self { unimplemented!() }
 }
 
 impl <'a> Value<'a> for bool {
@@ -94,6 +97,17 @@ impl <'a> Value<'a> for String {
     fn is_var_len() -> bool { true }
     fn indirect_data(self) -> Option<Cow<'a, [u8]>> { Some(Cow::Owned(self.into_bytes())) }
     fn from_data(data: &'a [u8]) -> Result<String> { str::from_utf8(data).map(str::to_owned).map_err(From::from) }
+}
+
+impl <'a, V> Value<'a> for Option<V> where V: Value<'a>  {
+    fn data_type() -> DataType { V::data_type() }
+    fn size() -> usize { V::size() }
+    fn is_var_len() -> bool { V::is_var_len() }
+    fn is_nullable() -> bool { true }
+    fn is_null(&self) -> bool { self.is_none() }
+    fn indirect_data(self) -> Option<Cow<'a, [u8]>> { self.unwrap().indirect_data() }
+    fn from_data(data: &'a [u8]) -> Result<Option<V>> { V::from_data(data).map(Some) }
+    fn from_null() -> Option<V> { None }
 }
 
 #[cfg(test)]

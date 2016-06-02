@@ -15,7 +15,6 @@ mod backoff;
 mod connection;
 mod master;
 mod messenger;
-mod util;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RpcErrorCode {

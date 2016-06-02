@@ -1,4 +1,5 @@
 #![cfg_attr(test, feature(static_mutex))]
+#![allow(dead_code)]
 extern crate kudu_pb;
 
 extern crate byteorder;
@@ -99,6 +100,44 @@ impl DataType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EncodingType {
+    Auto,
+    Plain,
+    Prefix,
+    GroupVarint,
+    RunLength,
+    Dictionary,
+    BitShuffle,
+}
+
+impl EncodingType {
+    fn to_pb(self) -> kudu_pb::common::EncodingType {
+        match self {
+            EncodingType::Auto => kudu_pb::common::EncodingType::AUTO_ENCODING,
+            EncodingType::Plain => kudu_pb::common::EncodingType::PLAIN_ENCODING,
+            EncodingType::Prefix => kudu_pb::common::EncodingType::PREFIX_ENCODING,
+            EncodingType::GroupVarint => kudu_pb::common::EncodingType::GROUP_VARINT,
+            EncodingType::RunLength => kudu_pb::common::EncodingType::RLE,
+            EncodingType::Dictionary => kudu_pb::common::EncodingType::DICT_ENCODING,
+            EncodingType::BitShuffle => kudu_pb::common::EncodingType::BIT_SHUFFLE,
+        }
+    }
+
+    fn from_pb(pb: kudu_pb::common::EncodingType) -> Option<EncodingType> {
+        match pb {
+            kudu_pb::common::EncodingType::AUTO_ENCODING => Some(EncodingType::Auto),
+            kudu_pb::common::EncodingType::PLAIN_ENCODING => Some(EncodingType::Plain),
+            kudu_pb::common::EncodingType::PREFIX_ENCODING => Some(EncodingType::Prefix),
+            kudu_pb::common::EncodingType::GROUP_VARINT => Some(EncodingType::GroupVarint),
+            kudu_pb::common::EncodingType::RLE => Some(EncodingType::RunLength),
+            kudu_pb::common::EncodingType::DICT_ENCODING => Some(EncodingType::Dictionary),
+            kudu_pb::common::EncodingType::BIT_SHUFFLE => Some(EncodingType::BitShuffle),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompressionType {
     Default,
     None,
@@ -107,13 +146,25 @@ pub enum CompressionType {
     Zlib,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EncodingType {
-    Default,
-    Plain,
-    Prefix,
-    GroupVarint,
-    RunLength,
-    Dictionary,
-    BitShuffle,
+impl CompressionType {
+    fn to_pb(self) -> kudu_pb::common::CompressionType {
+        match self {
+            CompressionType::Default => kudu_pb::common::CompressionType::DEFAULT_COMPRESSION,
+            CompressionType::None => kudu_pb::common::CompressionType::NO_COMPRESSION,
+            CompressionType::Snappy => kudu_pb::common::CompressionType::SNAPPY,
+            CompressionType::Lz4 => kudu_pb::common::CompressionType::LZ4,
+            CompressionType::Zlib => kudu_pb::common::CompressionType::ZLIB,
+        }
+    }
+
+    fn from_pb(pb: kudu_pb::common::CompressionType) -> Option<CompressionType> {
+        match pb {
+            kudu_pb::common::CompressionType::DEFAULT_COMPRESSION => Some(CompressionType::Default),
+            kudu_pb::common::CompressionType::NO_COMPRESSION => Some(CompressionType::None),
+            kudu_pb::common::CompressionType::SNAPPY => Some(CompressionType::Snappy),
+            kudu_pb::common::CompressionType::LZ4 => Some(CompressionType::Lz4),
+            kudu_pb::common::CompressionType::ZLIB => Some(CompressionType::Zlib),
+            _ => None,
+        }
+    }
 }
