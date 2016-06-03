@@ -49,6 +49,7 @@ impl Messenger {
         })
     }
 
+    /// Sends a generic Kudu RPC request, and returns a future which will carry the result.
     pub fn send(&self,
                 addr: SocketAddr,
                 service_name: &'static str,

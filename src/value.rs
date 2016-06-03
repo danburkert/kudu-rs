@@ -12,10 +12,10 @@ pub trait Value<'a>: Sized {
     fn is_var_len() -> bool { false }
     fn is_nullable() -> bool { false }
     fn is_null(&self) -> bool { false }
-    fn copy_data(&self, _dest: &mut [u8]) { unimplemented!() }
+    fn copy_data(&self, _dest: &mut [u8]) { unreachable!() }
     fn indirect_data(self) -> Option<Cow<'a, [u8]>> { None }
     fn from_data(data: &'a [u8]) -> Result<Self>;
-    fn from_null() -> Self { unimplemented!() }
+    fn from_null() -> Self { unreachable!() }
 }
 
 impl <'a> Value<'a> for bool {
