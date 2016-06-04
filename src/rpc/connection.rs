@@ -249,7 +249,7 @@ impl Connection {
         if events.is_hup() || events.is_error() {
             self.reset(event_loop, token);
         } else {
-            inner(self, event_loop, token, events).and_then(|_| self.register(event_loop, token))
+            inner(self, event_loop, token, events).and_then(|_| self.reregister(event_loop, token))
                                                   .unwrap_or_else(|error| {
                                                       info!("{:?} error: {}", self, error);
                                                       self.reset(event_loop, token)
