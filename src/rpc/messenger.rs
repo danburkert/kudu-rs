@@ -4,8 +4,9 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use std::sync::mpsc::sync_channel;
 
-use rpc::{Request, Response, RpcError};
+use rpc::{Rpc, RpcError, RpcResult};
 use rpc::connection::{Connection, ConnectionOptions, TimeoutKind};
 
 use eventual::Future;
@@ -24,10 +25,7 @@ pub type Loop = EventLoop<MessengerHandler>;
 #[derive(Debug)]
 pub enum Command {
     Shutdown,
-    Request {
-        addr: SocketAddr,
-        request: Request,
-    },
+    Send(Rpc)
 }
 
 pub struct Messenger {
@@ -49,33 +47,18 @@ impl Messenger {
         })
     }
 
-    /// Sends a generic Kudu RPC request, and returns a future which will carry the result.
-    pub fn send(&self,
-                addr: SocketAddr,
-                service_name: &'static str,
-                method_name: &'static str,
-                timeout: Duration,
-                required_feature_flags: Vec<u32>,
-                request: Box<Message>,
-                response: Box<Message>) -> Future<Response, RpcError> {
-        let (complete, future) = Future::pair();
-        let now = Instant::now();
-        let request = Command::Request {
-            addr: addr,
-            request: Request {
-                service_name: service_name,
-                method_name: method_name,
-                start: now,
-                deadline: now + timeout,
-                required_feature_flags: required_feature_flags,
-                request_message: request,
-                response_message: response,
-                complete: complete,
-            },
-        };
+    /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
+    pub fn send(&self, rpc: Rpc) {
+        // TODO: is there a better way to handle queue failure?
+        self.channel.send(Command::Send(rpc)).unwrap();
+    }
 
-        self.channel.send(request).unwrap();
-        future
+    pub fn send_sync(&self, mut rpc: Rpc) -> (RpcResult, Rpc) {
+        let (send, recv) = sync_channel(0);
+        assert!(rpc.callback.is_none());
+        rpc.callback = Some(Box::new(move |result, rpc| send.send((result, rpc)).unwrap()));
+        self.send(rpc);
+        recv.recv().unwrap()
     }
 }
 
@@ -108,19 +91,20 @@ impl Handler for MessengerHandler {
     fn notify(&mut self, event_loop: &mut Loop, command: Command) {
         match command {
             Command::Shutdown => event_loop.shutdown(),
-            Command::Request { addr, request } => {
-                let token = self.index.get(&addr).map(|t| *t).unwrap_or_else(|| {
-                    // No open connection for the socket address, create a new one.
+            Command::Send(rpc) => {
+                let token = self.index.get(&rpc.addr).map(|t| *t).unwrap_or_else(|| {
+                    // No open connection for the socket address; create a new one.
                     if !self.slab.has_remaining() {
                         let count = self.slab.count();
                         self.slab.grow(count);
                     }
                     let cxn_options = self.cxn_options.clone();
                     self.slab
-                        .insert_with(|token| Connection::new(event_loop, token, addr, cxn_options))
+                        .insert_with(|token| Connection::new(event_loop, token,
+                                                             rpc.addr.clone(), cxn_options))
                         .unwrap()
                 });
-                self.slab[token].send_request(event_loop, token, request);
+                self.slab[token].send_rpc(event_loop, token, rpc);
             },
         }
     }

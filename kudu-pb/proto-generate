@@ -15,6 +15,7 @@ $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/master/
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/rpc/rpc_header.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/tablet.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver_service.proto
 
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/metadata.proto
 mv src/metadata.rs src/consensus_metadata.rs

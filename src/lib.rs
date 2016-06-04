@@ -23,7 +23,7 @@ extern crate log;
 mod bit_set;
 mod error;
 mod row;
-mod rpc;
+pub mod rpc;
 mod schema;
 mod table;
 mod value;

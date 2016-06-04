@@ -10,4 +10,5 @@ pub mod rpc_header;
 pub mod tablet;
 pub mod tablet_metadata;
 pub mod tserver;
+pub mod tserver_service;
 pub mod wire_protocol;
