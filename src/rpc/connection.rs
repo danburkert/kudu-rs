@@ -282,8 +282,8 @@ impl Connection {
             }
 
             self.send_queue.push_back(rpc);
-            // If this is the only message in the queue, then optimistically try to write it to
-            // the socket.
+            // If this is the only message in the queue, then optimistically try to write it to the
+            // socket.
             if self.state == ConnectionState::Connected && queue_len == 0 {
                 self.send()
                     .and_then(|_| self.reregister(event_loop, token))
@@ -377,10 +377,11 @@ impl Connection {
             // Optimistically flush the connection header and SASL negotiation to the TCP socket.
             // Even though the socket has not yet been registered, and the connection is probably
             // not yet complete, this will usually succeed because the socket will have sufficient
-            // internal buffer space.
+            // internal buffer space. It tends to fail on OS X with Not Connected errors, but those
+            // are safe to ignore, since this is an optimization.
             try!(cxn.send_connection_header());
             try!(cxn.send_sasl_negotiate());
-            try!(cxn.flush());
+            let _ = cxn.flush();
             cxn.register(event_loop, token)
         };
         inner(self, event_loop, token).unwrap_or_else(|error| {
