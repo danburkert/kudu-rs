@@ -13,7 +13,7 @@ use rpc::backoff::Backoff;
 use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
 use kudu_pb::rpc_header;
 use rpc::messenger::Loop;
-use rpc::{Callback, Rpc, RpcError, RpcResult};
+use rpc::{Rpc, RpcError, RpcResult};
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use mio::{
@@ -596,8 +596,7 @@ impl Connection {
                                     panic!("sidecar decoding not implemented");
                                 }
 
-                                let mut rpc = entry.remove();
-                                rpc.complete();
+                                entry.remove().complete();
                             },
                             _ => {
                                 // The rpc has already been removed from the recv queue, most

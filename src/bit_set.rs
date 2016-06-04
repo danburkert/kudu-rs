@@ -33,7 +33,7 @@ mod tests {
 
     #[test]
     fn test_bitset() {
-        let mut bitset = BitSet::with_capacity(16);
+        let bitset = BitSet::with_capacity(16);
         assert_eq!(bitset.get(0), false);
     }
 }

@@ -13,8 +13,6 @@ use kudu_pb::tserver_service::{
 };
 use rpc::Rpc;
 
-use protobuf::Message;
-
 const SERVICE_NAME: &'static str = "kudu.tserver.TabletServerService";
 
 // When macros in type position and concat_idents! land the 3rd and 4th param can be dropped.

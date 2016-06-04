@@ -1,4 +1,3 @@
-#![cfg_attr(test, feature(static_mutex))]
 #![allow(dead_code)]
 extern crate kudu_pb;
 

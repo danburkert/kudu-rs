@@ -9,7 +9,6 @@ use std::time::Instant;
 use kudu_pb::rpc_header;
 use kudu_pb::rpc_header::{ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB};
 
-use eventual::Complete;
 use protobuf::{Message, ProtobufError};
 
 mod backoff;
@@ -243,10 +242,6 @@ impl fmt::Debug for Rpc {
 
 #[cfg(test)]
 mod test {
-
-    use std::net::SocketAddr;
-    use std::str::FromStr;
-    use std::thread;
     use std::time::{Duration, Instant};
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
@@ -256,19 +251,16 @@ mod test {
     use env_logger;
     use kudu_pb;
 
-    fn threadsafe<T>(_: T) where T: Sync + Send { }
-
     #[test]
-    fn test_ping_master() {
+    fn test_master_ping() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default());
+        let cluster = MiniCluster::new(MiniClusterConfig::default().vlog(0).num_tservers(0));
         let messenger = messenger::Messenger::new().unwrap();
-        let master_addr = cluster.master_addrs()[0];
         let rpc = master::ping(cluster.master_addrs()[0],
                                Instant::now() + Duration::from_secs(5),
                                kudu_pb::master::PingRequestPB::new());
 
-        let (result, rpc) = messenger.send_sync(rpc);
+        let (result, _rpc) = messenger.send_sync(rpc);
         result.unwrap();
     }
 

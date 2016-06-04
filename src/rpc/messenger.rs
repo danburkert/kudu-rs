@@ -3,13 +3,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
 use std::sync::mpsc::sync_channel;
 
-use rpc::{Rpc, RpcError, RpcResult};
+use rpc::{Rpc, RpcResult};
 use rpc::connection::{Connection, ConnectionOptions, TimeoutKind};
 
-use eventual::Future;
 use mio::{
     EventLoop,
     EventSet,
@@ -17,7 +15,6 @@ use mio::{
     Sender,
     Token,
 };
-use protobuf::Message;
 use slab::Slab;
 
 pub type Loop = EventLoop<MessengerHandler>;
