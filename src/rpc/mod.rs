@@ -266,38 +266,4 @@ mod test {
         let (result, _rpc) = messenger.send_sync(rpc);
         result.unwrap();
     }
-
-    //#[test]
-    //fn test_get_tablet_servers() {
-        //let _ = env_logger::init();
-        //let cluster = MiniCluster::new(MiniClusterConfig::default());
-        //let messenger = messenger::Messenger::new().unwrap();
-        //let master_addr = cluster.master_addrs()[0];
-        //thread::sleep_ms(1000);
-        //let future = messenger.send(master_addr,
-                                    //"kudu.master.MasterService",
-                                    //"ListTabletServers",
-                                    //Duration::from_millis(100),
-                                    //vec![],
-                                    //Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
-                                    //Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
-
-        //let response = future.await().unwrap();
-    //}
-
-    //#[test]
-    //fn test_rpc_timeout() {
-        //let _ = env_logger::init();
-        //let messenger = messenger::Messenger::new().unwrap();
-        //let addr = SocketAddr::from_str("127.0.0.1:7051").unwrap();
-        //let future = messenger.send(addr,
-                                    //"kudu.master.MasterService",
-                                    //"ListTabletServers",
-                                    //Duration::from_millis(1000),
-                                    //vec![],
-                                    //Box::new(kudu_pb::master::ListTabletServersRequestPB::new()),
-                                    //Box::new(kudu_pb::master::ListTabletServersResponsePB::new()));
-
-        //assert!(future.await().is_err());
-    //}
 }
