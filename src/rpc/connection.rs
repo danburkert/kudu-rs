@@ -240,7 +240,7 @@ impl Connection {
                         try!(cxn.send())
                     }
                 },
-                _ => panic!("{:?}: unexpected ready, events: {:?}", cxn, events),
+                _ => unreachable!("{:?}: unexpected ready, events: {:?}", cxn, events),
             };
             Ok(())
         }
@@ -514,7 +514,7 @@ impl Connection {
                 // is highly likely that there is space available in the socket's write buffer.
                 self.send()
             },
-            _ => panic!("Unexpected SASL message: {:?}", msg),
+            _ => unreachable!("Unexpected SASL message: {:?}", msg),
         }
     }
 
@@ -618,7 +618,7 @@ impl Connection {
                         }
                     }
                 },
-                _ => panic!("{:?}: recv"),
+                _ => unreachable!("{:?}: recv"),
             };
             self.recv_buf.consume(msg_len - header_len);
         };
