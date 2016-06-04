@@ -254,7 +254,10 @@ mod test {
     #[test]
     fn test_master_ping() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default().vlog(0).num_tservers(0));
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_tservers(0)
+                                                         .log_rpc_negotiation_trace(true)
+                                                         .log_rpc_trace(true));
         let messenger = messenger::Messenger::new().unwrap();
         let rpc = master::ping(cluster.master_addrs()[0],
                                Instant::now() + Duration::from_secs(5),

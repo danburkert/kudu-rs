@@ -36,8 +36,6 @@ impl MiniCluster {
         let tserver_bin = bin_dir.join("kudu-tserver");
         let dir = TempDir::new("kudu-rs-mini-cluster").expect("unable to create temp dir");
 
-        debug!("mini-cluster tempdir: {:?}", dir.path());
-
         let mut master_procs = Vec::with_capacity(conf.num_masters as usize);
         let mut master_addrs = Vec::with_capacity(conf.num_masters as usize);
 
@@ -141,6 +139,8 @@ pub struct MiniClusterConfig {
     /// The number of tablet servers in the mini cluster. Default: 1.
     num_tservers: i32,
 
+    // Logging Options
+
     /// Minimum logging level.
     min_log_level: Option<LogLevel>,
 
@@ -152,8 +152,21 @@ pub struct MiniClusterConfig {
     /// `.cc`/`.h`/`-inl.h`). <log level> overrides any value given by `vlog`.
     vmodule: Vec<(String, i32)>,
 
+    /// If enabled, dump traces of all RPC negotiations to the log at `INFO` level.
+    log_rpc_negotiation_trace: Option<bool>,
+
+    /// If enabled, dump traces of all RPCs to the log at `INFO` level.
+    log_rpc_trace: Option<bool>,
+
+    // Latency Injection
+
+    /// Amount of latency in milliseconds to inject into the RPC negotiation process.
+    rpc_negotiation_delay: Option<i32>,
+
     /// Amount of latency in milliseconds to inject in GetTableLocations RPCs.
-    get_table_locations_latency: Option<i32>,
+    get_table_locations_delay: Option<i32>,
+
+    // Miscellaneous
 
     /// Whether to enable failure detection of tablet leaders. If enabled, attempts will be made to
     /// elect a follower as a new leader when the leader is detected to have failed.
@@ -193,8 +206,23 @@ impl MiniClusterConfig {
         self
     }
 
-    pub fn get_table_locations_latency(&mut self, millis: i32) -> &mut MiniClusterConfig {
-        self.get_table_locations_latency = Some(millis);
+    pub fn log_rpc_negotiation_trace(&mut self, log_rpc_negotiation_trace: bool) -> &mut MiniClusterConfig {
+        self.log_rpc_negotiation_trace = Some(log_rpc_negotiation_trace);
+        self
+    }
+
+    pub fn log_rpc_trace(&mut self, log_rpc_trace: bool) -> &mut MiniClusterConfig {
+        self.log_rpc_trace = Some(log_rpc_trace);
+        self
+    }
+
+    pub fn rpc_negotiation_delay(&mut self, millis: i32) -> &mut MiniClusterConfig {
+        self.rpc_negotiation_delay = Some(millis);
+        self
+    }
+
+    pub fn get_table_locations_delay(&mut self, millis: i32) -> &mut MiniClusterConfig {
+        self.get_table_locations_delay = Some(millis);
         self
     }
 
@@ -226,9 +254,22 @@ impl MiniClusterConfig {
             command.arg(format!("--vmodule={}", modules.join(",")));
         }
 
-        if let Some(get_table_locations_latency) = self.get_table_locations_latency {
+        if let Some(log_rpc_negotiation_trace) = self.log_rpc_negotiation_trace {
+            command.arg(format!("--rpc_trace_negotiation={}", log_rpc_negotiation_trace));
+        }
+
+        if let Some(log_rpc_trace) = self.log_rpc_trace {
+            command.arg(format!("--rpc_dump_all_traces={}", log_rpc_trace));
+        }
+
+        if let Some(rpc_negotiation_delay) = self.rpc_negotiation_delay {
+            command.arg(format!("--rpc_negotiation_inject_delay_ms={}",
+                                rpc_negotiation_delay));
+        }
+
+        if let Some(get_table_locations_delay) = self.get_table_locations_delay {
             command.arg(format!("--master_inject_latency_on_tablet_lookups_ms={}",
-                                get_table_locations_latency));
+                                get_table_locations_delay));
         }
 
         if let Some(leader_failure_detection) = self.leader_failure_detection {
@@ -248,7 +289,10 @@ impl Default for MiniClusterConfig {
             min_log_level: None,
             vlog: None,
             vmodule: Vec::new(),
-            get_table_locations_latency: None,
+            log_rpc_negotiation_trace: None,
+            log_rpc_trace: None,
+            rpc_negotiation_delay: None,
+            get_table_locations_delay: None,
             leader_failure_detection: None,
             data_block_fsync: false,
         }

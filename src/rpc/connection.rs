@@ -230,7 +230,7 @@ impl Connection {
                     } else if events.is_writable() {
                         assert!(!events.is_readable());
                         assert!(cxn.recv_buf.is_empty());
-                        try!(cxn.send())
+                        try!(cxn.flush());
                     }
                 },
                 ConnectionState::Connected => {
@@ -250,7 +250,10 @@ impl Connection {
             self.reset(event_loop, token);
         } else {
             inner(self, event_loop, token, events).and_then(|_| self.register(event_loop, token))
-                                                  .unwrap_or_else(|_| self.reset(event_loop, token))
+                                                  .unwrap_or_else(|error| {
+                                                      info!("{:?} error: {}", self, error);
+                                                      self.reset(event_loop, token)
+                                                  })
         }
     }
 
@@ -284,7 +287,10 @@ impl Connection {
             if self.state == ConnectionState::Connected && queue_len == 0 {
                 self.send()
                     .and_then(|_| self.reregister(event_loop, token))
-                    .unwrap_or_else(|_| self.reset(event_loop, token));
+                    .unwrap_or_else(|error| {
+                        info!("{:?} error sending RPC: {}", self, error);
+                        self.reset(event_loop, token)
+                    });
             }
         }
     }
@@ -311,7 +317,10 @@ impl Connection {
             if queue_len == 0 { return true; }
 
             match self.state {
-                ConnectionState::Initiating => self.reset(event_loop, token),
+                ConnectionState::Initiating => {
+                    info!("{:?} negotiation timed out", self);
+                    self.reset(event_loop, token)
+                },
                 ConnectionState::Reset => self.connect(event_loop, token),
                 ConnectionState::Connected => unreachable!("idle timeout fired with active RPCs"),
             }
@@ -374,7 +383,10 @@ impl Connection {
             try!(cxn.flush());
             cxn.register(event_loop, token)
         };
-        inner(self, event_loop, token).unwrap_or_else(|_| self.reset(event_loop, token));
+        inner(self, event_loop, token).unwrap_or_else(|error| {
+            info!("{:?} unable to connect: {}", self, error);
+            self.reset(event_loop, token)
+        });
     }
 
     /// Registers the connection with the event loop in order to enable readiness notifications.
