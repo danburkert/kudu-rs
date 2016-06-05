@@ -127,7 +127,7 @@ impl Default for MiniCluster {
 }
 
 /// Attempts to get a local unbound socket address for testing.
-fn get_unbound_address() -> SocketAddr {
+pub fn get_unbound_address() -> SocketAddr {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
 }
 

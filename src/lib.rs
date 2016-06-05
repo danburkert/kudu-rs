@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-extern crate kudu_pb;
 
 extern crate byteorder;
 extern crate eventual;
+extern crate kudu_pb;
 extern crate mio;
 extern crate netbuf;
 extern crate parking_lot;
@@ -11,18 +11,16 @@ extern crate rand;
 extern crate slab;
 extern crate vec_map;
 
-#[cfg(test)]
-extern crate tempdir;
-#[cfg(test)]
-extern crate env_logger;
+#[cfg(test)] extern crate tempdir;
+#[cfg(test)] extern crate env_logger;
 
-#[macro_use]
-extern crate log;
+#[macro_use] extern crate log;
 
 mod bit_set;
 mod error;
+mod master;
 mod row;
-pub mod rpc;
+mod rpc;
 mod schema;
 mod table;
 mod value;
@@ -166,4 +164,46 @@ impl CompressionType {
             _ => None,
         }
     }
+}
+
+/// The role of a Kudu master or tserver in a consensus group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RaftRole {
+    Follower,
+    Leader,
+    Learner,
+    NonParticipant,
+    Unknown,
+}
+
+impl RaftRole {
+    fn from_pb(pb: kudu_pb::consensus_metadata::RaftPeerPB_Role) -> RaftRole {
+        match pb {
+            kudu_pb::consensus_metadata::RaftPeerPB_Role::UNKNOWN_ROLE => RaftRole::Unknown,
+            kudu_pb::consensus_metadata::RaftPeerPB_Role::FOLLOWER => RaftRole::Follower,
+            kudu_pb::consensus_metadata::RaftPeerPB_Role::LEADER => RaftRole::Leader,
+            kudu_pb::consensus_metadata::RaftPeerPB_Role::LEARNER => RaftRole::Learner,
+            kudu_pb::consensus_metadata::RaftPeerPB_Role::NON_PARTICIPANT => RaftRole::NonParticipant,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MasterState {
+    /// The permanent UUID of the master server.
+    uuid: Vec<u8>, // TODO: parse into proper UUID
+
+    /// Sequence number incremented on every start-up of the master.
+    ///
+    /// This makes it easy to detect when an instance has restarted.
+    ///
+    /// On a freshly initialized server, the first sequence number should be 0.
+    seqno: i64,
+
+    /// The Raft role of the master.
+    role: RaftRole,
+
+    rpc_addresses: Vec<(String, u32)>,
+
+    http_addresses: Vec<(String, u32)>,
 }

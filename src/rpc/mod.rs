@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::error;
 use std::fmt;
 use std::io;
@@ -10,6 +11,8 @@ use kudu_pb::rpc_header;
 use kudu_pb::rpc_header::{ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB};
 
 use protobuf::{Message, ProtobufError};
+
+pub use rpc::messenger::Messenger;
 
 mod backoff;
 mod connection;
@@ -231,6 +234,10 @@ impl Rpc {
             callback.callback(Err(error), self)
         }
     }
+
+    pub fn response<T>(&self) -> &T where T: Any {
+        self.response.as_any().downcast_ref::<T>().unwrap()
+    }
 }
 
 impl fmt::Debug for Rpc {
@@ -245,7 +252,6 @@ mod test {
     use std::time::{Duration, Instant};
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use rpc::messenger;
     use super::*;
 
     use env_logger;
@@ -258,7 +264,7 @@ mod test {
                                                          .num_tservers(0)
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
-        let messenger = messenger::Messenger::new().unwrap();
+        let messenger = Messenger::new().unwrap();
         let rpc = master::ping(cluster.master_addrs()[0],
                                Instant::now() + Duration::from_secs(5),
                                kudu_pb::master::PingRequestPB::new());

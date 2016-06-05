@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
+use std::thread::{self, JoinHandle};
 
 use rpc::{Rpc, RpcResult};
 use rpc::connection::{Connection, ConnectionOptions, TimeoutKind};
@@ -25,9 +26,14 @@ pub enum Command {
     Send(Rpc)
 }
 
-pub struct Messenger {
+pub struct Inner {
     channel: Sender<Command>,
     thread: JoinHandle<io::Result<()>>,
+}
+
+#[derive(Clone)]
+pub struct Messenger {
+    inner: Arc<Inner>,
 }
 
 impl Messenger {
@@ -39,15 +45,17 @@ impl Messenger {
             event_loop.run(&mut connection_manager)
         });
         Ok(Messenger {
-            channel: channel,
-            thread: thread,
+            inner: Arc::new(Inner {
+                channel: channel,
+                thread: thread,
+            }),
         })
     }
 
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
     pub fn send(&self, rpc: Rpc) {
         // TODO: is there a better way to handle queue failure?
-        self.channel.send(Command::Send(rpc)).unwrap();
+        self.inner.channel.send(Command::Send(rpc)).unwrap();
     }
 
     pub fn send_sync(&self, mut rpc: Rpc) -> (RpcResult, Rpc) {
@@ -96,10 +104,13 @@ impl Handler for MessengerHandler {
                         self.slab.grow(count);
                     }
                     let cxn_options = self.cxn_options.clone();
-                    self.slab
-                        .insert_with(|token| Connection::new(event_loop, token,
-                                                             rpc.addr.clone(), cxn_options))
-                        .unwrap()
+                    let token = self.slab
+                                    .insert_with(|token| Connection::new(event_loop, token,
+                                                                         rpc.addr.clone(),
+                                                                         cxn_options))
+                                    .unwrap();
+                    self.index.insert(rpc.addr, token);
+                    token
                 });
                 self.slab[token].send_rpc(event_loop, token, rpc);
             },
@@ -112,8 +123,10 @@ impl Handler for MessengerHandler {
             drop_cxn = cxn.timeout(event_loop, timeout.0, timeout.1);
         };
         if drop_cxn {
-            let cxn = self.slab.remove(timeout.0);
-            debug!("{:?}: closing", cxn.unwrap())
+            let cxn = self.slab.remove(timeout.0).unwrap();
+            let token = self.index.remove(cxn.addr()).unwrap();
+            assert!(token == timeout.0);
+            debug!("{:?}: closing", cxn);
         }
     }
 }

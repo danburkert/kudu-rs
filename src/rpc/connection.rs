@@ -218,6 +218,10 @@ impl Connection {
         connection
     }
 
+    pub fn addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+
     /// Notifies the connection of event readiness.
     pub fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
         fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token, events: EventSet) -> RpcResult {
