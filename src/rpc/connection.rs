@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use rpc::backoff::Backoff;
+use backoff::Backoff;
 use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
 use kudu_pb::rpc_header;
 use rpc::messenger::Loop;
@@ -333,31 +333,38 @@ impl Connection {
         false
     }
 
-    /// Fails all inflight rpcs which have timeout deadlines before `now`, and returns the next
-    /// soonest timeout deadline, if there are queued RPCs remaining.
+    /// Fails all inflight RPCs which have timeout deadlines before `now`, cancels all canceled
+    /// RPCs, and returns the next soonest timeout deadline, if there are queued RPCs remaining.
     fn timeout_rpcs(&mut self, now: Instant) -> Option<Instant> {
         // TODO: there is likely a way to do this in O(n) without reallocating both queues.
 
         let mut next_timeout = None;
         let mut send_queue = VecDeque::with_capacity(self.send_queue.len());
-        for request in self.send_queue.drain(..) {
-            if request.deadline <= now {
-                trace!("now: {:?}, timing out {:?}", now, request);
-                request.fail(RpcError::TimedOut);
+        for rpc in self.send_queue.drain(..) {
+            if rpc.cancelled() {
+                trace!("cancelling sent {:?}", rpc);
+                rpc.fail(RpcError::Cancelled);
+            } else if rpc.deadline <= now {
+                trace!("now: {:?}, timing out unsent {:?}", now, rpc);
+                rpc.fail(RpcError::TimedOut);
             } else {
-                next_timeout = Some(next_timeout.map_or(request.deadline, |t| cmp::min(t, request.deadline)));
-                send_queue.push_back(request);
+                next_timeout = Some(next_timeout.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                send_queue.push_back(rpc);
             }
         }
         mem::replace(&mut self.send_queue, send_queue);
 
         let mut recv_queue = HashMap::with_capacity(self.recv_queue.len());
-        for (call_id, request) in self.recv_queue.drain() {
-            if request.deadline <= now {
-                request.fail(RpcError::TimedOut);
+        for (call_id, rpc) in self.recv_queue.drain() {
+            if rpc.cancelled() {
+                trace!("cancelling sent {:?}", rpc);
+                rpc.fail(RpcError::Cancelled);
+            } else if rpc.deadline <= now {
+                trace!("now: {:?}, timing out sent {:?}", now, rpc);
+                rpc.fail(RpcError::TimedOut);
             } else {
-                next_timeout = Some(next_timeout.map_or(request.deadline, |t| cmp::min(t, request.deadline)));
-                recv_queue.insert(call_id, request);
+                next_timeout = Some(next_timeout.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                recv_queue.insert(call_id, rpc);
             }
         }
         mem::replace(&mut self.recv_queue, recv_queue);

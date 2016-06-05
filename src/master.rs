@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use backoff::Backoff;
 use rpc::{
     Callback,
     Messenger,
@@ -175,6 +176,11 @@ impl MasterProxy {
         }));
         self.inner.send(rpc);
     }
+}
+
+struct LeaderRefreshCallback {
+    inner: Arc<Inner>,
+    backoff: Backoff,
 }
 
 #[cfg(test)]

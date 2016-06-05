@@ -30,6 +30,7 @@ macro_rules! rpc {
                 response: Box::new($response_type::new()),
                 sidecars: Vec::new(),
                 callback: None,
+                cancel: None,
             }
         }
     };

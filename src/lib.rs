@@ -16,6 +16,7 @@ extern crate vec_map;
 
 #[macro_use] extern crate log;
 
+mod backoff;
 mod bit_set;
 mod error;
 mod master;

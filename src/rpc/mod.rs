@@ -5,6 +5,8 @@ use std::io;
 use std::mem;
 use std::net::SocketAddr;
 use std::result;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use kudu_pb::rpc_header;
@@ -14,7 +16,6 @@ use protobuf::{Message, ProtobufError};
 
 pub use rpc::messenger::Messenger;
 
-mod backoff;
 mod connection;
 pub mod master;
 mod messenger;
@@ -83,6 +84,8 @@ pub enum RpcError {
     ConnectionQueueFull,
     /// The RPC timed out.
     TimedOut,
+    /// The RPC was cancelled.
+    Cancelled,
 }
 
 impl RpcError {
@@ -93,6 +96,7 @@ impl RpcError {
             RpcError::Rpc { code, .. } => code.is_fatal(),
             RpcError::ConnectionQueueFull => false,
             RpcError::TimedOut => false,
+            RpcError::Cancelled => false,
         }
     }
     pub fn invalid_rpc_header(message: String) -> RpcError {
@@ -119,6 +123,7 @@ impl Clone for RpcError {
             },
             RpcError::ConnectionQueueFull => RpcError::ConnectionQueueFull,
             RpcError::TimedOut => RpcError::TimedOut,
+            RpcError::Cancelled => RpcError::Cancelled,
         }
     }
 }
@@ -138,6 +143,7 @@ impl error::Error for RpcError {
             RpcError::Rpc { ref message, .. } => message,
             RpcError::ConnectionQueueFull => "connection queue full",
             RpcError::TimedOut => "RPC timed out",
+            RpcError::Cancelled => "RPC cancelled",
         }
     }
 
@@ -220,6 +226,7 @@ pub struct Rpc {
     pub response: Box<Message>,
     pub sidecars: Vec<Vec<u8>>,
     pub callback: Option<Box<Callback>>,
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Rpc {
@@ -237,6 +244,11 @@ impl Rpc {
 
     pub fn response<T>(&self) -> &T where T: Any {
         self.response.as_any().downcast_ref::<T>().unwrap()
+    }
+
+    /// Returns `true` if this RPC has been requested to be cancelled.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.as_ref().map(|b| b.load(Ordering::Relaxed)).unwrap_or(false)
     }
 }
 
