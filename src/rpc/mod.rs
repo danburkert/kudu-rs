@@ -205,12 +205,12 @@ pub type RpcResult = result::Result<(), RpcError>;
 /// A callback that will be executed when the RPC is complete. If the RPC succeeds, the result will
 /// be `Ok`, and the RPC will contain the response and sidecars. Othewise, the result will contain
 /// the failure.
-pub trait Callback: Send + 'static {
+pub trait Callback: Send {
     fn callback(self: Box<Self>, result: RpcResult, rpc: Rpc);
 
 }
 
-impl<F> Callback for F where F: FnOnce(RpcResult, Rpc) + Send + 'static {
+impl<F> Callback for F where F: FnOnce(RpcResult, Rpc) + Send {
     fn callback(self: Box<F>, result: RpcResult, rpc: Rpc) {
         (*self)(result, rpc)
     }

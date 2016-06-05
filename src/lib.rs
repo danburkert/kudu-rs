@@ -24,6 +24,7 @@ mod row;
 mod rpc;
 mod schema;
 mod table;
+mod util;
 mod value;
 
 #[cfg(test)]

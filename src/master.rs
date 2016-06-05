@@ -213,21 +213,21 @@ mod tests {
         let (response, rpc) = recv.recv().unwrap();
     }
 
-    #[test]
-    fn list_tables_with_bogus_masters() {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(0));
+    //#[test]
+    //fn list_tables_with_bogus_masters() {
+        //let _ = env_logger::init();
+        //let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(0));
 
-        let masters = vec![get_unbound_address(), get_unbound_address()];
-        let proxy = MasterProxy::new(masters, Messenger::new().unwrap());
+        //let masters = vec![get_unbound_address(), get_unbound_address()];
+        //let proxy = MasterProxy::new(masters, Messenger::new().unwrap());
 
 
-        let (send, recv) = sync_channel(0);
-        proxy.list_tables(Instant::now() + Duration::from_millis(500),
-                          ListTablesRequestPB::new(), Box::new(move |result, rpc| {
-                              send.send((result, rpc)).unwrap();
-                          }));
+        //let (send, recv) = sync_channel(0);
+        //proxy.list_tables(Instant::now() + Duration::from_millis(500),
+                          //ListTablesRequestPB::new(), Box::new(move |result, rpc| {
+                              //send.send((result, rpc)).unwrap();
+                          //}));
 
-        let (response, rpc) = recv.recv().unwrap();
-    }
+        //let (response, rpc) = recv.recv().unwrap();
+    //}
 }

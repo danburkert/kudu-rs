@@ -7,13 +7,14 @@ use std::io::{self, ErrorKind, Write};
 use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use backoff::Backoff;
 use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
 use kudu_pb::rpc_header;
-use rpc::messenger::Loop;
+use rpc::messenger::{Loop, TimeoutKind};
 use rpc::{Rpc, RpcError, RpcResult};
+use util::duration_to_ms;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use mio::{
@@ -98,35 +99,6 @@ pub enum ConnectionState {
     /// The connection has been shut down due to an error. It will be reestablished after a backoff
     /// period.
     Reset,
-}
-
-
-/// A timeout type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TimeoutKind {
-    /// A state timeout.
-    ///
-    /// This timeout has different actions depending on the current state of the connection:
-    ///
-    /// * *Initializing* the timeout is a negotiation timeout. If the connection is unable to
-    ///                  complete negotiation and succesfully connect to the server before the
-    ///                  timeout exprires, then the connection is reset and initialization is
-    ///                  retried after a backoff period.
-    ///
-    /// * *Connected* the timeout is an idle timeout. This should only be active while the
-    ///               connection has no queued RPCs. After expiration, the connection is closed
-    ///               by the `MessengerHandler`.
-    ///
-    /// * *Reset* The timeout is the reset timer. Upon expiration the connection will attempt to
-    ///           reinitialize the connection with the server if the connection has queued RPCs.
-    ///           Otherwise, the connection is closed by the `MessengerHandler`.
-    State,
-
-    /// An RPC timeout.
-    ///
-    /// This timeout tracks the next RPC timeout deadline. When it expires, any timed out RPCs are
-    /// failed.
-    Rpc,
 }
 
 /// `Connection` is a state machine that manages a single client connection to a Kudu server.
@@ -278,7 +250,7 @@ impl Connection {
                     let timeout = duration_to_ms(&rpc.deadline.duration_since(now));
                     trace!("{:?}: setting new RPC timeout: {:?}ms", self, timeout);
                     self.rpc_timeout = Some((rpc.deadline,
-                                             event_loop.timeout_ms((token, TimeoutKind::Rpc), timeout).unwrap()));
+                                             event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token), timeout).unwrap()));
                 } else {
                     trace!("{:?}: timing out {:?}", self, rpc);
                     return rpc.fail(RpcError::TimedOut);
@@ -304,19 +276,10 @@ impl Connection {
     pub fn timeout(&mut self, event_loop: &mut Loop, token: Token, kind: TimeoutKind) -> bool {
         trace!("{:?}: {:?} timeout", self, kind);
 
-        // Check timed out RPCs.
-        let now = Instant::now();
-        if let Some(deadline) = self.timeout_rpcs(now) {
-            self.clear_rpc_timeout(event_loop);
-            let timeout = duration_to_ms(&deadline.duration_since(now));
-            self.rpc_timeout = Some((now + Duration::from_millis(timeout),
-                                     event_loop.timeout_ms((token, TimeoutKind::Rpc), timeout)
-                                               .unwrap()));
-        }
-
+        self.short_circuit_rpcs(event_loop, token);
         let queue_len = self.queue_len();
         if queue_len == 0 && self.state != ConnectionState::Connected { return true; }
-        if kind == TimeoutKind::State {
+        if kind == TimeoutKind::ConnectionState {
             // If we don't have any active RPCs, then close the connection.
             if queue_len == 0 { return true; }
 
@@ -333,22 +296,27 @@ impl Connection {
         false
     }
 
-    /// Fails all inflight RPCs which have timeout deadlines before `now`, cancels all canceled
-    /// RPCs, and returns the next soonest timeout deadline, if there are queued RPCs remaining.
-    fn timeout_rpcs(&mut self, now: Instant) -> Option<Instant> {
+    /// Fails all inflight RPCs which are timed out, cancels all inflight RPCs which have
+    /// cancellation requests, and resets the active RPC timeout.
+    ///
+    /// There is a balance between constantly calling this in the hope that there are cancelled
+    /// RPCs (e.g. on every `ready` event), and the overhead that would require. Right now we
+    /// settle for calling it whenever an RPC timeout fires, and when the connection is reset.
+    fn short_circuit_rpcs(&mut self, event_loop: &mut Loop, token: Token) {
         // TODO: there is likely a way to do this in O(n) without reallocating both queues.
 
-        let mut next_timeout = None;
+        let now = Instant::now();
+        let mut next_deadline = None;
         let mut send_queue = VecDeque::with_capacity(self.send_queue.len());
         for rpc in self.send_queue.drain(..) {
             if rpc.cancelled() {
-                trace!("cancelling sent {:?}", rpc);
+                trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
             } else if rpc.deadline <= now {
-                trace!("now: {:?}, timing out unsent {:?}", now, rpc);
+                trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
-                next_timeout = Some(next_timeout.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
                 send_queue.push_back(rpc);
             }
         }
@@ -357,19 +325,25 @@ impl Connection {
         let mut recv_queue = HashMap::with_capacity(self.recv_queue.len());
         for (call_id, rpc) in self.recv_queue.drain() {
             if rpc.cancelled() {
-                trace!("cancelling sent {:?}", rpc);
+                trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
             } else if rpc.deadline <= now {
-                trace!("now: {:?}, timing out sent {:?}", now, rpc);
+                trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
-                next_timeout = Some(next_timeout.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
                 recv_queue.insert(call_id, rpc);
             }
         }
         mem::replace(&mut self.recv_queue, recv_queue);
 
-        next_timeout
+        self.clear_rpc_timeout(event_loop);
+        if let Some(deadline) = next_deadline {
+            let timeout = event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token),
+                                                duration_to_ms(&deadline.duration_since(now)))
+                                    .unwrap();
+            self.rpc_timeout = Some((deadline, timeout));
+        }
     }
 
     /// Connects an inactive connection to the server.
@@ -386,10 +360,10 @@ impl Connection {
             cxn.set_state_timeout(event_loop, token, timeout);
 
             // Optimistically flush the connection header and SASL negotiation to the TCP socket.
-            // Even though the socket has not yet been registered, and the connection is probably
-            // not yet complete, this will usually succeed because the socket will have sufficient
-            // internal buffer space. It tends to fail on OS X with Not Connected errors, but those
-            // are safe to ignore, since this is an optimization.
+            // Even though the socket has not yet been registered, this will usually succeed
+            // because the socket will have sufficient internal buffer space. This sometimes fails
+            // on OS X with Not Connected errors, but they are safe to ignore since the flush will
+            // be retried after then next writeable event.
             try!(cxn.send_connection_header());
             try!(cxn.send_sasl_negotiate());
             let _ = cxn.flush();
@@ -428,6 +402,8 @@ impl Connection {
         self.recv_buf.consume(recv_buf_len);
         let send_buf_len = self.send_buf.len();
         self.send_buf.consume(send_buf_len);
+
+        self.short_circuit_rpcs(event_loop, token);
 
         let timeout = self.backoff.next_backoff_ms();
         self.set_state_timeout(event_loop, token, timeout);
@@ -717,7 +693,7 @@ impl Connection {
 
     fn set_state_timeout(&mut self, event_loop: &mut Loop, token: Token, timeout: u64) {
         self.clear_state_timeout(event_loop);
-        let timeout_handle = event_loop.timeout_ms((token, TimeoutKind::State), timeout as u64);
+        let timeout_handle = event_loop.timeout_ms((TimeoutKind::ConnectionState, token), timeout as u64);
         self.state_timeout = Some(timeout_handle.unwrap());
     }
 
@@ -752,9 +728,4 @@ impl Connection {
 
         event_set
     }
-}
-
-fn duration_to_ms(duration: &Duration) -> u64 {
-    //println!("duration: {:?}", duration);
-    duration.as_secs() + duration.subsec_nanos() as u64 / 1000_000
 }
