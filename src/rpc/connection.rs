@@ -239,21 +239,23 @@ impl Connection {
 
         let queue_len = self.send_queue.len() + self.recv_queue.len();
         if queue_len > self.options.rpc_queue_len as usize {
-            return rpc.fail(RpcError::ConnectionQueueFull);
+            return rpc.fail(RpcError::Backoff);
         } else {
-            // If the RPC's deadline is before the currently scheduled timeout, then reset the
-            // timeout to the earlier time.
-            if self.rpc_timeout.map(|(deadline, _)| rpc.deadline < deadline).unwrap_or(true) {
-                let now = Instant::now();
-                if now < rpc.deadline {
-                    self.clear_rpc_timeout(event_loop);
-                    let timeout = duration_to_ms(&rpc.deadline.duration_since(now));
-                    trace!("{:?}: setting new RPC timeout: {:?}ms", self, timeout);
-                    self.rpc_timeout = Some((rpc.deadline,
-                                             event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token), timeout).unwrap()));
-                } else {
-                    trace!("{:?}: timing out {:?}", self, rpc);
-                    return rpc.fail(RpcError::TimedOut);
+            if let Some(rpc_deadline) = rpc.deadline {
+                // If the RPC would time out before the currently scheduled deadline, then reset the
+                // deadline to the earlier time.
+                if self.rpc_timeout.map(|(deadline, _)| rpc_deadline < deadline).unwrap_or(true) {
+                    let now = Instant::now();
+                    if now < rpc_deadline {
+                        self.clear_rpc_timeout(event_loop);
+                        let timeout = duration_to_ms(&rpc_deadline.duration_since(now));
+                        trace!("{:?}: setting new RPC timeout: {:?}ms", self, timeout);
+                        self.rpc_timeout = Some((rpc_deadline,
+                                                event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token), timeout).unwrap()));
+                    } else {
+                        trace!("{:?}: timing out {:?}", self, rpc);
+                        return rpc.fail(RpcError::TimedOut);
+                    }
                 }
             }
 
@@ -312,11 +314,13 @@ impl Connection {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
-            } else if rpc.deadline <= now {
+            } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
-                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                if let Some(rpc_deadline) = rpc.deadline {
+                    next_deadline = Some(next_deadline.map_or(rpc_deadline, |t| cmp::min(t, rpc_deadline)));
+                }
                 send_queue.push_back(rpc);
             }
         }
@@ -327,11 +331,13 @@ impl Connection {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
-            } else if rpc.deadline <= now {
+            } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
-                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                if let Some(rpc_deadline) = rpc.deadline {
+                    next_deadline = Some(next_deadline.map_or(rpc_deadline, |t| cmp::min(t, rpc_deadline)));
+                }
                 recv_queue.insert(call_id, rpc);
             }
         }
@@ -629,7 +635,7 @@ impl Connection {
             while self.send_buf.len() < 4096 && !self.send_queue.is_empty() {
                 let rpc = self.send_queue.pop_front().unwrap();
 
-                if rpc.deadline <= now {
+                if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
                     rpc.fail(RpcError::TimedOut);
                     break;
@@ -642,7 +648,9 @@ impl Connection {
                 self.request_header.set_call_id(call_id);
                 self.request_header.mut_remote_method().mut_service_name().push_str(&rpc.service_name);
                 self.request_header.mut_remote_method().mut_method_name().push_str(&rpc.method_name);
-                self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
+                if let Some(deadline) = rpc.deadline {
+                    self.request_header.set_timeout_millis(duration_to_ms(&deadline.duration_since(now)) as u32);
+                }
                 self.request_header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
 
                 trace!("{:?}: sending rpc to server; call ID: {}", self, call_id);
