@@ -18,13 +18,21 @@ pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
             continue;
         }
         // Otherwise fall back to a DNS lookup.
-        if let Ok(lookup_results) = lookup_host(hostport.get_host()) {
-            for result in lookup_results {
-                if let Ok(mut addr) = result {
-                    addr.set_port(hostport.get_port() as u16);
-                    addrs.insert(addr);
+        match lookup_host(hostport.get_host()) {
+            Ok(lookup_results) => {
+                for result in lookup_results {
+                    match result {
+                        Ok(mut addr) => {
+                            addr.set_port(hostport.get_port() as u16);
+                            addrs.insert(addr);
+                        },
+                        Err(error) => warn!("unable to resolve host '{}': {}",
+                                            hostport.get_host(), error),
+                    }
                 }
-            }
+            },
+            Err(error) => warn!("unable to resolve host '{}': {}",
+                                hostport.get_host(), error),
         }
     }
     addrs

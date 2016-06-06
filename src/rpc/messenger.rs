@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::fmt;
 
 use rpc::{Rpc, RpcResult};
@@ -27,6 +27,7 @@ pub type Loop = EventLoop<MessengerHandler>;
 pub enum Command {
     Shutdown,
     Send(Rpc),
+    DelayedSend((Duration, Rpc)),
     Timer((Duration, Box<FnMut() + Send>)),
 }
 
@@ -35,6 +36,7 @@ impl fmt::Debug for Command {
         match *self {
             Command::Shutdown => write!(f, "Command::Shutdown"),
             Command::Send(ref rpc) => write!(f, "Command::Send({:?})", rpc),
+            Command::DelayedSend((ref delay, ref rpc)) => write!(f, "Command::DelayedSend({:?}, {:?})", delay, rpc),
             Command::Timer((ref duration, _)) => write!(f, "Command::Timer({:?})", duration),
         }
     }
@@ -65,6 +67,9 @@ pub enum TimeoutKind {
     /// This timeout tracks the next RPC timeout deadline. When it expires, any timed out RPCs are
     /// failed.
     ConnectionRpc,
+
+    /// A delayed RPC send.
+    DelayedSend,
 
     /// An independent timer timeout.
     Timer,
@@ -99,9 +104,15 @@ impl Messenger {
         })
     }
 
+    pub fn delayed_send(&self, delay: Duration, rpc: Rpc) {
+        debug_assert!(rpc.deadline > Instant::now() + delay);
+        self.inner.channel.send(Command::DelayedSend((delay, rpc))).unwrap();
+    }
+
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
     pub fn send(&self, rpc: Rpc) {
         // TODO: is there a better way to handle queue failure?
+        debug_assert!(rpc.callback.is_some());
         self.inner.channel.send(Command::Send(rpc)).unwrap();
     }
 
@@ -118,9 +129,9 @@ impl Messenger {
     }
 }
 
-#[derive(Debug)]
 pub struct MessengerHandler {
     connection_slab: Slab<Connection, Token>,
+    delayed_send_slab: Slab<Rpc, Token>,
     timer_slab: Slab<Box<FnMut()>, Token>,
     index: HashMap<SocketAddr, Token>,
     cxn_options: Rc<ConnectionOptions>,
@@ -130,10 +141,19 @@ impl MessengerHandler {
     fn new() -> MessengerHandler {
         MessengerHandler {
             connection_slab: Slab::new(128),
+            delayed_send_slab: Slab::new(128),
             timer_slab: Slab::new(128),
             index: HashMap::new(),
             cxn_options: Rc::new(ConnectionOptions::default()),
         }
+    }
+}
+
+impl fmt::Debug for MessengerHandler {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MessengerHandler {{ connections: {}, delayed_rpcs: {}, timers: {} }}",
+               self.connection_slab.count(), self.delayed_send_slab.count(),
+               self.timer_slab.count())
     }
 }
 
@@ -167,6 +187,20 @@ impl Handler for MessengerHandler {
                 });
                 self.connection_slab[token].send_rpc(event_loop, token, rpc);
             },
+            Command::DelayedSend((delay, rpc)) => {
+                if !self.delayed_send_slab.has_remaining() {
+                    let count = self.delayed_send_slab.count();
+                    self.delayed_send_slab.grow(count / 2);
+                }
+                let token = match self.delayed_send_slab.insert(rpc) {
+                    Ok(token) => token,
+                    Err(_) => unreachable!()
+                };
+
+                //warn!("delay ms: {}", duration_to_ms(&delay));
+
+                event_loop.timeout_ms((TimeoutKind::DelayedSend, token), duration_to_ms(&delay)).unwrap();
+            },
             Command::Timer((duration, callback)) => {
                 if !self.timer_slab.has_remaining() {
                     let count = self.timer_slab.count();
@@ -187,6 +221,11 @@ impl Handler for MessengerHandler {
         match timeout {
             TimeoutKind::Timer => {
                 self.timer_slab.remove(token).unwrap()();
+            },
+            TimeoutKind::DelayedSend => {
+                let rpc = self.delayed_send_slab.remove(token).unwrap();
+                trace!("{:?}: sending delayed {:?}", self, rpc);
+                self.notify(event_loop, Command::Send(rpc));
             },
             _ => {
                 let mut drop_cxn = false;

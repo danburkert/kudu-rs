@@ -246,9 +246,18 @@ impl Rpc {
         self.response.as_any().downcast_ref::<T>().unwrap()
     }
 
+    pub fn mut_response<T>(&mut self) -> &mut T where T: Any {
+        self.response.as_any_mut().downcast_mut::<T>().unwrap()
+    }
+
     /// Returns `true` if this RPC has been requested to be cancelled.
     pub fn cancelled(&self) -> bool {
         self.cancel.as_ref().map(|b| b.load(Ordering::Relaxed)).unwrap_or(false)
+    }
+
+    /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
+    pub fn timed_out(&self, now: Instant) -> bool {
+        self.deadline <= now
     }
 }
 
@@ -301,8 +310,8 @@ mod test {
 
         for &master in cluster.master_addrs() {
             info!("master addr: {:?}", master);
-            let mut rpc = master::list_masters(master, kudu_pb::master::ListMastersRequestPB::new());
-            rpc.set_deadline(Instant::now() + Duration::from_secs(5));
+            let mut rpc = master::list_masters(master, Instant::now() + Duration::from_secs(5),
+                                               kudu_pb::master::ListMastersRequestPB::new());
             let send = send.clone();
             rpc.callback = Some(Box::new(move |result, rpc| {
                 send.send((result, rpc)).unwrap();

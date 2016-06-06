@@ -108,8 +108,8 @@ pub enum ConnectionState {
 ///
 /// If an error occurs that requires tearing down the connection to the server (e.g. a
 /// [de]serialization failure, or a fatal error response), the connection will automatically
-/// attempt to reconnect after waiting for a backoff period. Consecutive failures result in an
-/// exponentially increasing backoff with jitter.
+/// attempt to reconnect after waiting for a backoff period. Consecutive retries will be delayed
+/// with an exponentially increasing backoff with jitter.
 ///
 /// If at any point the connection is idle for longer than the idle timeout, or if the connection
 /// is reset and does not have any queued RPCs, then it will automatically be shut down.
@@ -238,22 +238,26 @@ impl Connection {
         trace!("{:?}: queueing rpc: {:?}", self, rpc);
 
         let queue_len = self.send_queue.len() + self.recv_queue.len();
-        if queue_len > self.options.rpc_queue_len as usize {
+        if rpc.cancelled() {
+            trace!("{:?}: cancelling {:?}", self, rpc);
+            return rpc.fail(RpcError::Cancelled);
+        } else if queue_len > self.options.rpc_queue_len as usize {
+            debug!("{:?}: send queue full; failing {:?}", self, rpc);
             return rpc.fail(RpcError::Backoff);
         } else {
             // If the RPC's deadline is before the currently scheduled timeout, then reset the
             // timeout to the earlier time.
             if self.rpc_timeout.map(|(deadline, _)| rpc.deadline < deadline).unwrap_or(true) {
                 let now = Instant::now();
-                if now < rpc.deadline {
+                if rpc.timed_out(now) {
+                    trace!("{:?}: timing out {:?}", self, rpc);
+                    return rpc.fail(RpcError::TimedOut);
+                } else {
                     self.clear_rpc_timeout(event_loop);
                     let timeout = duration_to_ms(&rpc.deadline.duration_since(now));
                     trace!("{:?}: setting new RPC timeout: {:?}ms", self, timeout);
                     self.rpc_timeout = Some((rpc.deadline,
                                              event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token), timeout).unwrap()));
-                } else {
-                    trace!("{:?}: timing out {:?}", self, rpc);
-                    return rpc.fail(RpcError::TimedOut);
                 }
             }
 
@@ -301,7 +305,7 @@ impl Connection {
     ///
     /// There is a balance between constantly calling this in the hope that there are cancelled
     /// RPCs (e.g. on every `ready` event), and the overhead that would require. Right now we
-    /// settle for calling it whenever an RPC timeout fires, and when the connection is reset.
+    /// settle for calling it whenever an RPC timeout fires.
     fn short_circuit_rpcs(&mut self, event_loop: &mut Loop, token: Token) {
         // TODO: there is likely a way to do this in O(n) without reallocating both queues.
 
@@ -312,7 +316,7 @@ impl Connection {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
-            } else if rpc.deadline <= now {
+            } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
@@ -327,7 +331,7 @@ impl Connection {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
                 rpc.fail(RpcError::Cancelled);
-            } else if rpc.deadline <= now {
+            } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
                 rpc.fail(RpcError::TimedOut);
             } else {
@@ -402,8 +406,6 @@ impl Connection {
         self.recv_buf.consume(recv_buf_len);
         let send_buf_len = self.send_buf.len();
         self.send_buf.consume(send_buf_len);
-
-        self.short_circuit_rpcs(event_loop, token);
 
         let timeout = self.backoff.next_backoff_ms();
         self.set_state_timeout(event_loop, token, timeout);
@@ -629,7 +631,11 @@ impl Connection {
             while self.send_buf.len() < 4096 && !self.send_queue.is_empty() {
                 let rpc = self.send_queue.pop_front().unwrap();
 
-                if rpc.deadline <= now {
+                if rpc.cancelled() {
+                    trace!("{:?}: cancelling {:?}", self, rpc);
+                    rpc.fail(RpcError::Cancelled);
+                    break;
+                } else if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
                     rpc.fail(RpcError::TimedOut);
                     break;
