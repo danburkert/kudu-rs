@@ -186,6 +186,9 @@ impl ::protobuf::Message for MasterErrorPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -446,6 +449,9 @@ impl ::protobuf::Message for TSToMasterCommonPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -678,6 +684,9 @@ impl ::protobuf::Message for TableIdentifierPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -1143,6 +1152,9 @@ impl ::protobuf::Message for SysTabletsEntryPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -1763,6 +1775,9 @@ impl ::protobuf::Message for SysTablesEntryPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -2009,6 +2024,9 @@ impl ::protobuf::Message for PingRequestPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -2139,6 +2157,9 @@ impl ::protobuf::Message for PingResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -2349,6 +2370,9 @@ impl ::protobuf::Message for TSRegistrationPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -2740,6 +2764,9 @@ impl ::protobuf::Message for ReportedTabletPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -3063,6 +3090,9 @@ impl ::protobuf::Message for TabletReportPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -3318,6 +3348,9 @@ impl ::protobuf::Message for ReportedTabletUpdatesPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -3502,6 +3535,9 @@ impl ::protobuf::Message for TabletReportUpdatesPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -3818,6 +3854,9 @@ impl ::protobuf::Message for TSHeartbeatRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -4221,6 +4260,9 @@ impl ::protobuf::Message for TSHeartbeatResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -4663,6 +4705,9 @@ impl ::protobuf::Message for TabletLocationsPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -4923,6 +4968,9 @@ impl ::protobuf::Message for TabletLocationsPB_ReplicaPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -5158,6 +5206,9 @@ impl ::protobuf::Message for TSInfoPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -5338,6 +5389,9 @@ impl ::protobuf::Message for GetTabletLocationsRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -5602,6 +5656,9 @@ impl ::protobuf::Message for GetTabletLocationsResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -5852,6 +5909,9 @@ impl ::protobuf::Message for GetTabletLocationsResponsePB_Error {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -6227,6 +6287,9 @@ impl ::protobuf::Message for CreateTableRequestPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -6488,6 +6551,9 @@ impl ::protobuf::Message for CreateTableResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -6683,6 +6749,9 @@ impl ::protobuf::Message for IsCreateTableDoneRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -6904,6 +6973,9 @@ impl ::protobuf::Message for IsCreateTableDoneResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -7100,6 +7172,9 @@ impl ::protobuf::Message for DeleteTableRequestPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -7286,6 +7361,9 @@ impl ::protobuf::Message for DeleteTableResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -7471,6 +7549,9 @@ impl ::protobuf::Message for ListTablesRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -7696,6 +7777,9 @@ impl ::protobuf::Message for ListTablesResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -7941,6 +8025,9 @@ impl ::protobuf::Message for ListTablesResponsePB_TableInfo {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -8266,6 +8353,9 @@ impl ::protobuf::Message for GetTableLocationsRequestPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -8511,6 +8601,9 @@ impl ::protobuf::Message for GetTableLocationsResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -8793,6 +8886,9 @@ impl ::protobuf::Message for AlterTableRequestPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -8995,6 +9091,9 @@ impl ::protobuf::Message for AlterTableRequestPB_AddColumn {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -9183,6 +9282,9 @@ impl ::protobuf::Message for AlterTableRequestPB_DropColumn {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -9422,6 +9524,9 @@ impl ::protobuf::Message for AlterTableRequestPB_RenameColumn {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -9744,6 +9849,9 @@ impl ::protobuf::Message for AlterTableRequestPB_Step {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -10037,6 +10145,9 @@ impl ::protobuf::Message for AlterTableResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -10232,6 +10343,9 @@ impl ::protobuf::Message for IsAlterTableDoneRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -10487,6 +10601,9 @@ impl ::protobuf::Message for IsAlterTableDoneResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -10689,6 +10806,9 @@ impl ::protobuf::Message for GetTableSchemaRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -11085,6 +11205,9 @@ impl ::protobuf::Message for GetTableSchemaResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -11257,6 +11380,9 @@ impl ::protobuf::Message for ListTabletServersRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -11475,6 +11601,9 @@ impl ::protobuf::Message for ListTabletServersResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -11752,6 +11881,9 @@ impl ::protobuf::Message for ListTabletServersResponsePB_Entry {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -11903,6 +12035,9 @@ impl ::protobuf::Message for GetMasterRegistrationRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -12214,6 +12349,9 @@ impl ::protobuf::Message for GetMasterRegistrationResponsePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -12372,6 +12510,9 @@ impl ::protobuf::Message for ListMastersRequestPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -12590,6 +12731,9 @@ impl ::protobuf::Message for ListMastersResponsePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self

@@ -196,6 +196,9 @@ impl ::protobuf::Message for UserInformationPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -388,6 +391,9 @@ impl ::protobuf::Message for ConnectionContextPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -686,6 +692,9 @@ impl ::protobuf::Message for SaslMessagePB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -988,6 +997,9 @@ impl ::protobuf::Message for SaslMessagePB_SaslAuth {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -1297,6 +1309,9 @@ impl ::protobuf::Message for RemoteMethodPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -1597,6 +1612,9 @@ impl ::protobuf::Message for RequestIdPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -1959,6 +1977,9 @@ impl ::protobuf::Message for RequestHeader {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -2232,6 +2253,9 @@ impl ::protobuf::Message for ResponseHeader {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -2503,6 +2527,9 @@ impl ::protobuf::Message for ErrorStatusPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self

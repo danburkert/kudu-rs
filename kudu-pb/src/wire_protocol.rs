@@ -217,6 +217,9 @@ impl ::protobuf::Message for AppStatusPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -554,6 +557,9 @@ impl ::protobuf::Message for NodeInstancePB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -777,6 +783,9 @@ impl ::protobuf::Message for ServerRegistrationPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
@@ -1097,6 +1106,9 @@ impl ::protobuf::Message for ServerEntryPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -1359,6 +1371,9 @@ impl ::protobuf::Message for RowwiseRowBlockPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
@@ -1605,6 +1620,9 @@ impl ::protobuf::Message for RowOperationsPB {
 
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
+    }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
     }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self

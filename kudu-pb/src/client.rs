@@ -652,6 +652,9 @@ impl ::protobuf::Message for ScanTokenPB {
     fn as_any(&self) -> &::std::any::Any {
         self as &::std::any::Any
     }
+    fn as_any_mut(&mut self) -> &mut ::std::any::Any {
+        self as &mut ::std::any::Any
+    }
     fn into_any(self: Box<Self>) -> ::std::boxed::Box<::std::any::Any> {
         self
     }
