@@ -271,6 +271,8 @@ impl fmt::Debug for Rpc {
 #[cfg(test)]
 mod test {
     use std::time::{Duration, Instant};
+    use std::sync::mpsc::sync_channel;
+    use std::sync::Arc;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use super::*;
@@ -291,5 +293,38 @@ mod test {
 
         let (result, _rpc) = messenger.send_sync(rpc);
         result.unwrap();
+    }
+
+    #[test]
+    fn test_list_masters() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(3)
+                                                         .num_tservers(0));
+        let messenger = Messenger::new().unwrap();
+
+        let (send, recv) = sync_channel::<(RpcResult, Rpc)>(3);
+
+        ::std::thread::sleep_ms(5000);
+
+        for &master in cluster.master_addrs() {
+            info!("master addr: {:?}", master);
+            let mut rpc = master::list_masters(master, kudu_pb::master::ListMastersRequestPB::new());
+            rpc.set_deadline(Instant::now() + Duration::from_secs(5));
+            let send = send.clone();
+            rpc.callback = Some(Box::new(move |result, rpc| {
+                send.send((result, rpc)).unwrap();
+            }));
+            messenger.send(rpc);
+        }
+
+        drop(send);
+
+        for (result, rpc) in recv {
+            assert!(result.is_ok());
+            info!("response: {:?}", rpc.response::<kudu_pb::master::ListMastersResponsePB>());
+            info!("response size: {:?}", rpc.response::<kudu_pb::master::ListMastersResponsePB>().get_masters().len());
+            info!("rpc addr: {:?}", &rpc.addr);
+        }
     }
 }

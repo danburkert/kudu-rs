@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use backoff::Backoff;
 use rpc::{
@@ -17,6 +18,8 @@ use parking_lot::Mutex;
 use kudu_pb::master::{
     GetMasterRegistrationRequestPB,
     GetMasterRegistrationResponsePB,
+    ListMastersRequestPB,
+    ListMastersResponsePB,
     ListTablesRequestPB,
     ListTablesResponsePB,
     MasterErrorPB_Code as MasterErrorCode
@@ -41,12 +44,18 @@ impl MasterProxy {
 
     /// Creates a new `MasterProxy` with an initial seed of master addresses, and a `Messenger`
     /// instance to handle sending RPCs.
-    pub fn new(masters: Vec<SocketAddr>, messenger: Messenger) -> MasterProxy {
+    pub fn new(masters: &[SocketAddr], messenger: Messenger) -> MasterProxy {
         assert!(masters.len() > 0);
+
+        // Give it a bit more capacity since we modify it under a mutex and reallocations are
+        // especially painful.
+        let mut addrs = HashSet::with_capacity(masters.len() * 2);
+        addrs.extend(masters.iter().cloned());
+
         let proxy = MasterProxy {
             inner: Arc::new(Inner {
                 leader: Mutex::new(Leader::Unknown(Vec::with_capacity(QUEUE_LEN))),
-                masters: Mutex::new(masters),
+                masters: Mutex::new(addrs),
                 messenger: messenger,
             }),
         };
@@ -98,7 +107,7 @@ impl Leader {
 /// Thread-safe container for master proxy state.
 struct Inner {
     leader: Mutex<Leader>,
-    masters: Mutex<Vec<SocketAddr>>,
+    masters: Mutex<HashSet<SocketAddr>>,
     messenger: Messenger,
 }
 
@@ -112,29 +121,30 @@ struct Inner {
 ///    each can trigger a cancellation of all others. Each RPC registers step 2. as the callback
 ///    handler.
 ///
-/// 2. *`GetMasterRegistration` RPC callback handler* - Branch depending on the result:
+/// 2. *`GetMasterRegistration` RPC callback handler* - Check if the RPC has been cancelled, and if
+///    so do nothing. Cancellation can happen if another master has already reported being the
+///    leader. Otherwise, branch on the result:
 ///      a. RPC completes, with state LEADER. goto 3.
 ///      b. RPC completes, with other state. goto 4.
 ///      c. RPC completes, but with a Master Error. goto retry.
 ///      d. RPC timed out. This is likely because the replica is unreachable. goto retry.
 ///
-/// 3. *`GetMasterRegistration` LEADER state response handler* - Check if the RPC has been cancelled,
-///    and if so, do nothing. Cancellation can happen if another master has already reported being
-///    the leader. Otherwise, replace the leader cache with the replica's address, send all queued
-///    RPCs, and cancel all other RPCs. Finally, issue a `ListMasters` RPC to the leader, and
-///    register step 6 as the callback handler.
+/// 3. *`GetMasterRegistration` LEADER state response handler* - Replace the leader cache with the
+///    replica's address, send all queued RPCs, and cancel all other RPCs. Finally, issue a
+///    `ListMasters` RPC to the leader, and register step 6 as the callback handler.
 ///
-/// 4. *`GetMasterRegistration` non LEADER state response handler* - Check if the RPC has been
-///    cancelled, and if so do nothing. Create and send a `ListMasters` RPC to the leader with
-///    the original shared cancellation token, and register step 7. as the callback handler.
+/// 4. *`GetMasterRegistration` non LEADER state response handler* - Create and send a
+///    `ListMasters` RPC to the replica. Include the original shared cancellation token, and
+///    register step 7. as the callback handler.
 ///
-/// 5. *`ListMasters` response handler after not discovering the leader* - Branch depending on the result:
-///     a. RPC completes. For every newly discovered master instance, create and send it a
-///        `GetMasterRegistration` RPC including the original shared cancellation token, and with
-///        step 2. as the callback handler. goto retry (in order to retry the original non-leader
-///        master, in case it has been elected in the meantime).
-///     b. RPC completes, but with an AppStatus error. goto retry.
-///     c. RPC timed out. Likely because the replica is no long reachable. goto retry.
+/// 5. *`ListMasters` response handler after not discovering the leader* - Check if the RPC has
+///    been cancelled, and if so do nothing. Otherwise, branch on the result:
+///      a. RPC completes. For every newly discovered master instance, create and send it a
+///         `GetMasterRegistration` RPC including the original shared cancellation token, and with
+///         step 2. as the callback handler. goto retry (in order to retry the original replica, in
+///         case it has been elected in the meantime).
+///      b. RPC completes, but with an AppStatus error. goto retry.
+///      c. RPC timed out. Likely because the replica is no long reachable. goto retry.
 ///
 /// 6. *`ListMasters` response handler after discovering the leader* - The goal of this
 ///    `ListMasters` is to make sure that we know about all of the master replicas that the leader
@@ -142,76 +152,139 @@ struct Inner {
 ///    `AppStatus` error), retry after a backoff period. Otherwise, add the newly discovered master
 ///    replicas to the known set.
 ///
-/// This is a free function instead of a method on `Inner` because Rust does not have support for
+/// retry. Wait for a backoff period, and then send a `GetMasterRegistration` RPC along with the
+///        original cancellation token. Register step 2. as the callback handler.
+///
+/// This function should only be called once per instance of the cached leader master becoming
+/// stale.
+///
+/// This is a free function instead of a method on `Inner`, because Rust does not have support for
 /// using `Arc<Self>` as the `self` parameter.
 fn refresh_leader(inner: &Arc<Inner>) {
+    // Step 1.
     debug_assert!(!inner.leader.lock().is_known());
-    // The deadline should be long enough that non-failed masters can respond, but short enough
-    // that we don't waste a lot of time waiting for non-reachable masters before retrying.
-    // TODO: should this use a backoff?
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let cancel = Arc::new(AtomicBool::new(false));
     let masters = inner.masters.lock().clone();
-    let inflight = Arc::new(AtomicUsize::new(masters.len()));
     for addr in masters {
         let mut rpc = master::get_master_registration(addr, GetMasterRegistrationRequestPB::new());
-        rpc.set_deadline(deadline);
+        rpc.cancel = Some(cancel.clone());
         let i = inner.clone();
-        let inflight = inflight.clone();
         rpc.callback = Some(Box::new(move |result, rpc: Rpc| {
-            handle_leader_refresh_response(i, inflight, result, rpc);
+            handle_get_master_registration_response(i, result, rpc);
         }));
         inner.messenger.send(rpc);
     }
 }
 
-/// Handles the response to a leader refresh `GetMasterRegistration` RPC.
-///
-/// This is a free function instead of a method on `Inner` because Rust does not have support for
-/// using `Arc<Self>` as the `self` parameter.
-fn handle_leader_refresh_response(inner: Arc<Inner>,
-                                  inflight: Arc<AtomicUsize>,
-                                  result: RpcResult,
-                                  rpc: Rpc) {
-    let response = rpc.response::<GetMasterRegistrationResponsePB>();
+/// Step 2. Handle the response to a leader refresh `GetMasterRegistration` RPC.
+fn handle_get_master_registration_response(inner: Arc<Inner>, result: RpcResult, mut rpc: Rpc) {
+    // Short circuit if the RPC has already been cancelled (indicating that another replica was
+    // already found to be the leader).
+    let cancel = rpc.cancel.take().unwrap();
+    if cancel.load(Ordering::Relaxed) { return; }
+
     if let Err(error) = result {
         // Typically due to an RPC timeout because the master is not reachable.
-        info!("failed GetMasterRegistration RPC to master {}:  {}",
-                &rpc.addr, &error);
-        handle_leader_refresh_failure(inner, inflight);
-    } else if response.has_error() {
-        // This can happen when the master is not yet initialized:
+        info!("failed GetMasterRegistration RPC to master {}: {}", &rpc.addr, &error);
+        return retry_get_master_registration(inner, rpc.addr, cancel);
+    }
+
+    // TODO(perf): Once Rust has non-lexical lifetimes, reduce the number of rpc::response calls.
+
+    if rpc.response::<GetMasterRegistrationResponsePB>().has_error() {
+        // This can happen when the master is not yet initialized, e.g.:
         // code: CATALOG_MANAGER_NOT_INITIALIZED
         // status {code: SERVICE_UNAVAILABLE message: "catalog manager has not been initialized"}
         info!("failed GetMasterRegistration RPC to master {}: {:?}",
-              &rpc.addr, response.get_error());
-        handle_leader_refresh_failure(inner, inflight);
-    } else {
-        if response.get_role() == Role::LEADER {
-            debug!("discovered leader {}", &rpc.addr);
-            // Swap out the leader cache with this one.
-            let leader = mem::replace(&mut *inner.leader.lock(), Leader::Known(rpc.addr));
-            match leader {
-                Leader::Known(addr) => warn!("existing known leader {} swapped for {}",
-                                             addr, &rpc.addr),
-                Leader::Unknown(queued_rpcs) => {
-                    for mut queued_rpc in queued_rpcs {
-                        queued_rpc.addr = rpc.addr;
-                        inner.messenger.send(queued_rpc);
-                    }
-                },
+              &rpc.addr, rpc.response::<GetMasterRegistrationResponsePB>().get_error());
+        return retry_get_master_registration(inner, rpc.addr, cancel);
+    }
+
+    if rpc.response::<GetMasterRegistrationResponsePB>().get_role() == Role::LEADER {
+        // Step 3.
+        let leader = {
+            // Swap out the Unknown leader queue with the new Known leader. We also attempt to
+            // cancel all other RPCs while holding the lock, so that the cancel happens atomically
+            // with changing the leader state. This prevents a race between the cancellation check
+            // at the start of this function and now.
+            let mut leader = inner.leader.lock();
+            if !cancel.compare_and_swap(false, true, Ordering::Relaxed) {
+                // Another replica has already claimed to be the leader.
+                return;
             }
-            inflight.fetch_sub(1, Ordering::Relaxed);
-        } else {
-            handle_leader_refresh_failure(inner, inflight);
+
+            mem::replace(&mut *leader, Leader::Known(rpc.addr))
+        };
+        debug!("new master leader discovered: {}", &rpc.addr);
+        match leader {
+            Leader::Unknown(queued_rpcs) => {
+                for mut queued_rpc in queued_rpcs {
+                    queued_rpc.addr = rpc.addr;
+                    inner.messenger.send(queued_rpc);
+                }
+            },
+            Leader::Known(addr) => unreachable!("existing known leader {} swapped for {}",
+                                                addr, &rpc.addr),
         }
+    } else {
+        // Step 4.
+        let mut list_masters_rpc = master::list_masters(rpc.addr, ListMastersRequestPB::new());
+        list_masters_rpc.cancel = Some(cancel);
+        let i = inner.clone();
+        list_masters_rpc.callback = Some(Box::new(move |result, rpc| {
+            handle_list_masters_response_from_follower(i, result, rpc);
+        }));
+        inner.send(list_masters_rpc);
     }
 }
 
-fn handle_leader_refresh_failure(inner: Arc<Inner>, inflight: Arc<AtomicUsize>) {
-    if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
-        warn!("unable to find leader master, retrying...");
-        refresh_leader(&inner);
+/// Step 5.
+fn handle_list_masters_response_from_follower(inner: Arc<Inner>, result: RpcResult, mut rpc: Rpc) {
+    // Short circuit if the RPC has already been cancelled (indicating that another replica was
+    // already found to be the leader).
+    let cancel = rpc.cancel.take().unwrap();
+    if cancel.load(Ordering::Relaxed) { return; }
+
+    if let Err(error) = result {
+        // Typically due to an RPC timeout because the master is not reachable.
+        info!("failed ListMasters RPC to master {}: {}", &rpc.addr, &error);
+        return retry_get_master_registration(inner, rpc.addr, cancel);
     }
+
+    let response = rpc.response::<ListMastersResponsePB>();
+    if response.has_error() {
+        info!("failed ListMasters RPC to master {}: {:?}", &rpc.addr, response.get_error());
+        return retry_get_master_registration(inner, rpc.addr, cancel);
+    }
+
+    // TODO: does this result in DNS lookups? we should probably be doing this on a threadpool.
+
+    //let mut master_addrs = Vec::with_capacity(response.get_masters().len());
+    for master in response.get_masters() {
+        if master.has_registration() {
+            for addr in master.get_registration().get_rpc_addresses() {
+                //master_addrs.push(SocketAddr::from_str(addr.get_
+
+            }
+        }
+    }
+
+    {
+        let masters = inner.masters.lock();
+    }
+
+
+}
+
+/// Step 6.
+fn handle_list_masters_response_from_leader(inner: Arc<Inner>, result: RpcResult, rpc: Rpc) {
+}
+
+/// Retry step.
+fn retry_get_master_registration(inner: Arc<Inner>,
+                                 master: SocketAddr,
+                                 cancel: Arc<AtomicBool>) {
+    unimplemented!()
 }
 
 impl Inner {
@@ -254,7 +327,7 @@ mod tests {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(0));
 
-        let proxy = MasterProxy::new(cluster.master_addrs().to_owned(), Messenger::new().unwrap());
+        let proxy = MasterProxy::new(cluster.master_addrs(), Messenger::new().unwrap());
 
 
         let (send, recv) = sync_channel(0);

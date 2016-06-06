@@ -1,7 +1,8 @@
+#![feature(lookup_host)]
+
 #![allow(dead_code)]
 
 extern crate byteorder;
-extern crate eventual;
 extern crate kudu_pb;
 extern crate mio;
 extern crate netbuf;
@@ -9,6 +10,7 @@ extern crate parking_lot;
 extern crate protobuf;
 extern crate rand;
 extern crate slab;
+extern crate threadpool;
 extern crate vec_map;
 
 #[cfg(test)] extern crate tempdir;
@@ -18,6 +20,7 @@ extern crate vec_map;
 
 mod backoff;
 mod bit_set;
+mod dns;
 mod error;
 mod master;
 mod row;

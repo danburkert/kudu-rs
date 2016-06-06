@@ -37,11 +37,13 @@ impl MiniCluster {
         let dir = TempDir::new("kudu-rs-mini-cluster").expect("unable to create temp dir");
 
         let mut master_procs = Vec::with_capacity(conf.num_masters as usize);
-        let mut master_addrs = Vec::with_capacity(conf.num_masters as usize);
 
-        for i in 0..conf.num_masters {
-            let addr = get_unbound_address();
+        let addrs = get_unbound_addresses((conf.num_masters + conf.num_tservers) as usize);
+        let (master_addrs, tserver_addrs) = addrs.split_at(conf.num_masters as usize);
 
+        let masters = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+
+        for (i, addr) in master_addrs.iter().enumerate() {
             let path = dir.path().join(format!("master-{}", i));
             let logs = dir.path().join(format!("master-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create master log directory");
@@ -56,6 +58,10 @@ impl MiniCluster {
             command.stderr(Stdio::piped());
             conf.configure(&mut command);
 
+            if conf.num_masters > 1 {
+                command.arg(format!("--master_addresses={}", masters));
+            }
+
             let mut process = command.spawn().expect("unable to start master");
             let stderr = process.stderr.take().unwrap();
             let port = addr.port();
@@ -69,13 +75,10 @@ impl MiniCluster {
             });
 
             master_procs.push(ProcessHandle(process));
-            master_addrs.push(addr);
         }
 
         let mut tserver_procs = Vec::with_capacity(conf.num_tservers as usize);
-        let masters = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
-        for i in 0..conf.num_tservers {
-            let addr = get_unbound_address();
+        for (i, addr) in tserver_addrs.iter().enumerate() {
             let path = dir.path().join(format!("tserver-{}", i));
             let logs = dir.path().join(format!("tserver-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create tserver log directory");
@@ -108,7 +111,7 @@ impl MiniCluster {
 
         MiniCluster {
             dir: dir,
-            master_addrs: master_addrs,
+            master_addrs: master_addrs.to_owned(),
             master_procs: master_procs,
             tserver_procs: tserver_procs,
         }
@@ -129,6 +132,19 @@ impl Default for MiniCluster {
 /// Attempts to get a local unbound socket address for testing.
 pub fn get_unbound_address() -> SocketAddr {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+}
+
+pub fn get_unbound_addresses(count: usize) -> Vec<SocketAddr> {
+    let mut listeners = Vec::with_capacity(count);
+    let mut addrs = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listeners.push(listener);
+        addrs.push(addr);
+    }
+    addrs
 }
 
 /// Mini cluster configuration options. Unless otherwise specified, the defaults match the master
