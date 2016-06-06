@@ -10,7 +10,6 @@ extern crate parking_lot;
 extern crate protobuf;
 extern crate rand;
 extern crate slab;
-extern crate threadpool;
 extern crate vec_map;
 
 #[cfg(test)] extern crate tempdir;

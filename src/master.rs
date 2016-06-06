@@ -36,6 +36,7 @@ const QUEUE_LEN: usize = 256;
 ///
 /// This type is a thin public facade over the `Inner` type, which holds all state. The state must
 /// be shareable among RPC callbacks, so it's wrapped in an `Arc`.
+#[derive(Clone)]
 pub struct MasterProxy {
     inner: Arc<Inner>,
 }
@@ -85,6 +86,85 @@ impl MasterProxy {
             callback.callback(result, rpc);
         }));
         self.inner.send(rpc);
+    }
+
+    fn refresh_leader(&self) {
+        debug_assert!(!self.inner.leader.lock().is_known());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let masters = self.inner.masters.lock().iter().cloned().collect::<Vec<_>>();
+        for addr in masters {
+            self.send_list_masters(addr, cancel.clone());
+        }
+    }
+
+    fn send_list_masters(&self, addr: SocketAddr, cancel: Arc<AtomicBool>) {
+        let mut rpc = master::list_masters(addr, ListMastersRequestPB::new());
+        rpc.cancel = Some(cancel);
+        let proxy = self.clone();
+        rpc.callback = Some(Box::new(move |result, rpc: Rpc| {
+            proxy.handle_list_masters_response(result, rpc);
+        }));
+        self.inner.messenger.send(rpc);
+    }
+
+    fn retry_list_masters(self, rpc: Rpc) {
+        // TODO: backoff wait
+        self.inner.messenger.send(rpc);
+    }
+
+    /// The result should never fail, since it keeps looping forever.
+    fn handle_list_masters_response(self, result: RpcResult, rpc: Rpc) {
+        // Short circuit if the RPC has already been cancelled (indicating that the master has
+        // already been found).
+        if rpc.cancelled() { return; }
+
+        // The only way the RPC can fail is if it is cancelled, which the check above has already
+        // covered. Since we don't set a timeout, it should continue spinning in the connection
+        // forever if it is not cancelled.
+        //
+        // TODO: switch this back to always having a timeout for RPCs, and making the timeout for
+        // these requests something like 60 seconds.
+        if let Err(error) = result {
+            panic!("ListMasters RPC to master {} unexpectedly failed: {}", &rpc.addr, error);
+        }
+
+        {
+            let response = rpc.response::<ListMastersResponsePB>();
+            if response.has_error() {
+                info!("ListMasters RPC to master {} failed: {:?}", &rpc.addr,
+                      response.get_error());
+                // Fall through to rety.
+            } else {
+
+                let hostports = Vec::new();
+                for server_entry in response.get_masters() {
+                    if server_entry.has_error()  { continue; }
+
+                }
+            }
+        }
+
+        self.retry_list_masters(rpc);
+
+        // TODO: does this result in DNS lookups? we should probably be doing this on a threadpool.
+
+        //let mut master_addrs = Vec::with_capacity(response.get_masters().len());
+        /*
+        for master in response.get_masters() {
+            if master.has_registration() {
+                for addr in master.get_registration().get_rpc_addresses() {
+                    //master_addrs.push(SocketAddr::from_str(addr.get_
+                }
+            }
+        }
+
+        {
+            let masters = inner.masters.lock();
+        }
+
+        */
+
+
     }
 }
 
@@ -264,7 +344,6 @@ fn handle_list_masters_response_from_follower(inner: Arc<Inner>, result: RpcResu
         if master.has_registration() {
             for addr in master.get_registration().get_rpc_addresses() {
                 //master_addrs.push(SocketAddr::from_str(addr.get_
-
             }
         }
     }

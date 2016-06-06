@@ -1,17 +1,40 @@
-use std::net::{lookup_host, SocketAddr};
-use threadpool;
+use std::collections::HashSet;
+use std::net::{lookup_host, IpAddr, SocketAddr};
+use std::thread;
+use std::str::FromStr;
 
-use kudu_pb::wire_protocol::ServerRegistrationPB;
+use kudu_pb::common::HostPortPB;
 
-/// Resolves
-fn resolve_server_registrations<F>(server_registrations: &[ServerRegistrationPB], f: F) where F: FnOnce(Vec<SocketAddr>) {
-
+/// Resolves a sequence of hostnames into a set of socket addresses. If the hostname DNS lookup
+/// fails, it is filtered from the result. The results are passed to the provided callback upon
+/// completion.
+pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
+    let mut addrs = HashSet::new();
+    for hostport in hostports {
+        // If the host is just a IP address, we may be able to parse it directly.
+        if let Ok(addr) = IpAddr::from_str(hostport.get_host()) {
+            // TODO: check for overflow on cast
+            addrs.insert(SocketAddr::new(addr, hostport.get_port() as u16));
+            continue;
+        }
+        // Otherwise fall back to a DNS lookup.
+        if let Ok(lookup_results) = lookup_host(hostport.get_host()) {
+            for result in lookup_results {
+                if let Ok(mut addr) = result {
+                    addr.set_port(hostport.get_port() as u16);
+                    addrs.insert(addr);
+                }
+            }
+        }
+    }
+    addrs
 }
 
-//#[test]
-//fn test_dns() {
-    //let _ = env_logger::init();
-    //for host in ::std::net::lookup_host("rust-lang.org").unwrap() {
-        //info!("found address: {:?}", host.unwrap());
-    //}
-//}
+/// Asynchronously resolves a sequence of hostnames into a set of socket addresses. If the hostname
+/// DNS lookup fails, it is filtered from the result. The results are passed to the provided
+/// callback upon completion.
+pub fn resolve_hosts_async<F>(registrations: Vec<HostPortPB>, f: F)
+where F: FnOnce(HashSet<SocketAddr>) + Send + 'static {
+    // TODO: is this done frequently enough to warrant a threadpool?
+    thread::spawn(move || f(resolve_hosts(&registrations)));
+}
