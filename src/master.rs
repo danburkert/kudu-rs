@@ -3,7 +3,7 @@ use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use backoff::Backoff;
 use rpc::{
@@ -33,9 +33,6 @@ const QUEUE_LEN: usize = 256;
 /// The master proxy tracks the current leader master, and proxies RPCs to it. If any RPC fails
 /// with `MasterErrorCode::NotTheLeader`, the cached leader is flushed (if it has not happened
 /// already), and the RPC is retried after discovering the new leader.
-///
-/// This type is a thin public facade over the `Inner` type, which holds all state. The state must
-/// be shareable among RPC callbacks, so it's wrapped in an `Arc`.
 #[derive(Clone)]
 pub struct MasterProxy {
     inner: Arc<Inner>,
@@ -68,8 +65,7 @@ impl MasterProxy {
     /// completion.
     fn list_tables(&self, deadline: Instant, request: ListTablesRequestPB, callback: Box<Callback>) {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut rpc = master::list_tables(addr, request);
-        rpc.set_deadline(deadline);
+        let mut rpc = master::list_tables(addr, deadline, request);
         let inner = self.inner.clone();
         rpc.callback = Some(Box::new(move |result: RpcResult, rpc: Rpc| {
             if result.is_ok() {
@@ -184,7 +180,7 @@ impl Leader {
     }
 }
 
-/// Thread-safe container for master proxy state.
+/// Thread-safe container for master metadata.
 struct Inner {
     leader: Mutex<Leader>,
     masters: Mutex<HashSet<SocketAddr>>,
@@ -245,8 +241,16 @@ fn refresh_leader(inner: &Arc<Inner>) {
     debug_assert!(!inner.leader.lock().is_known());
     let cancel = Arc::new(AtomicBool::new(false));
     let masters = inner.masters.lock().clone();
+
+    // The deadline should be long enough that non-failed masters can respond, but short enough
+    // that we don't waste a lot of time waiting for non-reachable masters before retrying.
+    // TODO: should this use a backoff?
+    let deadline = Instant::now() + Duration::from_secs(5);
+
     for addr in masters {
-        let mut rpc = master::get_master_registration(addr, GetMasterRegistrationRequestPB::new());
+        let mut rpc = master::get_master_registration(addr,
+                                                      deadline,
+                                                      GetMasterRegistrationRequestPB::new());
         rpc.cancel = Some(cancel.clone());
         let i = inner.clone();
         rpc.callback = Some(Box::new(move |result, rpc: Rpc| {

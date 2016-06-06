@@ -101,7 +101,6 @@ impl Messenger {
 
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
     pub fn send(&self, rpc: Rpc) {
-        debug_assert!(rpc.deadline.is_some() || rpc.cancel.is_some());
         // TODO: is there a better way to handle queue failure?
         self.inner.channel.send(Command::Send(rpc)).unwrap();
     }
@@ -226,8 +225,8 @@ mod tests {
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let mut rpc = master::ping(get_unbound_address(), kudu_pb::master::PingRequestPB::new());
-        rpc.set_deadline(now + Duration::from_millis(300));
+        let rpc = master::ping(get_unbound_address(), now + Duration::from_millis(300),
+                               kudu_pb::master::PingRequestPB::new());
 
         let (result, _) = messenger.send_sync(rpc);
 
@@ -251,7 +250,8 @@ mod tests {
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let mut rpc = master::ping(get_unbound_address(), kudu_pb::master::PingRequestPB::new());
+        let mut rpc = master::ping(get_unbound_address(), now + Duration::from_millis(500),
+                                   kudu_pb::master::PingRequestPB::new());
 
         let (send, recv) = sync_channel::<(RpcResult, Rpc)>(0);
         assert!(rpc.callback.is_none());

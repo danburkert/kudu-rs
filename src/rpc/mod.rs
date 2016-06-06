@@ -220,7 +220,7 @@ pub struct Rpc {
     pub addr: SocketAddr,
     pub service_name: &'static str,
     pub method_name: &'static str,
-    pub deadline: Option<Instant>,
+    pub deadline: Instant,
     pub required_feature_flags: Vec<u32>,
     pub request: Box<Message>,
     pub response: Box<Message>,
@@ -230,15 +230,6 @@ pub struct Rpc {
 }
 
 impl Rpc {
-    pub fn set_deadline(&mut self, deadline: Instant) {
-        self.deadline = Some(deadline);
-    }
-
-    /// Returns `true` if the RPCs deadline is not after `now`.
-    pub fn timed_out(&self, now: Instant) -> bool {
-        self.deadline.map(|deadline| deadline <= now).unwrap_or(false)
-    }
-
     fn complete(mut self) {
         if let Some(callback) = self.callback.take() {
             callback.callback(Ok(()), self)
@@ -288,8 +279,9 @@ mod test {
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
         let messenger = Messenger::new().unwrap();
-        let mut rpc = master::ping(cluster.master_addrs()[0], kudu_pb::master::PingRequestPB::new());
-        rpc.set_deadline(Instant::now() + Duration::from_secs(5));
+        let rpc = master::ping(cluster.master_addrs()[0],
+                               Instant::now() + Duration::from_secs(5),
+                               kudu_pb::master::PingRequestPB::new());
 
         let (result, _rpc) = messenger.send_sync(rpc);
         result.unwrap();
