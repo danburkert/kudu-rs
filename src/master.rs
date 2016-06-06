@@ -44,6 +44,13 @@ pub struct MasterProxy {
     inner: Arc<Inner>,
 }
 
+// TODO:
+//
+// * Test leader cache invalidation.
+// * Test master discovery.
+// * Implement queued RPC timeout.
+// * Invalidate masters when they leave the consensus group
+
 impl MasterProxy {
 
     /// Creates a new `MasterProxy` with an initial seed of master addresses, and a `Messenger`
@@ -62,8 +69,23 @@ impl MasterProxy {
                 messenger: messenger,
             }),
         };
-        proxy.refresh_leader();
+        proxy.refresh_leader_cache();
         proxy
+    }
+
+    /// Returns the masters which this `MasterProxy` has discovered.
+    pub fn masters(&self) -> Vec<SocketAddr> {
+        let mut masters = Vec::with_capacity(5);
+        masters.extend(self.inner.masters.lock().iter().cloned());
+        masters
+    }
+
+    /// Returns the leader master, if it is known.
+    pub fn leader(&self) -> Option<SocketAddr> {
+        match *self.inner.leader.lock() {
+            Leader::Known(leader) => Some(leader),
+            Leader::Unknown(_) => None,
+        }
     }
 
     /// Sends a `ListTables` RPC to the leader master, and executes the provided callback on
@@ -72,24 +94,79 @@ impl MasterProxy {
                        deadline: Instant,
                        request: ListTablesRequestPB,
                        callback: Box<Callback>) {
+
+        struct ListTablesCB(MasterProxy, Box<Callback>, Backoff);
+        impl Callback for ListTablesCB {
+            fn callback(mut self: Box<Self>, result: RpcResult, mut rpc: Rpc) {
+                if result.is_ok() {
+                    let error_code = {
+                        let resp = rpc.response::<ListTablesResponsePB>();
+                        debug!("{:?} callback, response: {:?}", rpc, resp);
+                        if resp.has_error() { Some(resp.get_error().get_code()) }
+                        else { None }
+                    };
+                    match error_code {
+                        Some(MasterErrorCode::NOT_THE_LEADER) => {
+                            self.0.reset_leader_cache(rpc.addr);
+                            let proxy: MasterProxy = self.0.clone();
+                            rpc.callback = Some(self);
+                            return proxy.send_to_leader(rpc);
+                        },
+                        Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
+                            // This is a transient error which occurs when the master is starting up.
+                            let delay = Duration::from_millis(self.2.next_backoff_ms());
+                            info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
+                                   rpc, delay);
+                            let messenger = self.0.inner.messenger.clone();
+                            rpc.callback = Some(self);
+                            return messenger.delayed_send(delay, rpc);
+                        },
+                        _ => (), // fall through to callback completion
+                    }
+                }
+
+                // Complete the callback
+                self.1.callback(result, rpc);
+            }
+        }
+
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
         let mut rpc = master::list_tables(addr, deadline, request);
-        let inner = self.inner.clone();
-        rpc.callback = Some(Box::new(move |result: RpcResult, rpc: Rpc| {
-            if result.is_ok() {
-                let is_not_leader_error = {
-                    let resp = rpc.response::<ListTablesResponsePB>();
-                    resp.has_error() &&
-                        resp.get_error().get_code() == MasterErrorCode::NOT_THE_LEADER
-                };
-                if is_not_leader_error {
-                    inner.send(rpc);
-                    return;
-                }
-            };
-            callback.callback(result, rpc);
-        }));
-        self.inner.send(rpc);
+        rpc.callback = Some(Box::new(ListTablesCB(self.clone(), callback,
+                                                  Backoff::with_duration_range(8, 4096))));
+        self.send_to_leader(rpc);
+    }
+
+    /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
+    /// leader is discovered.
+    fn send_to_leader(&self, mut rpc: Rpc) {
+        match *self.inner.leader.lock() {
+            Leader::Known(addr) => {
+                rpc.addr = addr;
+                self.inner.messenger.send(rpc);
+            },
+            Leader::Unknown(ref mut queue) => {
+                trace!("queueing rpc: {:?}", rpc);
+                queue.push(rpc);
+            },
+        }
+    }
+
+    /// Clears the leader cache if the currently cached leader matches the provided address.
+    /// If the cache is cleared, a refresh is initiated.
+    fn reset_leader_cache(&self, stale_leader: SocketAddr) {
+        {
+            let mut master = self.inner.leader.lock();
+            match *master {
+                // Do nothing if the cached leader has already been refreshed.
+                Leader::Unknown(_) => return,
+                Leader::Known(leader) if leader != stale_leader => return,
+                // Otherwise fall through to cache eviction and refresh.
+                _ => (),
+            }
+            *master = Leader::Unknown(Vec::new());
+        }
+        self.refresh_leader_cache();
     }
 
     /// Asynchronously refreshes the cached leader master.
@@ -110,7 +187,7 @@ impl MasterProxy {
     ///
     /// If the `ListMasters` RPC fails or if it does not discover a leader, then it is retried
     /// after a backoff period.
-    fn refresh_leader(&self) {
+    fn refresh_leader_cache(&self) {
         debug_assert!(!self.inner.leader.lock().is_known());
         let cancel = Arc::new(AtomicBool::new(false));
         let masters = self.inner.masters.lock().iter().cloned().collect::<Vec<_>>();
@@ -147,7 +224,6 @@ impl MasterProxy {
         rpc.deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
         trace!("retrying ListMasters RPC to {} after delay of {:?}", &rpc.addr, &delay);
         self.inner.messenger.delayed_send(delay, rpc);
-        //self.inner.messenger.send(rpc);
     }
 
     /// Handles the response to a `ListMasters` RPC.
@@ -222,7 +298,8 @@ impl MasterProxy {
         }
 
         if !discovered_masters.is_empty() {
-            info!("discovered masters: {:?}", discovered_masters);
+            info!("discovered masters: [{}]",
+                  discovered_masters.iter().map(ToString::to_string).collect::<Vec<_>>().join(","));
             if cancel.load(Ordering::Relaxed) { return; }
             let deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
             for addr in discovered_masters {
@@ -267,7 +344,7 @@ impl MasterProxy {
                     self.inner.messenger.send(queued_rpc);
                 }
             },
-            // This can't happen, since `refresh_leader` is only executed once per leader cache
+            // This can't happen, since `refresh_leader_cache` is only executed once per leader cache
             // invalidation, and only a single callback can replace the cache due to the
             // cancellation token.
             Leader::Known(prev_addr) => unreachable!("existing known leader {} swapped for {}",
@@ -299,74 +376,92 @@ struct Inner {
     messenger: Messenger,
 }
 
-impl Inner {
-    /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
-    /// leader is discovered.
-    fn send(&self, mut rpc: Rpc) {
-        let addr = match *self.leader.lock() {
-            Leader::Known(addr) => addr,
-            Leader::Unknown(ref mut queue) => {
-                trace!("queueing rpc: {:?}", rpc);
-                queue.push(rpc);
-                return;
-            },
-        };
-        rpc.addr = addr;
-        self.messenger.send(rpc);
-    }
-}
-
-struct LeaderRefreshCallback {
-    inner: Arc<Inner>,
-    backoff: Backoff,
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::time::{Duration, Instant};
     use std::sync::mpsc::sync_channel;
 
     use mini_cluster::{get_unbound_address, MiniCluster, MiniClusterConfig};
+    use rpc::{
+        channel_callback,
+        Messenger,
+        Rpc,
+        RpcResult,
+    };
     use super::*;
-    use kudu_pb::master::{ListTablesRequestPB};
-    use rpc::Messenger;
 
     use env_logger;
-    use kudu_pb;
+    use kudu_pb::master::{ListTablesRequestPB, ListTablesResponsePB};
 
+    fn check_list_tables_response(result: RpcResult, rpc: Rpc) {
+        assert!(result.is_ok(), "failed result: {:?}", result);
+        let response = rpc.response::<ListTablesResponsePB>();
+        assert!(!response.has_error(), "failed response: {:?}", response);
+        assert!(response.get_tables().is_empty(), "response: {:?}", response);
+    }
+
+    /// Tests that the leader is discovered in a single-master cluster.
     #[test]
-    fn list_tables() {
+    fn leader_discovery_single_master() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default().num_masters(2).num_tservers(0));
-
-        //::std::thread::sleep_ms(5000);
+        let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(1));
 
         let proxy = MasterProxy::new(cluster.master_addrs(), Messenger::new().unwrap());
 
         let (send, recv) = sync_channel(0);
-        proxy.list_tables(Instant::now() + Duration::from_millis(500),
-                          ListTablesRequestPB::new(), Box::new(move |result, rpc| {
-                              send.send((result, rpc)).unwrap();
-                          }));
+        proxy.list_tables(Instant::now() + Duration::from_secs(5),
+                          ListTablesRequestPB::new(), channel_callback(send));
 
-        let (response, rpc) = recv.recv().unwrap();
+        let (result, rpc) = recv.recv().unwrap();
+        check_list_tables_response(result, rpc);
     }
 
-    //#[test]
-    //fn list_tables_with_bogus_masters() {
-        //let _ = env_logger::init();
-        //let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(0));
+    /// Tests that the leader is discovered in a multi-master cluster.
+    #[test]
+    fn leader_discovery_multi_master() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default().num_masters(3).num_tservers(0));
 
-        //let masters = vec![get_unbound_address(), get_unbound_address()];
-        //let proxy = MasterProxy::new(masters, Messenger::new().unwrap());
+        let proxy = MasterProxy::new(cluster.master_addrs(), Messenger::new().unwrap());
 
+        let (send, recv) = sync_channel(0);
+        proxy.list_tables(Instant::now() + Duration::from_secs(5),
+                          ListTablesRequestPB::new(), channel_callback(send));
 
-        //let (send, recv) = sync_channel(0);
-        //proxy.list_tables(Instant::now() + Duration::from_millis(500),
-                          //ListTablesRequestPB::new(), Box::new(move |result, rpc| {
-                              //send.send((result, rpc)).unwrap();
-                          //}));
+        let (result, rpc) = recv.recv().unwrap();
+        check_list_tables_response(result, rpc);
+    }
 
-        //let (response, rpc) = recv.recv().unwrap();
-    //}
+    /// Tests that masters which are not part of the original seed list are discovered in a
+    /// multi-master cluster.
+    #[test]
+    fn master_discovery() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default().num_masters(2).num_tservers(0));
+
+        let proxy = MasterProxy::new(&cluster.master_addrs()[0..1], Messenger::new().unwrap());
+
+        let (send, recv) = sync_channel(0);
+        proxy.list_tables(Instant::now() + Duration::from_secs(5),
+                          ListTablesRequestPB::new(), channel_callback(send));
+
+        let (result, rpc) = recv.recv().unwrap();
+        check_list_tables_response(result, rpc);
+
+        let mut discovered_masters = HashSet::new();
+        let mut cluster_masters = HashSet::new();
+        discovered_masters.extend(proxy.masters());
+        cluster_masters.extend(cluster.master_addrs().iter().cloned());
+        assert_eq!(cluster_masters, discovered_masters);
+    }
+
+    /// Tests that the `MasterProxy` will remove masters not known by the leader.
+    fn master_cleanup() {
+    }
+
+    /// Tests that RPCs are timed out when the leader is unavailable.
+    #[test]
+    fn timeout() {
+    }
 }

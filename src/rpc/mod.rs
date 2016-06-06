@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, SendError};
 use std::time::Instant;
 
 use kudu_pb::rpc_header;
@@ -207,13 +208,23 @@ pub type RpcResult = result::Result<(), RpcError>;
 /// the failure.
 pub trait Callback: Send {
     fn callback(self: Box<Self>, result: RpcResult, rpc: Rpc);
-
 }
 
 impl<F> Callback for F where F: FnOnce(RpcResult, Rpc) + Send {
     fn callback(self: Box<F>, result: RpcResult, rpc: Rpc) {
         (*self)(result, rpc)
     }
+}
+
+/// Returns a callback which will send the result and RPC to a sync channel on completion. The
+/// caller should ensure that the channel has sufficient capcity for the callback, otherwise the
+/// RPC I/O thread will be blocked.
+pub fn channel_callback(sender: SyncSender<(RpcResult, Rpc)>) -> Box<Callback> {
+    Box::new(move |result, rpc| {
+        if let Err(SendError((result, rpc))) = sender.send((result, rpc)) {
+            warn!("callback channel disconnected, result: {:?}, rpc: {:?}", result, rpc)
+        }
+    })
 }
 
 pub struct Rpc {
@@ -263,7 +274,7 @@ impl Rpc {
 
 impl fmt::Debug for Rpc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Rpc {{ service: {}, method: {}, deadline: {:?} }}",
+        write!(f, "Rpc {{ {}::{}, deadline: {:?} }}",
                self.service_name, self.method_name, self.deadline)
     }
 }
@@ -272,7 +283,6 @@ impl fmt::Debug for Rpc {
 mod test {
     use std::time::{Duration, Instant};
     use std::sync::mpsc::sync_channel;
-    use std::sync::Arc;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use super::*;
@@ -294,38 +304,5 @@ mod test {
 
         let (result, _rpc) = messenger.send_sync(rpc);
         result.unwrap();
-    }
-
-    #[test]
-    fn test_list_masters() {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(3)
-                                                         .num_tservers(0));
-        let messenger = Messenger::new().unwrap();
-
-        let (send, recv) = sync_channel::<(RpcResult, Rpc)>(3);
-
-        ::std::thread::sleep_ms(5000);
-
-        for &master in cluster.master_addrs() {
-            info!("master addr: {:?}", master);
-            let mut rpc = master::list_masters(master, Instant::now() + Duration::from_secs(5),
-                                               kudu_pb::master::ListMastersRequestPB::new());
-            let send = send.clone();
-            rpc.callback = Some(Box::new(move |result, rpc| {
-                send.send((result, rpc)).unwrap();
-            }));
-            messenger.send(rpc);
-        }
-
-        drop(send);
-
-        for (result, rpc) in recv {
-            assert!(result.is_ok());
-            info!("response: {:?}", rpc.response::<kudu_pb::master::ListMastersResponsePB>());
-            info!("response size: {:?}", rpc.response::<kudu_pb::master::ListMastersResponsePB>().get_masters().len());
-            info!("rpc addr: {:?}", &rpc.addr);
-        }
     }
 }

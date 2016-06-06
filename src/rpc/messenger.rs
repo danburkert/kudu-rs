@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use std::fmt;
 
-use rpc::{Rpc, RpcResult};
+use rpc::{Rpc, RpcError, RpcResult};
 use rpc::connection::{Connection, ConnectionOptions};
 use util::duration_to_ms;
 
@@ -104,15 +104,20 @@ impl Messenger {
         })
     }
 
-    pub fn delayed_send(&self, delay: Duration, rpc: Rpc) {
-        debug_assert!(rpc.deadline > Instant::now() + delay);
-        self.inner.channel.send(Command::DelayedSend((delay, rpc))).unwrap();
+    pub fn delayed_send(&self, delay: Duration, mut rpc: Rpc) {
+        if Instant::now() + delay > rpc.deadline {
+            rpc.fail(RpcError::TimedOut);
+        } else {
+            rpc.response.clear();
+            self.inner.channel.send(Command::DelayedSend((delay, rpc))).unwrap();
+        }
     }
 
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
-    pub fn send(&self, rpc: Rpc) {
+    pub fn send(&self, mut rpc: Rpc) {
         // TODO: is there a better way to handle queue failure?
         debug_assert!(rpc.callback.is_some());
+        rpc.response.clear();
         self.inner.channel.send(Command::Send(rpc)).unwrap();
     }
 
@@ -197,8 +202,6 @@ impl Handler for MessengerHandler {
                     Err(_) => unreachable!()
                 };
 
-                //warn!("delay ms: {}", duration_to_ms(&delay));
-
                 event_loop.timeout_ms((TimeoutKind::DelayedSend, token), duration_to_ms(&delay)).unwrap();
             },
             Command::Timer((duration, callback)) => {
@@ -276,7 +279,7 @@ mod tests {
         }
 
         let elapsed = Instant::now().duration_since(now);
-        info!("elapsed: {:?}", elapsed);
+        println!("elapsed: {:?}", elapsed);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
         assert!(elapsed > Duration::from_millis(275));
@@ -309,7 +312,7 @@ mod tests {
         }
 
         let elapsed = Instant::now().duration_since(now);
-        info!("elapsed: {:?}", elapsed);
+        println!("elapsed: {:?}", elapsed);
 
         assert!(elapsed < Duration::from_millis(20));
     }
