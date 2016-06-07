@@ -18,6 +18,8 @@ use rpc::{
 use parking_lot::Mutex;
 use kudu_pb::common::HostPortPB;
 use kudu_pb::master::{
+    CreateTableRequestPB,
+    CreateTableResponsePB,
     GetMasterRegistrationRequestPB,
     GetMasterRegistrationResponsePB,
     ListMastersRequestPB,
@@ -43,13 +45,6 @@ const LEADER_REFRESH_TIMEOUT_SECS: u64 = 10;
 pub struct MasterProxy {
     inner: Arc<Inner>,
 }
-
-// TODO:
-//
-// * Test leader cache invalidation.
-// * Test master discovery.
-// * Implement queued RPC timeout.
-// * Invalidate masters when they leave the consensus group
 
 impl MasterProxy {
 
@@ -134,6 +129,52 @@ impl MasterProxy {
         let mut rpc = master::list_tables(addr, deadline, request);
         rpc.callback = Some(Box::new(ListTablesCB(self.clone(), callback,
                                                   Backoff::with_duration_range(8, 4096))));
+        self.send_to_leader(rpc);
+    }
+
+    pub fn create_table(&self,
+                        deadline: Instant,
+                        request: CreateTableRequestPB,
+                        callback: Box<Callback>) {
+        struct CreateTableCB(MasterProxy, Box<Callback>, Backoff);
+        impl Callback for CreateTableCB {
+            fn callback(mut self: Box<Self>, result: RpcResult, mut rpc: Rpc) {
+                if result.is_ok() {
+                    let error_code = {
+                        let resp = rpc.response::<CreateTableResponsePB>();
+                        debug!("{:?} callback, response: {:?}", rpc, resp);
+                        if resp.has_error() { Some(resp.get_error().get_code()) }
+                        else { None }
+                    };
+                    match error_code {
+                        Some(MasterErrorCode::NOT_THE_LEADER) => {
+                            self.0.reset_leader_cache(rpc.addr);
+                            let proxy: MasterProxy = self.0.clone();
+                            rpc.callback = Some(self);
+                            return proxy.send_to_leader(rpc);
+                        },
+                        Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
+                            // This is a transient error which occurs when the master is starting up.
+                            let delay = Duration::from_millis(self.2.next_backoff_ms());
+                            info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
+                                   rpc, delay);
+                            let messenger = self.0.inner.messenger.clone();
+                            rpc.callback = Some(self);
+                            return messenger.delayed_send(delay, rpc);
+                        },
+                        _ => (), // fall through to callback completion
+                    }
+                }
+
+                // Complete the callback
+                self.1.callback(result, rpc);
+            }
+        }
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+        let mut rpc = master::create_table(addr, deadline, request);
+        rpc.callback = Some(Box::new(CreateTableCB(self.clone(), callback,
+                                                   Backoff::with_duration_range(8, 4096))));
         self.send_to_leader(rpc);
     }
 

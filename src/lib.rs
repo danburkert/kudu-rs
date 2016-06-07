@@ -19,6 +19,7 @@ extern crate vec_map;
 
 mod backoff;
 mod bit_set;
+mod client;
 mod dns;
 mod error;
 mod master;
