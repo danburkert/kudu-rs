@@ -253,25 +253,91 @@ mod tests {
 
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::sync_channel;
+    use std::sync::mpsc::{sync_channel, SyncSender};
     use std::time::{Duration, Instant};
-
-    use mini_cluster::{get_unbound_address};
-    use rpc::{master, Rpc};
-    use super::*;
-    use Error;
-    use Result;
 
     use env_logger;
     use kudu_pb;
 
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use rpc::{channel_callback, master, Callback, Rpc};
+    use super::*;
+    use Error;
+    use Result;
+
+    #[test]
+    fn test_send() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_tservers(0)
+                                                         .log_rpc_negotiation_trace(true)
+                                                         .log_rpc_trace(true));
+        let messenger = Messenger::new().unwrap();
+        let rpc = master::ping(cluster.master_addrs()[0],
+                               Instant::now() + Duration::from_secs(5),
+                               kudu_pb::master::PingRequestPB::new());
+
+        let (result, _rpc) = messenger.send_sync(rpc);
+        result.unwrap();
+    }
+
+    #[test]
+    fn test_send_concurrent() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_tservers(0)
+                                                         .log_rpc_negotiation_trace(true)
+                                                         .log_rpc_trace(true));
+        let messenger = Messenger::new().unwrap();
+
+        let (send, recv) = sync_channel::<Result<()>>(100);
+
+        struct PingCB(u8, Messenger, SyncSender<Result<()>>);
+        impl Callback for PingCB {
+            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+                let is_ok = result.is_ok();
+                self.2.send(result).unwrap();
+                self.0 -= 1;
+                if is_ok && self.0 > 0 {
+                    let messenger = self.1.clone();
+                    rpc.callback = Some(self);
+                    messenger.send(rpc);
+                }
+            }
+        }
+
+        // Send 100 pings, with 10 outstanding at a time.
+        for _ in 0..10 {
+            let mut rpc = master::ping(cluster.master_addrs()[0],
+                                       Instant::now() + Duration::from_secs(5),
+                                       kudu_pb::master::PingRequestPB::new());
+
+
+            rpc.callback = Some(Box::new(PingCB(10, messenger.clone(), send.clone())));
+            messenger.send(rpc);
+        }
+        drop(send);
+
+        let mut count = 0;
+        for result in recv {
+            result.unwrap();
+            count += 1;
+        }
+        assert_eq!(100, count);
+    }
+
     #[test]
     fn test_timeout() {
         let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(0)
+                                                         .log_rpc_negotiation_trace(true)
+                                                         .rpc_negotiation_delay(1000));
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let rpc = master::ping(get_unbound_address(), now + Duration::from_millis(300),
+        let rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(300),
                                kudu_pb::master::PingRequestPB::new());
 
         let (result, _) = messenger.send_sync(rpc);
@@ -292,17 +358,21 @@ mod tests {
     #[test]
     fn test_cancel() {
         let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(0)
+                                                         .log_rpc_negotiation_trace(true)
+                                                         .rpc_negotiation_delay(1000));
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let mut rpc = master::ping(get_unbound_address(), now + Duration::from_millis(500),
+        let mut rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(500),
                                    kudu_pb::master::PingRequestPB::new());
 
         let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
-        assert!(rpc.callback.is_none());
         let cancel = Arc::new(AtomicBool::new(false));
         rpc.cancel = Some(cancel.clone());
-        rpc.callback = Some(Box::new(move |result, rpc| send.send((result, rpc)).unwrap()));
+        rpc.callback = Some(channel_callback(send));
         messenger.send(rpc);
 
         cancel.store(true, Ordering::Relaxed);

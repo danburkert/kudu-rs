@@ -93,30 +93,3 @@ impl fmt::Debug for Rpc {
                self.service_name, self.method_name, self.deadline)
     }
 }
-
-#[cfg(test)]
-mod test {
-    use std::time::{Duration, Instant};
-
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use super::*;
-
-    use env_logger;
-    use kudu_pb;
-
-    #[test]
-    fn test_master_ping() {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_tservers(0)
-                                                         .log_rpc_negotiation_trace(true)
-                                                         .log_rpc_trace(true));
-        let messenger = Messenger::new().unwrap();
-        let rpc = master::ping(cluster.master_addrs()[0],
-                               Instant::now() + Duration::from_secs(5),
-                               kudu_pb::master::PingRequestPB::new());
-
-        let (result, _rpc) = messenger.send_sync(rpc);
-        result.unwrap();
-    }
-}

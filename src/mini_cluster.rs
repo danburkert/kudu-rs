@@ -129,12 +129,12 @@ impl Default for MiniCluster {
     }
 }
 
-/// Attempts to get a local unbound socket address for testing.
 pub fn get_unbound_address() -> SocketAddr {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
 }
 
-pub fn get_unbound_addresses(count: usize) -> Vec<SocketAddr> {
+/// Attempts to get local unbound socket addresses for testing.
+fn get_unbound_addresses(count: usize) -> Vec<SocketAddr> {
     let mut listeners = Vec::with_capacity(count);
     let mut addrs = Vec::with_capacity(count);
 
