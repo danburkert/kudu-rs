@@ -1,29 +1,134 @@
 use std::error;
 use std::fmt;
+use std::io;
+use std::mem;
 use std::result;
 use std::str::Utf8Error;
 
+use kudu_pb::rpc_header::{ErrorStatusPB, ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB};
+use protobuf::ProtobufError;
+
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Error {
+
     /// The operation failed because of an invalid argument.
     InvalidArgument(String),
+
+    /// A Kudu RPC error.
+    Rpc(RpcError),
+
+    /// A Kudu Master error.
+    Master(MasterError),
+
+    /// A Kudu tablet server error.
+    TabletServer(TabletServerError),
+
+    /// An I/O error.
+    Io(io::Error),
+
+    /// An error serializing or deserializing a Protobuf message.
+    Protobuf(String),
+
+    /// A UTF8 encoding or decoding error.
     Utf8(Utf8Error),
+
+    /// The send queue is full.
+    Backoff,
+
+    /// The operation timed out. Includes zero or more errors which resulted in retries.
+    TimedOut,
+
+    /// The operation was cancelled.
+    Cancelled,
+}
+
+impl Clone for Error {
+    fn clone(&self) -> Error {
+        match *self {
+            Error::InvalidArgument(ref error) => Error::InvalidArgument(error.clone()),
+            Error::Rpc(ref error) => Error::Rpc(error.clone()),
+            Error::Master(ref error) => Error::Master(error.clone()),
+            Error::TabletServer(ref error) => Error::TabletServer(error.clone()),
+            Error::Io(ref error) => {
+                // We (and our dependencies) never create an IO error with a boxed error object, so
+                // this unwrap is ok.
+                Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
+            },
+            Error::Protobuf(ref error) => Error::Protobuf(error.clone()),
+            Error::Utf8(ref error) => Error::Utf8(error.clone()),
+            Error::Backoff => Error::Backoff,
+            Error::TimedOut => Error::TimedOut,
+            Error::Cancelled => Error::Cancelled,
+        }
+    }
 }
 
 impl error::Error for Error {
     fn description(&self) -> &str {
         match *self {
             Error::InvalidArgument(_) => "illegal argument",
+            Error::Rpc(ref error) => error.description(),
+            Error::Master(ref error) => error.description(),
+            Error::TabletServer(ref error) => error.description(),
+            Error::Io(ref error) => error.description(),
+            Error::Protobuf(ref description) => &description,
             Error::Utf8(ref error) => error.description(),
+            Error::Backoff => "backoff",
+            Error::TimedOut => "operation timed out",
+            Error::Cancelled => "operation cancelled",
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
             Error::InvalidArgument(_) => None,
+            Error::Rpc(ref error) => error.cause(),
+            Error::Master(ref error) => error.cause(),
+            Error::TabletServer(ref error) => error.cause(),
+            Error::Io(ref error) => error.cause(),
+            Error::Protobuf(_) => None,
             Error::Utf8(ref error) => error.cause(),
+            Error::Backoff => None,
+            Error::TimedOut => None,
+            Error::Cancelled => None,
+        }
+    }
+}
+
+impl From<RpcError> for Error {
+    fn from(error: RpcError) -> Error {
+        Error::Rpc(error)
+    }
+}
+
+impl From<MasterError> for Error {
+    fn from(error: MasterError) -> Error {
+        Error::Master(error)
+    }
+}
+
+impl From<TabletServerError> for Error {
+    fn from(error: TabletServerError) -> Error {
+        Error::TabletServer(error)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Error {
+        Error::Io(error)
+    }
+}
+
+impl From<ProtobufError> for Error {
+    fn from(error: ProtobufError) -> Error {
+        match error {
+            ProtobufError::IoError(error) => Error::Io(error),
+            ProtobufError::WireError(msg) => Error::Protobuf(msg),
+            ProtobufError::MessageNotInitialized { message } =>
+                // This should never happen, all Protobuf messages are initialized internally.
+                panic!("Protobuf message not initialized: {}", message),
         }
     }
 }
@@ -35,6 +140,122 @@ impl From<Utf8Error> for Error {
 }
 
 impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RpcErrorCode {
+    // Non-fatal RPC errors. Connection should be left open for future RPC calls.
+
+    /// The application generated an error status. See the message field for
+    /// more details.
+    ApplicationError,
+    /// The specified method was not valid.
+    NoSuchMethod,
+    /// The specified service was not valid.
+    NoSuchService,
+    /// The server is overloaded - the client should try again shortly.
+    ServerTooBusy,
+    /// The request parameter was not parseable, was missing required fields,
+    /// or the server does not support the required feature flags.
+    InvalidRequest,
+
+    // Fatal errors indicate that the client should shut down the connection.
+
+    FatalUnknown,
+    /// The RPC server is already shutting down.
+    FatalServerShuttingDown,
+    /// Fields of RpcHeader are invalid.
+    FatalInvalidRpcHeader,
+    /// Could not deserialize RPC request.
+    FatalDeserializingRequest,
+    /// IPC Layer version mismatch.
+    FatalVersionMismatch,
+    /// Auth failed.
+    FatalUnauthorized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RpcError {
+    code: RpcErrorCode,
+    message: String,
+    unsupported_feature_flags: Vec<u32>,
+}
+
+impl RpcError {
+    pub fn invalid_rpc_header(message: String) -> RpcError {
+        RpcError {
+            code: RpcErrorCode::FatalInvalidRpcHeader,
+            message: message,
+            unsupported_feature_flags: Vec::new(),
+        }
+    }
+    pub fn is_fatal(&self) -> bool {
+        match self.code {
+            RpcErrorCode::FatalUnknown |
+            RpcErrorCode::FatalServerShuttingDown |
+            RpcErrorCode::FatalInvalidRpcHeader |
+            RpcErrorCode::FatalDeserializingRequest |
+            RpcErrorCode::FatalVersionMismatch |
+            RpcErrorCode::FatalUnauthorized => true,
+            _ => false,
+        }
+    }
+}
+
+impl error::Error for RpcError {
+    fn description(&self) -> &str {
+        match self.code {
+            RpcErrorCode::ApplicationError => "application error",
+            RpcErrorCode::NoSuchMethod => "no such method",
+            RpcErrorCode::NoSuchService => "no such service",
+            RpcErrorCode::ServerTooBusy => "server too busy",
+            RpcErrorCode::InvalidRequest => "invalid request",
+            RpcErrorCode::FatalUnknown => "unknown error",
+            RpcErrorCode::FatalServerShuttingDown => "server shutting down",
+            RpcErrorCode::FatalInvalidRpcHeader => "invalid RPC header",
+            RpcErrorCode::FatalDeserializingRequest => "error deserializing request",
+            RpcErrorCode::FatalVersionMismatch => "version mismatch",
+            RpcErrorCode::FatalUnauthorized => "unauthorized",
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
+    }
+}
+
+impl From<ErrorStatusPB> for RpcError {
+    fn from(mut error: ErrorStatusPB) -> RpcError {
+        let code = match error.get_code() {
+            RpcErrorCodePB::FATAL_UNKNOWN => RpcErrorCode::FatalUnknown,
+            RpcErrorCodePB::ERROR_APPLICATION => RpcErrorCode::ApplicationError,
+            RpcErrorCodePB::ERROR_NO_SUCH_METHOD => RpcErrorCode::NoSuchMethod,
+            RpcErrorCodePB::ERROR_NO_SUCH_SERVICE => RpcErrorCode::NoSuchService,
+            RpcErrorCodePB::ERROR_SERVER_TOO_BUSY => RpcErrorCode::ServerTooBusy,
+            RpcErrorCodePB::ERROR_INVALID_REQUEST => RpcErrorCode::InvalidRequest,
+            RpcErrorCodePB::FATAL_SERVER_SHUTTING_DOWN => RpcErrorCode::FatalServerShuttingDown,
+            RpcErrorCodePB::FATAL_INVALID_RPC_HEADER => RpcErrorCode::FatalInvalidRpcHeader,
+            RpcErrorCodePB::FATAL_DESERIALIZING_REQUEST => RpcErrorCode::FatalDeserializingRequest,
+            RpcErrorCodePB::FATAL_VERSION_MISMATCH => RpcErrorCode::FatalVersionMismatch,
+            RpcErrorCodePB::FATAL_UNAUTHORIZED => RpcErrorCode::FatalUnauthorized,
+        };
+
+        let message = mem::replace(error.mut_message(), String::new());
+        let unsupported_feature_flags = mem::replace(error.mut_unsupported_feature_flags(), Vec::new());
+
+        RpcError {
+            code: code,
+            message: message,
+            unsupported_feature_flags: unsupported_feature_flags,
+        }
+    }
+}
+
+
+impl fmt::Display for RpcError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
@@ -121,6 +342,42 @@ pub struct TabletServerError {
     status: Status,
 }
 
+impl error::Error for TabletServerError {
+    fn description(&self) -> &str {
+        match self.code {
+            TabletServerErrorCode::UnknownError => "unknown error",
+            TabletServerErrorCode::InvalidSchema => "invalid schema",
+            TabletServerErrorCode::InvalidRowBlock => "invalid row block",
+            TabletServerErrorCode::InvalidMutation => "invalid mutation",
+            TabletServerErrorCode::MismatchedSchema => "mismatched schema",
+            TabletServerErrorCode::TabletNotFound => "tablet not found",
+            TabletServerErrorCode::ScannerExpired => "scanner expired",
+            TabletServerErrorCode::InvalidScanSpec => "invalid scan spec",
+            TabletServerErrorCode::InvalidConfig => "invalid config",
+            TabletServerErrorCode::TabletAlreadyExists => "tablet already exists",
+            TabletServerErrorCode::TabletHasANewerSchema => "tablet has a newer schema",
+            TabletServerErrorCode::TabletNotRunning => "tablet not running",
+            TabletServerErrorCode::InvalidSnapshot => "invalid snapshot",
+            TabletServerErrorCode::InvalidScanCallSeqId => "invalid scan call sequence id",
+            TabletServerErrorCode::NotTheLeader => "not the leader",
+            TabletServerErrorCode::WrongServerUuid => "wrong server UUID",
+            TabletServerErrorCode::CasFailed => "CAS failed",
+            TabletServerErrorCode::AlreadyInProgress => "already in progress",
+            TabletServerErrorCode::Throttled => "throttled",
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
+    }
+}
+
+impl fmt::Display for TabletServerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MasterErrorCode {
     /// An error which has no more specific error code. The `Status` code and message may reveal
@@ -147,4 +404,29 @@ pub enum MasterErrorCode {
 pub struct MasterError {
     code: MasterErrorCode,
     status: Status,
+}
+
+impl error::Error for MasterError {
+    fn description(&self) -> &str {
+        match self.code {
+            MasterErrorCode::UnknownError => "unknown error",
+            MasterErrorCode::InvalidSchema => "invalid schema",
+            MasterErrorCode::TableNotFound => "table not found",
+            MasterErrorCode::TableAlreadyPresent => "table already exists",
+            MasterErrorCode::TooManyTablets => "too many tablets",
+            MasterErrorCode::CatalogManagerNotInitialized => "catalog manager not initialized",
+            MasterErrorCode::NotTheLeader => "not the leader",
+            MasterErrorCode::ReplicationFactorTooHigh => "replication factor too high",
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
+    }
+}
+
+impl fmt::Display for MasterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
 }

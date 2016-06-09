@@ -7,14 +7,13 @@ use std::net::{
     SocketAddr,
 };
 
-use error::Error;
 use master::MasterProxy;
 use rpc::{
     channel_callback,
     Messenger,
     Rpc,
-    RpcResult,
 };
+use Result;
 
 use table::TableBuilder;
 
@@ -37,16 +36,15 @@ impl Client {
         }
     }
 
-    fn create_table(&self, builder: TableBuilder) -> Result<(), Error> {
-        let (send, recv) = sync_channel::<(RpcResult, Rpc)>(1);
+    fn create_table(&self, builder: TableBuilder) -> Result<()> {
+        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(1);
 
         self.master.create_table(Instant::now() + self.config.default_admin_operation_timeout(),
                                  builder.into_pb(),
                                  channel_callback(send));
 
-        let (result, rpc) = recv.recv().unwrap();
-        result.unwrap();
-        Ok(())
+        let (result, _rpc) = recv.recv().unwrap();
+        result
     }
 }
 

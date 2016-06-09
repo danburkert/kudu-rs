@@ -8,9 +8,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use std::fmt;
 
-use rpc::{Rpc, RpcError, RpcResult};
+use rpc::Rpc;
 use rpc::connection::{Connection, ConnectionOptions};
 use util::duration_to_ms;
+use Result;
+use Error;
 
 use mio::{
     EventLoop,
@@ -106,7 +108,7 @@ impl Messenger {
 
     pub fn delayed_send(&self, delay: Duration, mut rpc: Rpc) {
         if Instant::now() + delay > rpc.deadline {
-            rpc.fail(RpcError::TimedOut);
+            rpc.fail(Error::TimedOut);
         } else {
             rpc.response.clear();
             self.inner.channel.send(Command::DelayedSend((delay, rpc))).unwrap();
@@ -121,7 +123,7 @@ impl Messenger {
         self.inner.channel.send(Command::Send(rpc)).unwrap();
     }
 
-    pub fn send_sync(&self, mut rpc: Rpc) -> (RpcResult, Rpc) {
+    pub fn send_sync(&self, mut rpc: Rpc) -> (Result<()>, Rpc) {
         let (send, recv) = sync_channel(0);
         assert!(rpc.callback.is_none());
         rpc.callback = Some(Box::new(move |result, rpc| send.send((result, rpc)).unwrap()));
@@ -255,8 +257,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use mini_cluster::{get_unbound_address};
-    use rpc::{master, Rpc, RpcError, RpcResult};
+    use rpc::{master, Rpc};
     use super::*;
+    use Error;
+    use Result;
 
     use env_logger;
     use kudu_pb;
@@ -274,16 +278,15 @@ mod tests {
 
         match result {
             Ok(()) => panic!("expected failure"),
-            Err(RpcError::TimedOut) => (),
+            Err(Error::TimedOut) => (),
             Err(other) => panic!("unexpected error: {}", other),
         }
 
         let elapsed = Instant::now().duration_since(now);
-        println!("elapsed: {:?}", elapsed);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(275));
-        assert!(elapsed < Duration::from_millis(325));
+        assert!(elapsed > Duration::from_millis(275), "expected: 300ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(325), "expected: 300ms, elapsed: {:?}", elapsed);
     }
 
     #[test]
@@ -295,7 +298,7 @@ mod tests {
         let mut rpc = master::ping(get_unbound_address(), now + Duration::from_millis(500),
                                    kudu_pb::master::PingRequestPB::new());
 
-        let (send, recv) = sync_channel::<(RpcResult, Rpc)>(0);
+        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
         assert!(rpc.callback.is_none());
         let cancel = Arc::new(AtomicBool::new(false));
         rpc.cancel = Some(cancel.clone());
@@ -307,14 +310,14 @@ mod tests {
 
         match result {
             Ok(()) => panic!("expected failure"),
-            Err(RpcError::Cancelled) => (),
+            Err(Error::Cancelled) => (),
             Err(other) => panic!("unexpected error: {}", other),
         }
 
         let elapsed = Instant::now().duration_since(now);
         println!("elapsed: {:?}", elapsed);
 
-        assert!(elapsed < Duration::from_millis(20));
+        assert!(elapsed < Duration::from_millis(25), "expected: 0ms, elapsed: {:?}", elapsed);
     }
 
     #[test]
@@ -333,7 +336,7 @@ mod tests {
         info!("elapsed: {:?}", elapsed);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(75));
-        assert!(elapsed < Duration::from_millis(125));
+        assert!(elapsed > Duration::from_millis(75), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(125), "expected: 100ms, elapsed: {:?}", elapsed);
     }
 }

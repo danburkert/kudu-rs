@@ -11,9 +11,9 @@ use rpc::{
     Callback,
     Messenger,
     Rpc,
-    RpcResult,
     master
 };
+use Result;
 
 use parking_lot::Mutex;
 use kudu_pb::common::HostPortPB;
@@ -92,7 +92,7 @@ impl MasterProxy {
 
         struct ListTablesCB(MasterProxy, Box<Callback>, Backoff);
         impl Callback for ListTablesCB {
-            fn callback(mut self: Box<Self>, result: RpcResult, mut rpc: Rpc) {
+            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
                 if result.is_ok() {
                     let error_code = {
                         let resp = rpc.response::<ListTablesResponsePB>();
@@ -138,7 +138,7 @@ impl MasterProxy {
                         callback: Box<Callback>) {
         struct CreateTableCB(MasterProxy, Box<Callback>, Backoff);
         impl Callback for CreateTableCB {
-            fn callback(mut self: Box<Self>, result: RpcResult, mut rpc: Rpc) {
+            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
                 if result.is_ok() {
                     let error_code = {
                         let resp = rpc.response::<CreateTableResponsePB>();
@@ -268,7 +268,7 @@ impl MasterProxy {
     }
 
     /// Handles the response to a `ListMasters` RPC.
-    fn handle_list_masters_response(self, result: RpcResult, mut rpc: Rpc, backoff: Backoff) {
+    fn handle_list_masters_response(self, result: Result<()>, mut rpc: Rpc, backoff: Backoff) {
         // Short circuit if the master has already been found.
         if rpc.cancelled() { return; }
         let addr = rpc.addr;
@@ -423,19 +423,19 @@ mod tests {
     use std::time::{Duration, Instant};
     use std::sync::mpsc::sync_channel;
 
-    use mini_cluster::{get_unbound_address, MiniCluster, MiniClusterConfig};
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use rpc::{
         channel_callback,
         Messenger,
         Rpc,
-        RpcResult,
     };
+    use Result;
     use super::*;
 
     use env_logger;
     use kudu_pb::master::{ListTablesRequestPB, ListTablesResponsePB};
 
-    fn check_list_tables_response(result: RpcResult, rpc: Rpc) {
+    fn check_list_tables_response(result: Result<()>, rpc: Rpc) {
         assert!(result.is_ok(), "failed result: {:?}", result);
         let response = rpc.response::<ListTablesResponsePB>();
         assert!(!response.has_error(), "failed response: {:?}", response);

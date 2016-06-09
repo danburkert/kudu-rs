@@ -13,8 +13,11 @@ use backoff::Backoff;
 use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
 use kudu_pb::rpc_header;
 use rpc::messenger::{Loop, TimeoutKind};
-use rpc::{Rpc, RpcError, RpcResult};
+use rpc::Rpc;
 use util::duration_to_ms;
+use Error;
+use Result;
+use error::RpcError;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use mio::{
@@ -196,7 +199,7 @@ impl Connection {
 
     /// Notifies the connection of event readiness.
     pub fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
-        fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token, events: EventSet) -> RpcResult {
+        fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token, events: EventSet) -> Result<()> {
             match cxn.state {
                 ConnectionState::Initiating => {
                     if events.is_readable() {
@@ -240,10 +243,10 @@ impl Connection {
         let queue_len = self.send_queue.len() + self.recv_queue.len();
         if rpc.cancelled() {
             trace!("{:?}: cancelling {:?}", self, rpc);
-            return rpc.fail(RpcError::Cancelled);
+            return rpc.fail(Error::Cancelled);
         } else if queue_len > self.options.rpc_queue_len as usize {
             debug!("{:?}: send queue full; failing {:?}", self, rpc);
-            return rpc.fail(RpcError::Backoff);
+            return rpc.fail(Error::Backoff);
         } else {
             // If the RPC's deadline is before the currently scheduled timeout, then reset the
             // timeout to the earlier time.
@@ -251,7 +254,7 @@ impl Connection {
                 let now = Instant::now();
                 if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
-                    return rpc.fail(RpcError::TimedOut);
+                    return rpc.fail(Error::TimedOut);
                 } else {
                     self.clear_rpc_timeout(event_loop);
                     let timeout = duration_to_ms(&rpc.deadline.duration_since(now));
@@ -315,10 +318,10 @@ impl Connection {
         for rpc in self.send_queue.drain(..) {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
-                rpc.fail(RpcError::Cancelled);
+                rpc.fail(Error::Cancelled);
             } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
-                rpc.fail(RpcError::TimedOut);
+                rpc.fail(Error::TimedOut);
             } else {
                 next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
                 send_queue.push_back(rpc);
@@ -330,10 +333,10 @@ impl Connection {
         for (call_id, rpc) in self.recv_queue.drain() {
             if rpc.cancelled() {
                 trace!("cancelling {:?}", rpc);
-                rpc.fail(RpcError::Cancelled);
+                rpc.fail(Error::Cancelled);
             } else if rpc.timed_out(now) {
                 trace!("now: {:?}, timing out {:?}", now, rpc);
-                rpc.fail(RpcError::TimedOut);
+                rpc.fail(Error::TimedOut);
             } else {
                 next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
                 recv_queue.insert(call_id, rpc);
@@ -352,7 +355,7 @@ impl Connection {
 
     /// Connects an inactive connection to the server.
     fn connect(&mut self, event_loop: &mut Loop, token: Token) {
-        fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token) -> RpcResult {
+        fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token) -> Result<()> {
             assert!(cxn.recv_queue.is_empty());
             debug!("{:?}: connecting", cxn);
             let stream = try!(TcpStream::connect(&cxn.addr));
@@ -380,7 +383,7 @@ impl Connection {
     }
 
     /// Registers the connection with the event loop in order to enable readiness notifications.
-    fn register(&mut self, event_loop: &mut Loop, token: Token) -> RpcResult {
+    fn register(&mut self, event_loop: &mut Loop, token: Token) -> Result<()> {
         let event_set = self.event_set();
         let poll_opt = self.poll_opt();
         trace!("{:?}: register event_set: {:?}, poll_opt: {:?}", self, event_set, poll_opt);
@@ -389,7 +392,7 @@ impl Connection {
     }
 
     /// Reregisters the connection with the event loop in order to enable readiness notifications.
-    fn reregister(&mut self, event_loop: &mut Loop, token: Token) -> RpcResult {
+    fn reregister(&mut self, event_loop: &mut Loop, token: Token) -> Result<()> {
         let event_set = self.event_set();
         let poll_opt = self.poll_opt();
         trace!("{:?}: reregister event_set: {:?}, poll_opt: {:?}", self, event_set, poll_opt);
@@ -413,7 +416,7 @@ impl Connection {
 
     /// Adds the message to the send buffer with connection's request header. Does not flush the
     /// buffer. If an error is returned, the connection should be torn down.
-    fn send_message(&mut self, msg: &Message) -> RpcResult {
+    fn send_message(&mut self, msg: &Message) -> Result<()> {
         trace!("{:?}: send message: {:?}", self, msg);
         let header_len = self.request_header.compute_size();
         let msg_len = msg.compute_size();
@@ -426,7 +429,7 @@ impl Connection {
 
     /// Adds the KRPC connection header to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
-    fn send_connection_header(&mut self) -> RpcResult {
+    fn send_connection_header(&mut self) -> Result<()> {
         trace!("{:?}: sending connection header to server", self);
         try!(self.send_buf.write(b"hrpc\x09\0\0"));
         Ok(())
@@ -434,7 +437,7 @@ impl Connection {
 
     /// Adds a SASL negotiate message to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
-    fn send_sasl_negotiate(&mut self) -> RpcResult {
+    fn send_sasl_negotiate(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL NEGOTIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
@@ -445,7 +448,7 @@ impl Connection {
 
     /// Adds a SASL initiate message to the send buffer. Does not flush the buffer. If an error is
     /// returned, the connection should be torn down.
-    fn send_sasl_initiate(&mut self) -> RpcResult {
+    fn send_sasl_initiate(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL INITIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
@@ -460,7 +463,7 @@ impl Connection {
 
     /// Adds a session context message to the send buffer. Does not flush the buffer. If an error
     /// is returned, the connection should be torn down.
-    fn send_connection_context(&mut self) -> RpcResult {
+    fn send_connection_context(&mut self) -> Result<()> {
         trace!("{:?}: sending connection context to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-3);
@@ -474,7 +477,7 @@ impl Connection {
                            event_loop: &mut Loop,
                            token: Token,
                            msg: rpc_header::SaslMessagePB)
-                           -> RpcResult {
+                           -> Result<()> {
         trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
         match msg.get_state() {
             SaslState::NEGOTIATE => {
@@ -510,7 +513,7 @@ impl Connection {
     /// Receive messages until no more messages are available on the socket. Should be called when
     /// the connection's socket is readable. If an error is returned, the connection should be torn
     /// down.
-    fn recv(&mut self, event_loop: &mut Loop, token: Token) -> RpcResult {
+    fn recv(&mut self, event_loop: &mut Loop, token: Token) -> Result<()> {
         trace!("{:?}: recv", self);
 
         let maybe_start_idle_timer =
@@ -527,8 +530,8 @@ impl Connection {
             let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
             if msg_len > self.options.max_message_length as usize {
                 return Err(RpcError::invalid_rpc_header(format!(
-                            "RPC message is too long; length: {}, max length: {}",
-                            msg_len, self.options.max_message_length)));
+                           "RPC message is too long; length: {}, max length: {}",
+                            msg_len, self.options.max_message_length)).into());
             }
             if self.recv_buf.len() - 4 < msg_len {
                 let needed = msg_len + 4 - self.recv_buf.len();
@@ -556,12 +559,11 @@ impl Connection {
                     debug_assert_eq!(msg_len - header_len, self.recv_buf.len());
 
                     if self.response_header.get_is_error() {
-                        let error = RpcError::from(try!(
-                                parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                    &mut CodedInputStream::from_bytes(&self.recv_buf[..]))));
                         // All errors during SASL negotiation should result in tearing down the
                         // connection.
-                        return Err(error)
+                        return Err(Error::Rpc(RpcError::from(try!(
+                                        parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
+                                            &mut CodedInputStream::from_bytes(&self.recv_buf[..]))))));
                     }
 
                     let msg: rpc_header::SaslMessagePB = try!(parse_length_delimited_from(
@@ -576,12 +578,12 @@ impl Connection {
                                     &mut CodedInputStream::from_bytes(&self.recv_buf[..]))));
                         // Remove the RPC from the recv queue, and fail it.
                         if let Some(rpc) = self.recv_queue.remove(&self.response_header.get_call_id()) {
-                            rpc.fail(error.clone());
+                            rpc.fail(Error::Rpc(error.clone()));
                         }
                         // If the message is fatal, then return an error in order to have the
                         // connection torn down.
                         if error.is_fatal() {
-                            return Err(error.clone())
+                            return Err(Error::Rpc(error.clone()))
                         }
                     } else {
                         // Use the entry API so that the RPC is not removed from the recv queue
@@ -602,7 +604,7 @@ impl Connection {
                             },
                             _ => {
                                 // The rpc has already been removed from the recv queue, most
-                                // likely due to a timeout.
+                                // likely due to a timeout or cancellation.
                             }
                         }
                     }
@@ -622,7 +624,7 @@ impl Connection {
 
     /// Send messages until either there are no more messages to send, or the socket can not accept
     /// any more writes. If an error is returned, the connection should be torn down.
-    fn send(&mut self) -> RpcResult {
+    fn send(&mut self) -> Result<()> {
         trace!("{:?}: send", self);
         assert_eq!(self.state, ConnectionState::Connected);
 
@@ -633,11 +635,11 @@ impl Connection {
 
                 if rpc.cancelled() {
                     trace!("{:?}: cancelling {:?}", self, rpc);
-                    rpc.fail(RpcError::Cancelled);
+                    rpc.fail(Error::Cancelled);
                     break;
                 } else if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
-                    rpc.fail(RpcError::TimedOut);
+                    rpc.fail(Error::TimedOut);
                     break;
                 }
 
