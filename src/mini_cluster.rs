@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::net::{SocketAddr, TcpListener};
@@ -8,20 +9,64 @@ use std::io::{BufRead, BufReader};
 
 use tempdir::TempDir;
 
-/// A process handle that will kill the process when it goes out of scope.
-pub struct ProcessHandle(Child);
-impl Drop for ProcessHandle {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
+/// A Kudu server node (either master or tablet server).
+struct Node {
+    name: String,
+    bin: PathBuf,
+    args: Vec<(&'static str, String)>,
+    process: Option<Child>,
+}
+
+impl Node {
+    fn new(name: String, bin: PathBuf, args: Vec<(&'static str, String)>) -> Node {
+        Node {
+            name: name,
+            bin: bin,
+            args: args,
+            process: None,
+        }
+
+    }
+
+    fn stop(&mut self) {
+        let _ = self.process.take().expect(&format!("{} not running", &self.name)).kill();
+    }
+
+    fn start(&mut self) {
+        assert!(self.process.is_none(), "{} already started", &self.name);
+
+        let mut command = Command::new(&self.bin);
+
+        for &(k, ref v) in &self.args {
+            command.arg(format!("--{}={}", k, v));
+        }
+
+        command.stderr(Stdio::piped());
+        let mut process = command.spawn().unwrap();
+        let stderr = process.stderr.take().unwrap();
+
+        let name = self.name.clone();
+        thread::spawn(move || {
+            let stderr = BufReader::new(stderr);
+            for line in stderr.lines() {
+                debug!("({}): {}", name, line.unwrap());
+            }
+
+        });
+        self.process = Some(process);
     }
 }
 
-#[allow(dead_code)]
+impl Drop for Node {
+    fn drop(&mut self) {
+        let _ = self.process.take().map(|mut process| process.kill());
+    }
+}
+
 pub struct MiniCluster {
     dir: TempDir,
     master_addrs: Vec<SocketAddr>,
-    master_procs: Vec<ProcessHandle>,
-    tserver_procs: Vec<ProcessHandle>,
+    nodes: HashMap<SocketAddr, Node>,
 }
 
 impl MiniCluster {
@@ -36,90 +81,77 @@ impl MiniCluster {
         let tserver_bin = bin_dir.join("kudu-tserver");
         let dir = TempDir::new("kudu-rs-mini-cluster").expect("unable to create temp dir");
 
-        let mut master_procs = Vec::with_capacity(conf.num_masters as usize);
+        let num_nodes = (conf.num_masters + conf.num_tservers) as usize;
+        let mut nodes = HashMap::with_capacity(num_nodes);
 
-        let addrs = get_unbound_addresses((conf.num_masters + conf.num_tservers) as usize);
+        let addrs = get_unbound_addresses(num_nodes);
         let (master_addrs, tserver_addrs) = addrs.split_at(conf.num_masters as usize);
 
-        let masters = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+        let master_addresses = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+        let conf_args = conf.args();
 
         for (i, addr) in master_addrs.iter().enumerate() {
             let path = dir.path().join(format!("master-{}", i));
             let logs = dir.path().join(format!("master-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create master log directory");
-            let mut command = Command::new(&master_bin);
-            command.arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
-                   .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
-                   .arg(format!("--log_dir={}", logs.to_str().unwrap()))
-                   .arg(format!("--rpc_bind_addresses={}", addr))
-                   .arg("--webserver_port=0")
-                   .arg("--logtostderr");
 
-            command.stderr(Stdio::piped());
-            conf.configure(&mut command);
+            let name = format!("master:{}", addr.port());
+
+            let mut args = conf_args.clone();
+            args.push(("fs_wal_dir", path.to_string_lossy().into_owned()));
+            args.push(("fs_data_dirs", path.to_string_lossy().into_owned()));
+            args.push(("log_dir", logs.to_string_lossy().into_owned()));
+            args.push(("rpc_bind_addresses", addr.to_string()));
+            args.push(("webserver_port", 0.to_string()));
+            args.push(("logtostderr", true.to_string()));
 
             if conf.num_masters > 1 {
-                command.arg(format!("--master_addresses={}", masters));
+                args.push(("master_addresses", master_addresses.clone()));
             }
 
-            let mut process = command.spawn().expect("unable to start master");
-            let stderr = process.stderr.take().unwrap();
-            let port = addr.port();
-
-            thread::spawn(move || {
-                let stderr = BufReader::new(stderr);
-                for line in stderr.lines() {
-                    debug!("(master:{}): {}", port, line.unwrap());
-                }
-
-            });
-
-            master_procs.push(ProcessHandle(process));
+            let mut node = Node::new(name, master_bin.clone(), args);
+            node.start();
+            nodes.insert(*addr, node);
         }
 
-        let mut tserver_procs = Vec::with_capacity(conf.num_tservers as usize);
         for (i, addr) in tserver_addrs.iter().enumerate() {
             let path = dir.path().join(format!("tserver-{}", i));
             let logs = dir.path().join(format!("tserver-{}-logs", i));
             fs::create_dir(&logs).expect("unable to create tserver log directory");
 
-            let mut command = Command::new(&tserver_bin);
-            command.arg(format!("--fs_wal_dir={}", path.to_str().unwrap()))
-                   .arg(format!("--fs_data_dirs={}", path.to_str().unwrap()))
-                   .arg(format!("--log_dir={}", logs.to_str().unwrap()))
-                   .arg(format!("--rpc_bind_addresses={}", addr))
-                   .arg("--webserver_port=0")
-                   .arg(format!("--tserver_master_addrs={}", masters))
-                   .arg("--logtostderr");
+            let name = format!("tserver:{}", addr.port());
 
-            command.stderr(Stdio::piped());
-            conf.configure(&mut command);
+            let mut args = conf_args.clone();
+            args.push(("fs_wal_dir", path.to_string_lossy().into_owned()));
+            args.push(("fs_data_dirs", path.to_string_lossy().into_owned()));
+            args.push(("log_dir", logs.to_string_lossy().into_owned()));
+            args.push(("rpc_bind_addresses", addr.to_string()));
+            args.push(("webserver_port", 0.to_string()));
+            args.push(("logtostderr", true.to_string()));
+            args.push(("tserver_master_addrs", master_addresses.clone()));
 
-            let mut process = command.spawn().expect("unable to start master");
-            let stderr = process.stderr.take().unwrap();
-            let port = addr.port();
-
-            thread::spawn(move || {
-                let stderr = BufReader::new(stderr);
-                for line in stderr.lines() {
-                    debug!("(tserver:{}): {}", port, line.unwrap());
-                }
-            });
-
-            tserver_procs.push(ProcessHandle(process));
+            let mut node = Node::new(name, tserver_bin.clone(), args);
+            node.start();
+            nodes.insert(*addr, node);
         }
 
         MiniCluster {
             dir: dir,
             master_addrs: master_addrs.to_owned(),
-            master_procs: master_procs,
-            tserver_procs: tserver_procs,
+            nodes: nodes,
         }
     }
 
-    #[allow(dead_code)]
     pub fn master_addrs(&self) -> &[SocketAddr] {
         &self.master_addrs
+    }
+
+    pub fn stop_node(&mut self, addr: &SocketAddr) {
+        self.nodes.get_mut(addr).expect(&format!("no node with address {}", addr)).stop();
+    }
+
+    pub fn start_node(&mut self, addr: &SocketAddr) {
+        self.nodes.get_mut(addr).expect(&format!("no node with address {}", addr)).start();
     }
 }
 
@@ -252,14 +284,15 @@ impl MiniClusterConfig {
         self
     }
 
-    fn configure(&self, command: &mut Command) {
+    fn args(&self) -> Vec<(&'static str, String)> {
+        let mut args = Vec::new();
 
         if let Some(log_level) = self.min_log_level {
-            command.arg(format!("--minloglevel={}", log_level as usize));
+            args.push(("minloglevel", (log_level as usize).to_string()));
         }
 
         if let Some(vlog_level) = self.vlog {
-            command.arg(format!("--v={}", vlog_level));
+            args.push(("v", vlog_level.to_string()));
         }
 
         if !self.vmodule.is_empty() {
@@ -267,33 +300,35 @@ impl MiniClusterConfig {
                               .iter()
                               .map(|&(ref module, ref level)| format!("{}={}", module, level))
                               .collect::<Vec<_>>();
-            command.arg(format!("--vmodule={}", modules.join(",")));
+            args.push(("vmodule", modules.join(",")));
         }
 
         if let Some(log_rpc_negotiation_trace) = self.log_rpc_negotiation_trace {
-            command.arg(format!("--rpc_trace_negotiation={}", log_rpc_negotiation_trace));
+            args.push(("rpc_trace_negotiation", log_rpc_negotiation_trace.to_string()));
         }
 
         if let Some(log_rpc_trace) = self.log_rpc_trace {
-            command.arg(format!("--rpc_dump_all_traces={}", log_rpc_trace));
+            args.push(("rpc_dump_all_traces", log_rpc_trace.to_string()));
         }
 
         if let Some(rpc_negotiation_delay) = self.rpc_negotiation_delay {
-            command.arg(format!("--rpc_negotiation_inject_delay_ms={}",
-                                rpc_negotiation_delay));
+            args.push(("rpc_negotiation_inject_delay_ms", rpc_negotiation_delay.to_string()));
         }
 
         if let Some(get_table_locations_delay) = self.get_table_locations_delay {
-            command.arg(format!("--master_inject_latency_on_tablet_lookups_ms={}",
-                                get_table_locations_delay));
+            args.push(("master_inject_latency_on_tablet_lookup_ms",
+                       get_table_locations_delay.to_string()));
         }
 
         if let Some(leader_failure_detection) = self.leader_failure_detection {
-            command.arg(format!("--enable_leader_failure_detection={}",
-                                leader_failure_detection));
+            args.push(("enable_leader_failure_detection",
+                       leader_failure_detection.to_string()));
         }
 
-        command.arg(format!("--enable_data_block_fsync={}", self.data_block_fsync));
+        args.push(("enable_data_block_fsync",
+                   self.data_block_fsync.to_string()));
+
+        args
     }
 }
 
@@ -334,5 +369,22 @@ mod tests {
     fn test_spawn_mini_cluster() {
         let _ = env_logger::init();
         let _cluster = MiniCluster::default();
+    }
+
+    #[test]
+    fn test_pause_resume_master() {
+        let _ = env_logger::init();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default().num_masters(3).num_tservers(0));
+        let master = cluster.master_addrs()[0];
+
+        ::std::thread::sleep_ms(1000);
+
+        info!("PAUSING MASTER");
+        cluster.stop_node(&master);
+        ::std::thread::sleep_ms(1000);
+
+        info!("RESUMING MASTER");
+        cluster.start_node(&master);
+        ::std::thread::sleep_ms(1000);
     }
 }
