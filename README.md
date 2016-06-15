@@ -2,6 +2,10 @@
 
 Experimental Rust bindings for Apache Kudu (incubating). Not feature complete.
 
+[Documentation](https://danburkert.github.io/kudu-rs/kudu/index.html)
+
+[![Build Status](https://travis-ci.org/danburkert/kudu-rs.svg?branch=master)](https://travis-ci.org/danburkert/kudu-rs)
+
 # build
 
 You will need to add `kudu-master` and `kudu-tserver` to the $PATH, or set

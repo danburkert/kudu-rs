@@ -1,0 +1,36 @@
+language: rust
+rust:
+  - nightly
+
+# Kudu requires Ubuntu 14.04+
+sudo: required
+dist: trusty
+
+before_script:
+
+    # Install Kudu from the Cloudera apt repository.
+  - curl http://archive.cloudera.com/beta/kudu/ubuntu/trusty/amd64/kudu/archive.key | sudo apt-key add -
+  - echo "deb [arch=amd64] http://archive.cloudera.com/beta/kudu/ubuntu/trusty/amd64/kudu trusty-kudu0 contrib" | sudo tee -a /etc/apt/sources.list
+  - sudo apt-get update -y -qq
+  - sudo apt-get install -y kudu kudu-master kudu-tserver
+
+    # Kudu requires NTP to be synchronized.
+  - sudo apt-get install ntp
+  - sudo service ntp restart
+  - ntptime # sanity check that NTP is functioning
+
+    # Install travis-cargo for doc uploads.
+  - pip install 'travis-cargo<0.2' --user
+  - export PATH=$HOME/.local/bin:$PATH
+
+script:
+    # Run tests one at a time so that logging output is not jumbled.
+  - env RUST_LOG=kudu=trace env RUST_BACKTRACE=1 cargo test --no-fail-fast --jobs 1
+
+after_success:
+  - travis-cargo --only nightly doc-upload
+
+env:
+  global:
+    # Encrypted GH token for doc uploads.
+    secure: "KtaL0VTi79Z/F3qv9NjoCGcPyPqVDreturKZhy3WhVCvsgIlijac8zxnBkDU1S5s4csZdTwi6bwm5241jj3OlW0WAW/ked3p0oCsgxuKEoQfo+p2y84+mz2v/Eh2KpDb0nno4cscYUxMH7HegNJFO8AhIW3J7P4ES7vpZEqfLn9hybj+MnFSXQd80E0gKB/j5oP88+R4L64av9AXo8dC3XCqhMxN7Ws3YByfSdooVv+vCBRwQPaJSrXxK5AbDBkykHhbwR/x63zPKXhkSfPAma+t3xYbeVCYpU4XrniI7B18hc87AwHkDmF1+GAS+jJe7nvzImq4pdvWCa4TnlVdhb2jqC0J3b3SaRZLrc4ajzlFOSF029r2aCC+KJQ9ExWalY1lxqTtQNT1DvwuPOkW8NaX682fOfWu8OFDqZrmdZxOUA1nP2aVVpPPsWE23O7owXF6rNcIaPqMX/tzr0FOtyAdN+ApStR2DiUF9ZPkos99o3UT4+gM7SxhAeaLfJ4pNS8eL+cl8+BGLP5uWypnJdMymbpOO00mCb8CFOR7rOLQtJImAc7+GkW0SHTzqsszCddTRasySepWEhQvHbnkPNpVStWKeaFOnp4RrkZIV/jdrmzpsLstKtFS4kz8YPVnqD8Gzrlfqzmrkz4NDBpcLRZLj303gskO5PYkcMbRpq4="
