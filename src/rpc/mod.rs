@@ -31,15 +31,55 @@ impl<F> Callback for F where F: FnOnce(Result<()>, Rpc) + Send {
     }
 }
 
-/// Returns a callback which will send the result and RPC to a sync channel on completion. The
-/// caller should ensure that the channel has sufficient capcity for the callback, otherwise the
-/// RPC I/O thread will be blocked.
+/// A callback which retries the RPC on network error.
+#[derive(Clone)]
+pub struct RetryNetworkErrorCB<F>{
+    messenger: Messenger,
+    f: F,
+}
+impl <F> RetryNetworkErrorCB<F> where F: FnMut(Result<()>, Rpc) + Send + 'static {
+    fn new(messenger: Messenger, f: F) -> RetryNetworkErrorCB<F> {
+        RetryNetworkErrorCB {
+            messenger: messenger,
+            f: f
+        }
+    }
+}
+impl <F> Callback for RetryNetworkErrorCB<F> where F: FnMut(Result<()>, Rpc) + Send + 'static {
+    fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+        if result.as_ref().err().map(|error| error.is_network_error()).unwrap_or(false) {
+            trace!("retrying RPC {:?} after network error: {}", rpc, result.unwrap_err());
+            let messenger = self.messenger.clone();
+            rpc.response.clear();
+            rpc.callback = Some(self);
+            messenger.send(rpc);
+        } else {
+            (self.f)(result, rpc)
+        }
+    }
+}
+
+/// Returns a callback which will send the result and RPC to a sync channel on completion. If the
+/// RPC fails, it will be retried until it times out. The caller should ensure that the channel has
+/// sufficient capcity for the callback, otherwise the RPC I/O thread will be blocked.
 pub fn channel_callback(sender: SyncSender<(Result<()>, Rpc)>) -> Box<Callback> {
     Box::new(move |result, rpc| {
         if let Err(SendError((result, rpc))) = sender.send((result, rpc)) {
             warn!("callback channel disconnected, result: {:?}, rpc: {:?}", result, rpc)
         }
     })
+}
+
+/// Returns a callback which will retry the RPC on connection error, and send the result and RPC to
+/// a sync channel on completion. If the RPC fails, it will be retried until it times out. The
+/// caller should ensure that the channel has sufficient capcity for the callback, otherwise the
+/// RPC I/O thread will be blocked.
+pub fn retry_channel_callback(messenger: Messenger, sender: SyncSender<(Result<()>, Rpc)>) -> Box<Callback> {
+    Box::new(RetryNetworkErrorCB::new(messenger, move |result, rpc| {
+        if let Err(SendError((result, rpc))) = sender.send((result, rpc)) {
+            warn!("callback channel disconnected, result: {:?}, rpc: {:?}", result, rpc)
+        }
+    }))
 }
 
 pub struct Rpc {
@@ -62,7 +102,7 @@ impl Rpc {
         }
     }
 
-    fn fail(mut self, error: Error) {
+    pub fn fail(mut self, error: Error) {
         if let Some(callback) = self.callback.take() {
             callback.callback(Err(error), self)
         }
@@ -89,7 +129,7 @@ impl Rpc {
 
 impl fmt::Debug for Rpc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Rpc {{ {}::{}, deadline: {:?} }}",
-               self.service_name, self.method_name, self.deadline)
+        write!(f, "Rpc {{ {}::{}, addr: {}, deadline: {:?} }}",
+               self.service_name, self.method_name, self.addr, self.deadline)
     }
 }

@@ -225,13 +225,15 @@ impl Connection {
         }
 
         debug!("{:?}: ready; events: {:?}", self, events);
-        if events.is_hup() || events.is_error() {
-            self.reset(event_loop, token);
+        if events.is_error() {
+            self.reset(event_loop, token, Error::ConnectionError);
+        } else if events.is_hup() {
+            self.reset(event_loop, token, Error::ConnectionHangup);
         } else {
             inner(self, event_loop, token, events).and_then(|_| self.reregister(event_loop, token))
                                                   .unwrap_or_else(|error| {
-                                                      info!("{:?} error: {}", self, error);
-                                                      self.reset(event_loop, token)
+                                                      info!("{:?} error: {}", self, &error);
+                                                      self.reset(event_loop, token, error)
                                                   })
         }
     }
@@ -272,7 +274,7 @@ impl Connection {
                     .and_then(|_| self.reregister(event_loop, token))
                     .unwrap_or_else(|error| {
                         info!("{:?} error sending RPC: {}", self, error);
-                        self.reset(event_loop, token)
+                        self.reset(event_loop, token, error)
                     });
             }
         }
@@ -293,7 +295,7 @@ impl Connection {
             match self.state {
                 ConnectionState::Initiating => {
                     info!("{:?} negotiation timed out", self);
-                    self.reset(event_loop, token)
+                    self.reset(event_loop, token, Error::NegotiationError("negotiation timed out"))
                 },
                 ConnectionState::Reset => self.connect(event_loop, token),
                 ConnectionState::Connected => unreachable!("idle timeout fired with active RPCs"),
@@ -378,7 +380,7 @@ impl Connection {
         };
         inner(self, event_loop, token).unwrap_or_else(|error| {
             info!("{:?} unable to connect: {}", self, error);
-            self.reset(event_loop, token)
+            self.reset(event_loop, token, error)
         });
     }
 
@@ -401,14 +403,22 @@ impl Connection {
     }
 
     /// Resets the connection following an error.
-    fn reset(&mut self, event_loop: &mut Loop, token: Token) {
-        trace!("{:?}: reset", self);
+    fn reset(&mut self, event_loop: &mut Loop, token: Token, error: Error) {
+        warn!("{:?}: reset, error: {}", self, error);
         self.state = ConnectionState::Reset;
         self.stream.take();
         let recv_buf_len = self.recv_buf.len();
         self.recv_buf.consume(recv_buf_len);
         let send_buf_len = self.send_buf.len();
         self.send_buf.consume(send_buf_len);
+
+        for (_, rpc) in self.recv_queue.drain() {
+            rpc.fail(error.clone());
+        }
+
+        for rpc in self.send_queue.drain(..) {
+            rpc.fail(error.clone());
+        }
 
         let timeout = self.backoff.next_backoff_ms();
         self.set_state_timeout(event_loop, token, timeout);
@@ -486,7 +496,7 @@ impl Connection {
                     try!(self.flush());
                     Ok(())
                 } else {
-                    panic!("SASL PLAIN authentication not available: {:?}", msg)
+                    Err(Error::NegotiationError("SASL PLAIN authentication not available"))
                 }
             },
             SaslState::SUCCESS => {

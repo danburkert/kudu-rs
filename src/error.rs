@@ -42,6 +42,23 @@ pub enum Error {
 
     /// The operation was cancelled.
     Cancelled,
+
+    /// The server closed the connection.
+    ConnectionHangup,
+
+    /// The connection errored.
+    ConnectionError,
+
+    NegotiationError(&'static str),
+}
+
+impl Error {
+    pub fn is_network_error(&self) -> bool {
+        match *self {
+            Error::Io(_) | Error::ConnectionHangup | Error::ConnectionError => true,
+            _ => false,
+        }
+    }
 }
 
 impl Clone for Error {
@@ -61,6 +78,30 @@ impl Clone for Error {
             Error::Backoff => Error::Backoff,
             Error::TimedOut => Error::TimedOut,
             Error::Cancelled => Error::Cancelled,
+            Error::ConnectionHangup => Error::ConnectionHangup,
+            Error::ConnectionError => Error::ConnectionError,
+            Error::NegotiationError(error) => Error::NegotiationError(error),
+        }
+    }
+}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        match (self, other) {
+            (&Error::InvalidArgument(ref a), &Error::InvalidArgument(ref b)) => a == b,
+            (&Error::Rpc(ref a), &Error::Rpc(ref b)) => a == b,
+            (&Error::Master(ref a), &Error::Master(ref b)) => a == b,
+            (&Error::TabletServer(ref a), &Error::TabletServer(ref b)) => a == b,
+            (&Error::Io(ref a), &Error::Io(ref b)) => a.raw_os_error().unwrap() == b.raw_os_error().unwrap(),
+            (&Error::Protobuf(ref a), &Error::Protobuf(ref b)) => a == b,
+            (&Error::Utf8(ref a), &Error::Utf8(ref b)) => a == b,
+            (&Error::Backoff, &Error::Backoff) => true,
+            (&Error::TimedOut, &Error::TimedOut) => true,
+            (&Error::Cancelled, &Error::Cancelled) => true,
+            (&Error::ConnectionHangup, &Error::ConnectionHangup) => true,
+            (&Error::ConnectionError, &Error::ConnectionError) => true,
+            (&Error::NegotiationError(ref a), &Error::NegotiationError(ref b)) => a == b,
+            _ => false,
         }
     }
 }
@@ -78,6 +119,9 @@ impl error::Error for Error {
             Error::Backoff => "backoff",
             Error::TimedOut => "operation timed out",
             Error::Cancelled => "operation cancelled",
+            Error::ConnectionHangup => "connection hangup",
+            Error::ConnectionError => "connection error",
+            Error::NegotiationError(error) => error,
         }
     }
 
@@ -93,6 +137,9 @@ impl error::Error for Error {
             Error::Backoff => None,
             Error::TimedOut => None,
             Error::Cancelled => None,
+            Error::ConnectionHangup => None,
+            Error::ConnectionError => None,
+            Error::NegotiationError(_) => None,
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashSet;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -14,6 +15,7 @@ use rpc::{
     master
 };
 use Result;
+use Error;
 
 use parking_lot::Mutex;
 use kudu_pb::common::HostPortPB;
@@ -59,7 +61,8 @@ impl MasterProxy {
 
         let proxy = MasterProxy {
             inner: Arc::new(Inner {
-                leader: Mutex::new(Leader::Unknown(Vec::with_capacity(QUEUE_LEN))),
+                leader: Mutex::new(Leader::Unknown{ queue: Vec::with_capacity(QUEUE_LEN),
+                                                    deadline: None }),
                 masters: Mutex::new(addrs),
                 messenger: messenger,
             }),
@@ -79,7 +82,7 @@ impl MasterProxy {
     pub fn leader(&self) -> Option<SocketAddr> {
         match *self.inner.leader.lock() {
             Leader::Known(leader) => Some(leader),
-            Leader::Unknown(_) => None,
+            Leader::Unknown{ .. } => None,
         }
     }
 
@@ -93,31 +96,41 @@ impl MasterProxy {
         struct ListTablesCB(MasterProxy, Box<Callback>, Backoff);
         impl Callback for ListTablesCB {
             fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-                if result.is_ok() {
-                    let error_code = {
-                        let resp = rpc.response::<ListTablesResponsePB>();
-                        debug!("{:?} callback, response: {:?}", rpc, resp);
-                        if resp.has_error() { Some(resp.get_error().get_code()) }
-                        else { None }
-                    };
-                    match error_code {
-                        Some(MasterErrorCode::NOT_THE_LEADER) => {
-                            self.0.reset_leader_cache(rpc.addr);
-                            let proxy: MasterProxy = self.0.clone();
-                            rpc.callback = Some(self);
-                            return proxy.send_to_leader(rpc);
-                        },
-                        Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
-                            // This is a transient error which occurs when the master is starting up.
-                            let delay = Duration::from_millis(self.2.next_backoff_ms());
-                            info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
-                                   rpc, delay);
-                            let messenger = self.0.inner.messenger.clone();
-                            rpc.callback = Some(self);
-                            return messenger.delayed_send(delay, rpc);
-                        },
-                        _ => (), // fall through to callback completion
+                match result {
+                    Ok(()) => {
+                        let error_code = {
+                            let resp = rpc.response::<ListTablesResponsePB>();
+                            debug!("{:?} callback, response: {:?}", rpc, resp);
+                            if resp.has_error() { Some(resp.get_error().get_code()) }
+                            else { None }
+                        };
+                        match error_code {
+                            Some(MasterErrorCode::NOT_THE_LEADER) => {
+                                self.0.reset_leader_cache(rpc.addr);
+                                let proxy: MasterProxy = self.0.clone();
+                                rpc.callback = Some(self);
+                                return proxy.send_to_leader(rpc);
+                            },
+                            Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
+                                // This is a transient error which occurs when the master is starting up.
+                                let delay = Duration::from_millis(self.2.next_backoff_ms());
+                                info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
+                                      rpc, delay);
+                                let messenger = self.0.inner.messenger.clone();
+                                rpc.callback = Some(self);
+                                return messenger.delayed_send(delay, rpc);
+                            },
+                            _ => (), // fall through to callback completion
+                        }
                     }
+                    Err(ref error) if error.is_network_error() => {
+                        // On connection error, reset the master cache and resend.
+                        self.0.reset_leader_cache(rpc.addr);
+                        let proxy: MasterProxy = self.0.clone();
+                        rpc.callback = Some(self);
+                        return proxy.send_to_leader(rpc);
+                    }
+                    Err(_) => (),
                 }
 
                 // Complete the callback
@@ -181,15 +194,37 @@ impl MasterProxy {
     /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
     /// leader is discovered.
     fn send_to_leader(&self, mut rpc: Rpc) {
+        let now = Instant::now();
+        // Make sure that the duration_since call below doesn't panic.
+        if rpc.timed_out(now) {
+            rpc.fail(Error::TimedOut);
+            return;
+        }
+
+        let mut timer_deadline = None;
         match *self.inner.leader.lock() {
             Leader::Known(addr) => {
                 rpc.addr = addr;
                 self.inner.messenger.send(rpc);
             },
-            Leader::Unknown(ref mut queue) => {
+            Leader::Unknown{ ref mut queue, ref mut deadline } => {
                 trace!("queueing rpc: {:?}", rpc);
+                *deadline = match *deadline {
+                    Some(existing) if existing < rpc.deadline => Some(existing),
+                    _ => {
+                        timer_deadline = Some(rpc.deadline);
+                        Some(rpc.deadline)
+                    }
+                };
                 queue.push(rpc);
             },
+        }
+
+        if let Some(deadline) = timer_deadline {
+            let master = self.clone();
+            self.inner.messenger.timer(deadline.duration_since(now), Box::new(move || {
+                master.timeout_queued_rpcs();
+            }));
         }
     }
 
@@ -200,12 +235,12 @@ impl MasterProxy {
             let mut master = self.inner.leader.lock();
             match *master {
                 // Do nothing if the cached leader has already been refreshed.
-                Leader::Unknown(_) => return,
+                Leader::Unknown{ .. } => return,
                 Leader::Known(leader) if leader != stale_leader => return,
                 // Otherwise fall through to cache eviction and refresh.
                 _ => (),
             }
-            *master = Leader::Unknown(Vec::new());
+            *master = Leader::Unknown { queue: Vec::new(), deadline: None };
         }
         self.refresh_leader_cache();
     }
@@ -273,8 +308,7 @@ impl MasterProxy {
         if rpc.cancelled() { return; }
         let addr = rpc.addr;
         if let Err(error) = result {
-            // Typically due to an RPC timeout because the master is not reachable.
-            warn!("ListMasters RPC to master {} failed: {}", &addr, error);
+            info!("ListMasters RPC to master {} failed: {}", &addr, error);
             // Fall through to retry.
         } else {
             let cancel = rpc.cancel.as_ref().unwrap().clone();
@@ -372,24 +406,64 @@ impl MasterProxy {
         };
 
         if addrs.len() > 1 {
-            info!("discovered leader master {}, chosen randomly from possibilities {:?}",
-                  addr, addrs);
+            info!("discovered leader master {}, chosen randomly from possibilities [{}]",
+                  addr, addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "));
         } else {
             info!("discovered leader master {}", addr);
         }
 
         match leader {
-            Leader::Unknown(queued_rpcs) => {
-                for mut queued_rpc in queued_rpcs {
-                    queued_rpc.addr = addr;
-                    self.inner.messenger.send(queued_rpc);
+            Leader::Unknown { queue, .. } => {
+                for mut rpc in queue {
+                    rpc.addr = addr;
+                    self.inner.messenger.send(rpc);
                 }
             },
-            // This can't happen, since `refresh_leader_cache` is only executed once per leader cache
-            // invalidation, and only a single callback can replace the cache due to the
+            // This can't happen, since `refresh_leader_cache` is only executed once per leader
+            // cache invalidation, and only a single callback can replace the cache due to the
             // cancellation token.
             Leader::Known(prev_addr) => unreachable!("existing known leader {} swapped for {}",
                                                      prev_addr, &addr),
+        }
+    }
+
+    /// Times out all queued rpcs.
+    fn timeout_queued_rpcs(&self) {
+        let now = Instant::now();
+        let mut next_deadline = None;
+
+        let mut retained_rpcs = Vec::with_capacity(QUEUE_LEN);
+        let mut failed_rpcs = Vec::new();
+
+        match *self.inner.leader.lock() {
+            Leader::Unknown { ref mut queue, ref mut deadline } => {
+                for rpc in queue.drain(..) {
+                    if rpc.cancelled() || rpc.timed_out(now) {
+                        failed_rpcs.push(rpc);
+                    } else {
+                        next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
+                        retained_rpcs.push(rpc);
+                    }
+                }
+                *queue = retained_rpcs;
+                *deadline = next_deadline;
+            },
+            Leader::Known(_) => (),
+        }
+
+        for rpc in failed_rpcs {
+            if rpc.cancelled() {
+                rpc.fail(Error::Cancelled);
+            } else {
+                rpc.fail(Error::TimedOut);
+            }
+        }
+
+        if let Some(deadline) = next_deadline {
+            let master = self.clone();
+            self.inner.messenger.timer(deadline.duration_since(now), Box::new(move || {
+                master.timeout_queued_rpcs();
+            }));
         }
     }
 }
@@ -398,14 +472,18 @@ enum Leader {
     /// The known leader.
     Known(SocketAddr),
     /// The leader is unknown, RPCs must be queued until the leader is discovered.
-    Unknown(Vec<Rpc>),
+    /// holds the queue of RPCs, and the next registered timeout deadline.
+    Unknown {
+        queue: Vec<Rpc>,
+        deadline: Option<Instant>,
+    }
 }
 
 impl Leader {
     fn is_known(&self) -> bool {
         match *self {
             Leader::Known(_) => true,
-            Leader::Unknown(_) => false,
+            Leader::Unknown { .. } => false,
         }
     }
 }
@@ -429,6 +507,7 @@ mod tests {
         Messenger,
         Rpc,
     };
+    use Error;
     use Result;
     use super::*;
 
@@ -436,7 +515,7 @@ mod tests {
     use kudu_pb::master::{ListTablesRequestPB, ListTablesResponsePB};
 
     fn check_list_tables_response(result: Result<()>, rpc: Rpc) {
-        assert!(result.is_ok(), "failed result: {:?}", result);
+        assert_eq!(Ok(()), result);
         let response = rpc.response::<ListTablesResponsePB>();
         assert!(!response.has_error(), "failed response: {:?}", response);
         assert!(response.get_tables().is_empty(), "response: {:?}", response);
@@ -446,7 +525,7 @@ mod tests {
     #[test]
     fn leader_discovery_single_master() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(1));
+        let cluster = MiniCluster::new(MiniClusterConfig::default().num_tservers(0));
 
         let proxy = MasterProxy::new(cluster.master_addrs(), Messenger::new().unwrap());
 
@@ -504,5 +583,59 @@ mod tests {
     /// Tests that RPCs are timed out when the leader is unavailable.
     #[test]
     fn timeout() {
+        let _ = env_logger::init();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(2)
+                                                             .num_tservers(0)
+                                                             .log_rpc_negotiation_trace(true)
+                                                             .rpc_negotiation_delay(1000));
+        let addr = cluster.master_addrs()[0];
+        cluster.stop_node(addr);
+
+        let proxy = MasterProxy::new(cluster.master_addrs(), Messenger::new().unwrap());
+        let now = Instant::now();
+
+        let (send, recv) = sync_channel(0);
+        proxy.list_tables(now + Duration::from_millis(300),
+                          ListTablesRequestPB::new(), channel_callback(send.clone()));
+
+        let (result, rpc) = recv.recv().unwrap();
+
+        let elapsed = Instant::now().duration_since(now);
+
+        assert_eq!(Err(Error::TimedOut), result);
+
+        // If this gets flaky, figure out how to get tighter times out of mio.
+        assert!(elapsed > Duration::from_millis(275), "expected: 300ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(325), "expected: 300ms, elapsed: {:?}", elapsed);
+    }
+
+    /// Tests that the `MasterProxy` will discover and reroute RPCs to a new leader when the
+    /// current leader becomes unreachable.
+    #[test]
+    fn leader_failover() {
+        let _ = env_logger::init();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(3)
+                                                             .num_tservers(0));
+
+        let proxy = MasterProxy::new(&cluster.master_addrs()[0..1], Messenger::new().unwrap());
+
+        let (send, recv) = sync_channel(0);
+        proxy.list_tables(Instant::now() + Duration::from_secs(5),
+                          ListTablesRequestPB::new(), channel_callback(send.clone()));
+
+        let (result, rpc) = recv.recv().unwrap();
+        check_list_tables_response(result, rpc);
+        assert_eq!(3, proxy.masters().len());
+
+        info!("Stopping leader {}", proxy.leader().unwrap());
+        cluster.stop_node(proxy.leader().unwrap());
+
+        proxy.list_tables(Instant::now() + Duration::from_secs(10),
+                          ListTablesRequestPB::new(), channel_callback(send));
+
+        let (result, rpc) = recv.recv().unwrap();
+        check_list_tables_response(result, rpc);
     }
 }

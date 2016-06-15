@@ -146,12 +146,12 @@ impl MiniCluster {
         &self.master_addrs
     }
 
-    pub fn stop_node(&mut self, addr: &SocketAddr) {
-        self.nodes.get_mut(addr).expect(&format!("no node with address {}", addr)).stop();
+    pub fn stop_node(&mut self, addr: SocketAddr) {
+        self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).stop();
     }
 
-    pub fn start_node(&mut self, addr: &SocketAddr) {
-        self.nodes.get_mut(addr).expect(&format!("no node with address {}", addr)).start();
+    pub fn start_node(&mut self, addr: SocketAddr) {
+        self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).start();
     }
 }
 
@@ -369,22 +369,5 @@ mod tests {
     fn test_spawn_mini_cluster() {
         let _ = env_logger::init();
         let _cluster = MiniCluster::default();
-    }
-
-    #[test]
-    fn test_pause_resume_master() {
-        let _ = env_logger::init();
-        let mut cluster = MiniCluster::new(MiniClusterConfig::default().num_masters(3).num_tservers(0));
-        let master = cluster.master_addrs()[0];
-
-        ::std::thread::sleep_ms(1000);
-
-        info!("PAUSING MASTER");
-        cluster.stop_node(&master);
-        ::std::thread::sleep_ms(1000);
-
-        info!("RESUMING MASTER");
-        cluster.start_node(&master);
-        ::std::thread::sleep_ms(1000);
     }
 }

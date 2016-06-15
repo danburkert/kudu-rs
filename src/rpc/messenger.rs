@@ -259,30 +259,33 @@ mod tests {
     use env_logger;
     use kudu_pb;
 
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use rpc::{channel_callback, master, Callback, Rpc};
+    use mini_cluster::{self, MiniCluster, MiniClusterConfig};
+    use rpc::{channel_callback, retry_channel_callback, master, Callback, Rpc};
     use super::*;
     use Error;
     use Result;
 
     #[test]
-    fn test_send() {
+    fn send() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_tservers(0)
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
         let messenger = Messenger::new().unwrap();
-        let rpc = master::ping(cluster.master_addrs()[0],
-                               Instant::now() + Duration::from_secs(5),
-                               kudu_pb::master::PingRequestPB::new());
+        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
+        let mut rpc = master::ping(cluster.master_addrs()[0],
+                                   Instant::now() + Duration::from_secs(5),
+                                   kudu_pb::master::PingRequestPB::new());
+        rpc.callback = Some(retry_channel_callback(messenger.clone(), send));
 
-        let (result, _rpc) = messenger.send_sync(rpc);
-        result.unwrap();
+        messenger.send(rpc);
+        let (result, _) = recv.recv().unwrap();
+        assert_eq!(Ok(()), result);
     }
 
     #[test]
-    fn test_send_concurrent() {
+    fn send_concurrent() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_tservers(0)
@@ -295,11 +298,20 @@ mod tests {
         struct PingCB(u8, Messenger, SyncSender<Result<()>>);
         impl Callback for PingCB {
             fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+                if result.as_ref().err().map(|error| error.is_network_error()).unwrap_or(false) {
+                    trace!("retrying RPC {:?} after network error: {}", rpc, result.unwrap_err());
+                    let messenger = self.1.clone();
+                    rpc.response.clear();
+                    rpc.callback = Some(self);
+                    return messenger.send(rpc);
+                }
+
                 let is_ok = result.is_ok();
                 self.2.send(result).unwrap();
                 self.0 -= 1;
                 if is_ok && self.0 > 0 {
                     let messenger = self.1.clone();
+                    rpc.response.clear();
                     rpc.callback = Some(self);
                     messenger.send(rpc);
                 }
@@ -327,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn test_timeout() {
+    fn timeout() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
@@ -337,10 +349,14 @@ mod tests {
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(300),
-                               kudu_pb::master::PingRequestPB::new());
+        let mut rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(300),
+                                   kudu_pb::master::PingRequestPB::new());
 
-        let (result, _) = messenger.send_sync(rpc);
+        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
+        rpc.callback = Some(retry_channel_callback(messenger.clone(), send));
+        messenger.send(rpc);
+
+        let (result, _) = recv.recv().unwrap();
 
         match result {
             Ok(()) => panic!("expected failure"),
@@ -356,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cancel() {
+    fn cancel() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
@@ -391,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn test_timer() {
+    fn timer() {
         let _ = env_logger::init();
         let messenger = Messenger::new().unwrap();
 
@@ -408,5 +424,51 @@ mod tests {
         // If this gets flaky, figure out how to get tighter times out of mio.
         assert!(elapsed > Duration::from_millis(75), "expected: 100ms, elapsed: {:?}", elapsed);
         assert!(elapsed < Duration::from_millis(125), "expected: 100ms, elapsed: {:?}", elapsed);
+    }
+
+    /// Tests that a connection will fail an RPC after a failure to connect.
+    #[test]
+    fn test_connection_error() {
+        let _ = env_logger::init();
+        let messenger = Messenger::new().unwrap();
+
+        let rpc = master::ping(mini_cluster::get_unbound_address(),
+                               Instant::now() + Duration::from_millis(100),
+                               kudu_pb::master::PingRequestPB::new());
+
+        let (result, _) = messenger.send_sync(rpc);
+        assert_eq!(Err(Error::ConnectionError), result);
+    }
+
+    /// Tests that a connection will fail an RPC after a failure to connect.
+    #[test]
+    fn connection_hangup() {
+        let _ = env_logger::init();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_tservers(0)
+                                                             .log_rpc_negotiation_trace(true)
+                                                             .log_rpc_trace(true));
+        let messenger = Messenger::new().unwrap();
+        let mut rpc = master::ping(cluster.master_addrs()[0],
+                                   Instant::now() + Duration::from_secs(5),
+                                   kudu_pb::master::PingRequestPB::new());
+
+        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
+        rpc.callback = Some(retry_channel_callback(messenger.clone(), send));
+        messenger.send(rpc);
+
+        let (result, _) = recv.recv().unwrap();
+
+        assert_eq!(Ok(()), result);
+
+        let master = cluster.master_addrs()[0];
+        cluster.stop_node(master);
+
+        let rpc = master::ping(cluster.master_addrs()[0],
+                               Instant::now() + Duration::from_secs(5),
+                               kudu_pb::master::PingRequestPB::new());
+
+        let (result, _) = messenger.send_sync(rpc);
+        assert_eq!(Err(Error::ConnectionHangup), result);
     }
 }
