@@ -29,7 +29,7 @@ pub struct Client {
 
 impl Client {
 
-    fn new(config: ClientConfig) -> Client {
+    pub fn new(config: ClientConfig) -> Client {
         let messenger = Messenger::new().unwrap();
         let master = MasterProxy::new(config.master_addresses(), messenger.clone());
         Client {
@@ -41,14 +41,14 @@ impl Client {
 
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
-    fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<Uuid> {
+    pub fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<Uuid> {
         let (send, recv) = sync_channel(0);
         self.master.create_table(deadline, builder.into_pb(), move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|resp| Uuid::parse_str(&String::from_utf8_lossy(resp.get_table_id())).unwrap())
     }
 
     /// Returns true if the table is fully created.
-    fn is_create_table_done(&self, table: Uuid, deadline: Instant) -> Result<bool> {
+    pub fn is_create_table_done(&self, table: Uuid, deadline: Instant) -> Result<bool> {
         let mut request = IsCreateTableDoneRequestPB::new();
         request.mut_table().set_table_id(table.simple().to_string().into_bytes());
 
@@ -59,7 +59,7 @@ impl Client {
 
     /// Synchronously waits until the table is created. If an error is returned, the table may not
     /// be created yet.
-    fn wait_for_table_creation(&self, table: Uuid, deadline: Instant) -> Result<()> {
+    pub fn wait_for_table_creation(&self, table: Uuid, deadline: Instant) -> Result<()> {
         let mut backoff = Backoff::with_duration_range(16, 4096);
 
         let mut is_create_table_done = self.is_create_table_done(table.clone(), deadline);
@@ -74,7 +74,7 @@ impl Client {
     }
 
     /// Deletes the Kudu table.
-    fn delete_table(&self, table: Uuid, deadline: Instant) -> Result<()> {
+    pub fn delete_table(&self, table: Uuid, deadline: Instant) -> Result<()> {
         let mut request = DeleteTableRequestPB::new();
         request.mut_table().set_table_id(table.simple().to_string().into_bytes());
 
@@ -101,27 +101,27 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    fn new(master_addresses: Vec<SocketAddr>) -> ClientConfig {
+    pub fn new(master_addresses: Vec<SocketAddr>) -> ClientConfig {
         ClientConfig {
             master_addresses: master_addresses,
             ..Default::default()
         }
     }
 
-    fn master_addresses(&self) -> &[SocketAddr] {
+    pub fn master_addresses(&self) -> &[SocketAddr] {
         &self.master_addresses
     }
 
-    fn set_master_addresses(&mut self, master_addresses: Vec<SocketAddr>) -> &mut ClientConfig {
+    pub fn set_master_addresses(&mut self, master_addresses: Vec<SocketAddr>) -> &mut ClientConfig {
         self.master_addresses = master_addresses;
         self
     }
 
-    fn default_admin_operation_timeout(&self) -> Duration {
+    pub fn default_admin_operation_timeout(&self) -> Duration {
         self.default_admin_operation_timeout
     }
 
-    fn set_default_admin_operation_timeout(&mut self, timeout: Duration) -> &mut ClientConfig {
+    pub fn set_default_admin_operation_timeout(&mut self, timeout: Duration) -> &mut ClientConfig {
         self.default_admin_operation_timeout = timeout;
         self
     }
