@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::env;
+use std::ffi::CString;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::thread;
-use std::io::{BufRead, BufReader};
 
 use tempdir::TempDir;
 
@@ -71,14 +72,8 @@ pub struct MiniCluster {
 
 impl MiniCluster {
     pub fn new(conf: &MiniClusterConfig) -> MiniCluster {
-        let kudu_home = env::var("KUDU_HOME").expect("KUDU_HOME environment variable must be set");
-        let mut bin_dir = PathBuf::from(&kudu_home);
-        bin_dir.push("build");
-        bin_dir.push("latest");
-        bin_dir.push("bin");
-
-        let master_bin = bin_dir.join("kudu-master");
-        let tserver_bin = bin_dir.join("kudu-tserver");
+        let master_bin = get_executable_path("kudu-master");
+        let tserver_bin = get_executable_path("kudu-tserver");
         let dir = TempDir::new("kudu-rs-mini-cluster").expect("unable to create temp dir");
 
         let num_nodes = (conf.num_masters + conf.num_tservers) as usize;
@@ -177,6 +172,30 @@ fn get_unbound_addresses(count: usize) -> Vec<SocketAddr> {
         addrs.push(addr);
     }
     addrs
+}
+
+/// Attempts to get the path of a Kudu executable (`kudu-master` or `kudu-tserver`). If the
+/// `KUDU_HOME` environment variable is set, then that will be used, otherwise it will be searched
+/// for on the path. If the executable can not be found, panic.
+fn get_executable_path(executable: &str) -> PathBuf {
+    if let Ok(kudu_home) = env::var("KUDU_HOME") {
+        let mut bin = PathBuf::from(&kudu_home);
+        bin.push("build");
+        bin.push("latest");
+        bin.push("bin");
+        bin.push(executable);
+        return bin;
+    }
+
+    let path_bytes = Command::new("which")
+                             .arg(executable)
+                             .output()
+                             .expect(&format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
+                                              executable))
+                             .stdout;
+    let path = CString::new(path_bytes).unwrap().into_string().unwrap();
+
+    PathBuf::from(path.lines().next().unwrap())
 }
 
 /// Mini cluster configuration options. Unless otherwise specified, the defaults match the master
