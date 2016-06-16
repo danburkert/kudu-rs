@@ -5,7 +5,22 @@ use std::mem;
 use std::result;
 use std::str::Utf8Error;
 
-use kudu_pb::rpc_header::{ErrorStatusPB, ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB};
+use kudu_pb::master::{
+    MasterErrorPB,
+    MasterErrorPB_Code as MasterErrorCodePB,
+};
+use kudu_pb::rpc_header::{
+    ErrorStatusPB as RpcErrorPB,
+    ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB
+};
+use kudu_pb::tserver::{
+    TabletServerErrorPB,
+    TabletServerErrorPB_Code as TabletServerErrorCodePB,
+};
+use kudu_pb::wire_protocol::{
+    AppStatusPB as StatusPB,
+    AppStatusPB_ErrorCode as StatusCodePB,
+};
 use protobuf::ProtobufError;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -274,8 +289,8 @@ impl error::Error for RpcError {
     }
 }
 
-impl From<ErrorStatusPB> for RpcError {
-    fn from(mut error: ErrorStatusPB) -> RpcError {
+impl From<RpcErrorPB> for RpcError {
+    fn from(mut error: RpcErrorPB) -> RpcError {
         let code = match error.get_code() {
             RpcErrorCodePB::FATAL_UNKNOWN => RpcErrorCode::FatalUnknown,
             RpcErrorCodePB::ERROR_APPLICATION => RpcErrorCode::ApplicationError,
@@ -331,11 +346,48 @@ pub enum StatusCode {
     EndOfFile,
 }
 
+impl From<StatusCodePB> for StatusCode {
+    fn from(code: StatusCodePB) -> StatusCode {
+        match code {
+            StatusCodePB::UNKNOWN_ERROR => StatusCode::UnknownError,
+            StatusCodePB::OK => unreachable!("shouldn't be accessing an OK status"),
+            StatusCodePB::NOT_FOUND => StatusCode::NotFound,
+            StatusCodePB::CORRUPTION => StatusCode::Corruption,
+            StatusCodePB::NOT_SUPPORTED => StatusCode::NotSupported,
+            StatusCodePB::INVALID_ARGUMENT => StatusCode::InvalidArgument,
+            StatusCodePB::IO_ERROR => StatusCode::IoError,
+            StatusCodePB::ALREADY_PRESENT => StatusCode::AlreadyPresent,
+            StatusCodePB::RUNTIME_ERROR => StatusCode::RuntimeError,
+            StatusCodePB::NETWORK_ERROR => StatusCode::NetworkError,
+            StatusCodePB::ILLEGAL_STATE => StatusCode::IllegalState,
+            StatusCodePB::NOT_AUTHORIZED => StatusCode::NotAuthorized,
+            StatusCodePB::ABORTED => StatusCode::Aborted,
+            StatusCodePB::REMOTE_ERROR => StatusCode::RemoteError,
+            StatusCodePB::SERVICE_UNAVAILABLE => StatusCode::ServiceUnavailable,
+            StatusCodePB::TIMED_OUT => StatusCode::TimedOut,
+            StatusCodePB::UNINITIALIZED => StatusCode::Uninitialized,
+            StatusCodePB::CONFIGURATION_ERROR => StatusCode::ConfigurationError,
+            StatusCodePB::INCOMPLETE => StatusCode::Incomplete,
+            StatusCodePB::END_OF_FILE => StatusCode::EndOfFile,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Status {
     code: StatusCode,
     message: Option<String>,
     posix_code: Option<i32>,
+}
+
+impl From<StatusPB> for Status {
+    fn from(mut status: StatusPB) -> Status {
+        Status {
+            code: StatusCode::from(status.get_code()),
+            message: if status.has_message() { Some(status.take_message()) } else { None },
+            posix_code: if status.has_posix_code() { Some(status.get_posix_code()) } else { None },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -383,6 +435,32 @@ pub enum TabletServerErrorCode {
     Throttled,
 }
 
+impl From<TabletServerErrorCodePB> for TabletServerErrorCode {
+    fn from(error: TabletServerErrorCodePB) -> TabletServerErrorCode {
+        match error {
+            TabletServerErrorCodePB::UNKNOWN_ERROR => TabletServerErrorCode::UnknownError,
+            TabletServerErrorCodePB::INVALID_SCHEMA => TabletServerErrorCode::InvalidSchema,
+            TabletServerErrorCodePB::INVALID_ROW_BLOCK => TabletServerErrorCode::InvalidRowBlock,
+            TabletServerErrorCodePB::INVALID_MUTATION => TabletServerErrorCode::InvalidMutation,
+            TabletServerErrorCodePB::MISMATCHED_SCHEMA => TabletServerErrorCode::MismatchedSchema,
+            TabletServerErrorCodePB::TABLET_NOT_FOUND => TabletServerErrorCode::TabletNotFound,
+            TabletServerErrorCodePB::SCANNER_EXPIRED => TabletServerErrorCode::ScannerExpired,
+            TabletServerErrorCodePB::INVALID_SCAN_SPEC => TabletServerErrorCode::InvalidScanSpec,
+            TabletServerErrorCodePB::INVALID_CONFIG => TabletServerErrorCode::InvalidConfig,
+            TabletServerErrorCodePB::TABLET_ALREADY_EXISTS => TabletServerErrorCode::TabletAlreadyExists,
+            TabletServerErrorCodePB::TABLET_HAS_A_NEWER_SCHEMA => TabletServerErrorCode::TabletHasANewerSchema,
+            TabletServerErrorCodePB::TABLET_NOT_RUNNING => TabletServerErrorCode::TabletNotRunning,
+            TabletServerErrorCodePB::INVALID_SNAPSHOT => TabletServerErrorCode::InvalidSnapshot,
+            TabletServerErrorCodePB::INVALID_SCAN_CALL_SEQ_ID => TabletServerErrorCode::InvalidScanCallSeqId,
+            TabletServerErrorCodePB::NOT_THE_LEADER => TabletServerErrorCode::NotTheLeader,
+            TabletServerErrorCodePB::WRONG_SERVER_UUID => TabletServerErrorCode::WrongServerUuid,
+            TabletServerErrorCodePB::CAS_FAILED => TabletServerErrorCode::CasFailed,
+            TabletServerErrorCodePB::ALREADY_INPROGRESS => TabletServerErrorCode::AlreadyInProgress,
+            TabletServerErrorCodePB::THROTTLED => TabletServerErrorCode::Throttled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TabletServerError {
     code: TabletServerErrorCode,
@@ -425,6 +503,15 @@ impl fmt::Display for TabletServerError {
     }
 }
 
+impl From<TabletServerErrorPB> for TabletServerError {
+    fn from(mut error: TabletServerErrorPB) -> TabletServerError {
+        TabletServerError {
+            code: TabletServerErrorCode::from(error.get_code()),
+            status: Status::from(error.take_status()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MasterErrorCode {
     /// An error which has no more specific error code. The `Status` code and message may reveal
@@ -445,6 +532,24 @@ pub enum MasterErrorCode {
     NotTheLeader,
     /// The number of replicas requested is greater than the number of live servers in the cluster.
     ReplicationFactorTooHigh,
+    /// A tablet involved in the operation is not running.
+    TabletNotRunning,
+}
+
+impl From<MasterErrorCodePB> for MasterErrorCode {
+    fn from(error: MasterErrorCodePB) -> MasterErrorCode {
+        match error {
+            MasterErrorCodePB::UNKNOWN_ERROR => MasterErrorCode::UnknownError,
+            MasterErrorCodePB::INVALID_SCHEMA => MasterErrorCode::InvalidSchema,
+            MasterErrorCodePB::TABLE_NOT_FOUND => MasterErrorCode::TableNotFound,
+            MasterErrorCodePB::TABLE_ALREADY_PRESENT => MasterErrorCode::TableAlreadyPresent,
+            MasterErrorCodePB::TOO_MANY_TABLETS => MasterErrorCode::TooManyTablets,
+            MasterErrorCodePB::CATALOG_MANAGER_NOT_INITIALIZED => MasterErrorCode::CatalogManagerNotInitialized,
+            MasterErrorCodePB::NOT_THE_LEADER => MasterErrorCode::NotTheLeader,
+            MasterErrorCodePB::REPLICATION_FACTOR_TOO_HIGH => MasterErrorCode::ReplicationFactorTooHigh,
+            MasterErrorCodePB::TABLET_NOT_RUNNING => MasterErrorCode::TabletNotRunning,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -464,6 +569,7 @@ impl error::Error for MasterError {
             MasterErrorCode::CatalogManagerNotInitialized => "catalog manager not initialized",
             MasterErrorCode::NotTheLeader => "not the leader",
             MasterErrorCode::ReplicationFactorTooHigh => "replication factor too high",
+            MasterErrorCode::TabletNotRunning => "tablet not running",
         }
     }
 
@@ -475,5 +581,14 @@ impl error::Error for MasterError {
 impl fmt::Display for MasterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+impl From<MasterErrorPB> for MasterError {
+    fn from(mut error: MasterErrorPB) -> MasterError {
+        MasterError {
+            code: MasterErrorCode::from(error.get_code()),
+            status: Status::from(error.take_status()),
+        }
     }
 }
