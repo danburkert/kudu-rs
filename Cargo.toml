@@ -7,10 +7,9 @@ description = "Rust client for Apache Kudu (Incubating)"
 keywords = ["kudu", "database"]
 
 [dependencies]
-kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 
 byteorder = "0.5"
-eventual = "0.1.7"
+kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 log = "0.3"
 mio = "0.5"
 netbuf = "0.3"
@@ -18,6 +17,7 @@ parking_lot = "0.2"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
 rand = "0.3.14"
 slab = "0.1"
+uuid = "0.2"
 vec_map = "0.6"
 
 [dev-dependencies]

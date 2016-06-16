@@ -10,6 +10,7 @@ extern crate parking_lot;
 extern crate protobuf;
 extern crate rand;
 extern crate slab;
+extern crate uuid;
 extern crate vec_map;
 
 #[cfg(test)] extern crate tempdir;
@@ -33,8 +34,10 @@ mod value;
 #[cfg(test)]
 mod mini_cluster;
 
+pub use client::*;
 pub use error::*;
 pub use schema::*;
+pub use table::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {

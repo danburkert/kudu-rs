@@ -18,9 +18,9 @@ pub struct TableBuilder {
 
 impl TableBuilder {
 
-    pub fn new(name: String, schema: Schema) -> TableBuilder {
+    pub fn new<S>(name: S, schema: Schema) -> TableBuilder where S: Into<String> {
         TableBuilder {
-            name: name,
+            name: name.into(),
             schema: schema,
             range_partition_columns: Vec::new(),
             range_encoder: OperationEncoder::new(),

@@ -165,7 +165,7 @@ impl SchemaBuilder {
         self
     }
 
-    fn build(mut self) -> Result<Schema> {
+    pub fn build(mut self) -> Result<Schema> {
         if self.primary_key.is_empty() {
             return Err(Error::InvalidArgument(
                     "primary key must have at least one column".to_owned()));
