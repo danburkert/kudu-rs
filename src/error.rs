@@ -558,6 +558,21 @@ pub struct MasterError {
     status: Status,
 }
 
+impl MasterError {
+    pub fn new(code: MasterErrorCode, status: Status) -> MasterError {
+        MasterError {
+            code: code,
+            status: status,
+        }
+    }
+    pub fn code(&self) -> MasterErrorCode {
+        self.code
+    }
+    pub fn status(&self) -> &Status {
+        &self.status
+    }
+}
+
 impl error::Error for MasterError {
     fn description(&self) -> &str {
         match self.code {

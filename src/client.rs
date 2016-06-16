@@ -1,21 +1,16 @@
 use std::fmt;
-use std::sync::mpsc::sync_channel;
-use std::time::{Duration, Instant};
 use std::net::{
     IpAddr,
     Ipv4Addr,
     SocketAddr,
 };
+use std::sync::mpsc::sync_channel;
+use std::time::{Duration, Instant};
 
 use master::MasterProxy;
-use rpc::{
-    channel_callback,
-    Messenger,
-    Rpc,
-};
-use Result;
-
+use rpc::Messenger;
 use table::TableBuilder;
+use Result;
 
 #[derive(Clone)]
 pub struct Client {
@@ -37,14 +32,13 @@ impl Client {
     }
 
     fn create_table(&self, builder: TableBuilder) -> Result<()> {
-        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(1);
+        let (send, recv) = sync_channel(0);
 
         self.master.create_table(Instant::now() + self.config.default_admin_operation_timeout(),
                                  builder.into_pb(),
-                                 channel_callback(send));
+                                 move |resp| send.send(resp).unwrap());
 
-        let (result, _rpc) = recv.recv().unwrap();
-        result
+        recv.recv().unwrap().map(|_| ())
     }
 }
 

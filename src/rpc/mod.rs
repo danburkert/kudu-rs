@@ -112,6 +112,14 @@ impl Rpc {
         self.response.as_any().downcast_ref::<T>().unwrap()
     }
 
+    pub fn response_mut<T>(&mut self) -> &mut T where T: Any {
+        self.response.as_any_mut().downcast_mut::<T>().unwrap()
+    }
+
+    pub fn take_response<T>(self) -> T where T: Any {
+        *self.response.into_any().downcast::<T>().unwrap()
+    }
+
     pub fn mut_response<T>(&mut self) -> &mut T where T: Any {
         self.response.as_any_mut().downcast_mut::<T>().unwrap()
     }

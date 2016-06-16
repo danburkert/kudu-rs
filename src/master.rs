@@ -1,11 +1,13 @@
 use std::cmp;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use protobuf::Message;
 use backoff::Backoff;
 use dns::resolve_hosts_async;
 use rpc::{
@@ -14,21 +16,27 @@ use rpc::{
     Rpc,
     master
 };
-use Result;
 use Error;
+use MasterError;
+use MasterErrorCode;
+use Result;
+use Status;
 
 use parking_lot::Mutex;
 use kudu_pb::common::HostPortPB;
 use kudu_pb::master::{
-    CreateTableRequestPB,
-    CreateTableResponsePB,
-    GetMasterRegistrationRequestPB,
-    GetMasterRegistrationResponsePB,
-    ListMastersRequestPB,
-    ListMastersResponsePB,
-    ListTablesRequestPB,
-    ListTablesResponsePB,
-    MasterErrorPB_Code as MasterErrorCode
+    AlterTableRequestPB, AlterTableResponsePB,
+    CreateTableRequestPB, CreateTableResponsePB,
+    DeleteTableRequestPB, DeleteTableResponsePB,
+    GetTableLocationsRequestPB, GetTableLocationsResponsePB,
+    GetTableSchemaRequestPB, GetTableSchemaResponsePB,
+    GetTabletLocationsRequestPB, GetTabletLocationsResponsePB,
+    IsAlterTableDoneRequestPB, IsAlterTableDoneResponsePB,
+    IsCreateTableDoneRequestPB, IsCreateTableDoneResponsePB,
+    ListMastersRequestPB, ListMastersResponsePB,
+    ListTablesRequestPB, ListTablesResponsePB,
+    ListTabletServersRequestPB, ListTabletServersResponsePB,
+    PingRequestPB, PingResponsePB,
 };
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 
@@ -46,6 +54,21 @@ const LEADER_REFRESH_TIMEOUT_SECS: u64 = 10;
 #[derive(Clone)]
 pub struct MasterProxy {
     inner: Arc<Inner>,
+}
+
+macro_rules! impl_master_rpc {
+    ($fn_name:ident, $request_type:ident, $response_type:ident) => {
+        pub fn $fn_name<F>(&self, deadline: Instant, request: $request_type, cb: F)
+            where F: FnOnce(Result<$response_type>) + Send + 'static {
+                // The real leader address will be filled in by `send_to_leader`.
+                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+                let mut rpc = master::$fn_name(addr, deadline, request);
+                rpc.callback = Some(Box::new(CB(self.clone(), cb,
+                                                Backoff::with_duration_range(8, 4096),
+                                                PhantomData::<$response_type>)));
+                self.send_to_leader(rpc);
+            }
+    };
 }
 
 impl MasterProxy {
@@ -86,110 +109,18 @@ impl MasterProxy {
         }
     }
 
-    /// Sends a `ListTables` RPC to the leader master, and executes the provided callback on
-    /// completion.
-    pub fn list_tables(&self,
-                       deadline: Instant,
-                       request: ListTablesRequestPB,
-                       callback: Box<Callback>) {
-
-        struct ListTablesCB(MasterProxy, Box<Callback>, Backoff);
-        impl Callback for ListTablesCB {
-            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-                match result {
-                    Ok(()) => {
-                        let error_code = {
-                            let resp = rpc.response::<ListTablesResponsePB>();
-                            debug!("{:?} callback, response: {:?}", rpc, resp);
-                            if resp.has_error() { Some(resp.get_error().get_code()) }
-                            else { None }
-                        };
-                        match error_code {
-                            Some(MasterErrorCode::NOT_THE_LEADER) => {
-                                self.0.reset_leader_cache(rpc.addr);
-                                let proxy: MasterProxy = self.0.clone();
-                                rpc.callback = Some(self);
-                                return proxy.send_to_leader(rpc);
-                            },
-                            Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
-                                // This is a transient error which occurs when the master is starting up.
-                                let delay = Duration::from_millis(self.2.next_backoff_ms());
-                                info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
-                                      rpc, delay);
-                                let messenger = self.0.inner.messenger.clone();
-                                rpc.callback = Some(self);
-                                return messenger.delayed_send(delay, rpc);
-                            },
-                            _ => (), // fall through to callback completion
-                        }
-                    }
-                    Err(ref error) if error.is_network_error() => {
-                        // On connection error, reset the master cache and resend.
-                        self.0.reset_leader_cache(rpc.addr);
-                        let proxy: MasterProxy = self.0.clone();
-                        rpc.callback = Some(self);
-                        return proxy.send_to_leader(rpc);
-                    }
-                    Err(_) => (),
-                }
-
-                // Complete the callback
-                self.1.callback(result, rpc);
-            }
-        }
-
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut rpc = master::list_tables(addr, deadline, request);
-        rpc.callback = Some(Box::new(ListTablesCB(self.clone(), callback,
-                                                  Backoff::with_duration_range(8, 4096))));
-        self.send_to_leader(rpc);
-    }
-
-    pub fn create_table(&self,
-                        deadline: Instant,
-                        request: CreateTableRequestPB,
-                        callback: Box<Callback>) {
-        struct CreateTableCB(MasterProxy, Box<Callback>, Backoff);
-        impl Callback for CreateTableCB {
-            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-                if result.is_ok() {
-                    let error_code = {
-                        let resp = rpc.response::<CreateTableResponsePB>();
-                        debug!("{:?} callback, response: {:?}", rpc, resp);
-                        if resp.has_error() { Some(resp.get_error().get_code()) }
-                        else { None }
-                    };
-                    match error_code {
-                        Some(MasterErrorCode::NOT_THE_LEADER) => {
-                            self.0.reset_leader_cache(rpc.addr);
-                            let proxy: MasterProxy = self.0.clone();
-                            rpc.callback = Some(self);
-                            return proxy.send_to_leader(rpc);
-                        },
-                        Some(MasterErrorCode::CATALOG_MANAGER_NOT_INITIALIZED) => {
-                            // This is a transient error which occurs when the master is starting up.
-                            let delay = Duration::from_millis(self.2.next_backoff_ms());
-                            info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
-                                   rpc, delay);
-                            let messenger = self.0.inner.messenger.clone();
-                            rpc.callback = Some(self);
-                            return messenger.delayed_send(delay, rpc);
-                        },
-                        _ => (), // fall through to callback completion
-                    }
-                }
-
-                // Complete the callback
-                self.1.callback(result, rpc);
-            }
-        }
-
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut rpc = master::create_table(addr, deadline, request);
-        rpc.callback = Some(Box::new(CreateTableCB(self.clone(), callback,
-                                                   Backoff::with_duration_range(8, 4096))));
-        self.send_to_leader(rpc);
-    }
+    impl_master_rpc!(alter_table, AlterTableRequestPB, AlterTableResponsePB);
+    impl_master_rpc!(create_table, CreateTableRequestPB, CreateTableResponsePB);
+    impl_master_rpc!(delete_table, DeleteTableRequestPB, DeleteTableResponsePB);
+    impl_master_rpc!(get_table_locations, GetTableLocationsRequestPB, GetTableLocationsResponsePB);
+    impl_master_rpc!(get_table_schema, GetTableSchemaRequestPB, GetTableSchemaResponsePB);
+    impl_master_rpc!(get_tablet_locations, GetTabletLocationsRequestPB, GetTabletLocationsResponsePB);
+    impl_master_rpc!(is_alter_table_done, IsAlterTableDoneRequestPB, IsAlterTableDoneResponsePB);
+    impl_master_rpc!(is_create_table_done, IsCreateTableDoneRequestPB, IsCreateTableDoneResponsePB);
+    impl_master_rpc!(list_masters, ListMastersRequestPB, ListMastersResponsePB);
+    impl_master_rpc!(list_tables, ListTablesRequestPB, ListTablesResponsePB);
+    impl_master_rpc!(list_tablet_servers, ListTabletServersRequestPB, ListTabletServersResponsePB);
+    impl_master_rpc!(ping, PingRequestPB, PingResponsePB);
 
     /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
     /// leader is discovered.
@@ -495,6 +426,80 @@ struct Inner {
     messenger: Messenger,
 }
 
+trait MasterResponse: Message {
+    fn error(&mut self) -> Option<MasterError>;
+}
+macro_rules! impl_master_response {
+    ($response_type:ident) => {
+        impl MasterResponse for $response_type {
+            fn error(&mut self) -> Option<MasterError> {
+                if self.has_error() { Some(MasterError::from(self.take_error())) } else { None }
+            }
+        }
+    };
+    ($response_type:ident, no_error) => {
+        impl MasterResponse for $response_type {
+            fn error(&mut self) -> Option<MasterError> { None }
+        }
+    };
+}
+impl_master_response!(AlterTableResponsePB);
+impl_master_response!(CreateTableResponsePB);
+impl_master_response!(DeleteTableResponsePB);
+impl_master_response!(GetTableLocationsResponsePB);
+impl_master_response!(GetTableSchemaResponsePB);
+impl_master_response!(GetTabletLocationsResponsePB);
+impl_master_response!(IsAlterTableDoneResponsePB);
+impl_master_response!(IsCreateTableDoneResponsePB);
+impl_master_response!(ListTablesResponsePB);
+impl_master_response!(ListTabletServersResponsePB);
+impl_master_response!(PingResponsePB, no_error);
+
+impl MasterResponse for ListMastersResponsePB {
+    fn error(&mut self) -> Option<MasterError> {
+        if self.has_error() {
+            Some(MasterError::new(MasterErrorCode::UnknownError, Status::from(self.take_error())))
+        } else { None }
+    }
+}
+
+struct CB<Resp, F>(MasterProxy, F, Backoff, PhantomData<Resp>)
+where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static;
+impl <Resp, F> Callback for CB<Resp, F>
+where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static {
+    fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+        match result {
+            Ok(_) => match rpc.mut_response::<Resp>().error() {
+                Some(ref error) if error.code() == MasterErrorCode::NotTheLeader => {
+                    self.0.reset_leader_cache(rpc.addr);
+                    let proxy: MasterProxy = self.0.clone();
+                    rpc.callback = Some(self);
+                    proxy.send_to_leader(rpc);
+                },
+                Some(ref error) if error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
+                    // This is a transient error which occurs when the master is starting up.
+                    let delay = Duration::from_millis(self.2.next_backoff_ms());
+                    info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
+                            rpc, delay);
+                    let messenger = self.0.inner.messenger.clone();
+                    rpc.callback = Some(self);
+                    messenger.delayed_send(delay, rpc);
+                },
+                Some(error) => self.1(Err(Error::from(MasterError::from(error)))),
+                None => self.1(Ok(rpc.take_response::<Resp>())),
+            },
+            Err(ref error) if error.is_network_error() => {
+                // On connection error, reset the master cache and resend.
+                self.0.reset_leader_cache(rpc.addr);
+                let proxy: MasterProxy = self.0.clone();
+                rpc.callback = Some(self);
+                proxy.send_to_leader(rpc);
+            }
+            Err(error) => self.1(Err(error)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -502,11 +507,7 @@ mod tests {
     use std::sync::mpsc::sync_channel;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use rpc::{
-        channel_callback,
-        Messenger,
-        Rpc,
-    };
+    use rpc:: Messenger;
     use Error;
     use Result;
     use super::*;
@@ -514,9 +515,8 @@ mod tests {
     use env_logger;
     use kudu_pb::master::{ListTablesRequestPB, ListTablesResponsePB};
 
-    fn check_list_tables_response(result: Result<()>, rpc: Rpc) {
-        assert_eq!(Ok(()), result);
-        let response = rpc.response::<ListTablesResponsePB>();
+    fn check_list_tables_response(result: Result<ListTablesResponsePB>) {
+        let response = result.unwrap();
         assert!(!response.has_error(), "failed response: {:?}", response);
         assert!(response.get_tables().is_empty(), "response: {:?}", response);
     }
@@ -531,10 +531,10 @@ mod tests {
 
         let (send, recv) = sync_channel(0);
         proxy.list_tables(Instant::now() + Duration::from_secs(5),
-                          ListTablesRequestPB::new(), channel_callback(send));
+                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
-        check_list_tables_response(result, rpc);
+        let result = recv.recv().unwrap();
+        check_list_tables_response(result);
     }
 
     /// Tests that the leader is discovered in a multi-master cluster.
@@ -547,10 +547,10 @@ mod tests {
 
         let (send, recv) = sync_channel(0);
         proxy.list_tables(Instant::now() + Duration::from_secs(5),
-                          ListTablesRequestPB::new(), channel_callback(send));
+                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
-        check_list_tables_response(result, rpc);
+        let result = recv.recv().unwrap();
+        check_list_tables_response(result);
     }
 
     /// Tests that masters which are not part of the original seed list are discovered in a
@@ -564,10 +564,10 @@ mod tests {
 
         let (send, recv) = sync_channel(0);
         proxy.list_tables(Instant::now() + Duration::from_secs(5),
-                          ListTablesRequestPB::new(), channel_callback(send));
+                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
-        check_list_tables_response(result, rpc);
+        let result = recv.recv().unwrap();
+        check_list_tables_response(result);
 
         let mut discovered_masters = HashSet::new();
         let mut cluster_masters = HashSet::new();
@@ -597,9 +597,9 @@ mod tests {
 
         let (send, recv) = sync_channel(0);
         proxy.list_tables(now + Duration::from_millis(300),
-                          ListTablesRequestPB::new(), channel_callback(send.clone()));
+                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
+        let result = recv.recv().unwrap();
 
         let elapsed = Instant::now().duration_since(now);
 
@@ -622,20 +622,21 @@ mod tests {
         let proxy = MasterProxy::new(&cluster.master_addrs()[0..1], Messenger::new().unwrap());
 
         let (send, recv) = sync_channel(0);
+        let send_copy = send.clone();
         proxy.list_tables(Instant::now() + Duration::from_secs(5),
-                          ListTablesRequestPB::new(), channel_callback(send.clone()));
+                          ListTablesRequestPB::new(), move |resp| send_copy.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
-        check_list_tables_response(result, rpc);
+        let result = recv.recv().unwrap();
+        check_list_tables_response(result);
         assert_eq!(3, proxy.masters().len());
 
         info!("Stopping leader {}", proxy.leader().unwrap());
         cluster.stop_node(proxy.leader().unwrap());
 
         proxy.list_tables(Instant::now() + Duration::from_secs(10),
-                          ListTablesRequestPB::new(), channel_callback(send));
+                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
-        let (result, rpc) = recv.recv().unwrap();
-        check_list_tables_response(result, rpc);
+        let result = recv.recv().unwrap();
+        check_list_tables_response(result);
     }
 }
