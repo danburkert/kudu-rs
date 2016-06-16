@@ -38,7 +38,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    fn set<V>(&mut self, idx: usize, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
+    pub fn set<V>(&mut self, idx: usize, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
         try!(self.check_column(idx, V::data_type()));
         if value.is_null() {
             if !self.schema.columns()[idx].is_nullable() {
@@ -63,7 +63,7 @@ impl <'a> Row<'a> {
         Ok(self)
     }
 
-    fn set_by_name<V>(&mut self, column: &str, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
+    pub fn set_by_name<V>(&mut self, column: &str, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
         if let Some(idx) = self.schema.column_index(column) {
             self.set(idx, value)
         } else {
@@ -71,7 +71,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    fn get<'b, V>(&'b self, idx: usize) -> Result<V> where V: Value<'b> {
+    pub fn get<'b, V>(&'b self, idx: usize) -> Result<V> where V: Value<'b> {
         try!(self.check_column(idx, V::data_type()));
         if !self.set_columns.get(idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
@@ -93,7 +93,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    fn get_by_name<'b, V>(&'b self, column: &str) -> Result<Option<V>> where V: Value<'b> {
+    pub fn get_by_name<'b, V>(&'b self, column: &str) -> Result<Option<V>> where V: Value<'b> {
         if let Some(idx) = self.schema.column_index(column) {
             self.get(idx)
         } else {

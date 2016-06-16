@@ -36,8 +36,10 @@ mod mini_cluster;
 
 pub use client::*;
 pub use error::*;
+pub use row::Row;
 pub use schema::*;
 pub use table::*;
+pub use value::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
