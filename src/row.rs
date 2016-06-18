@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use byteorder::{ByteOrder, LittleEndian};
 use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationType};
 
@@ -12,16 +10,16 @@ use Result;
 use Schema;
 use value::Value;
 
-pub struct Row<'a> {
+pub struct Row {
     data: Box<[u8]>,
-    indirect_data: VecMap<Cow<'a, [u8]>>,
+    indirect_data: VecMap<Vec<u8>>,
     set_columns: BitSet,
     null_columns: BitSet,
-    schema: &'a Schema,
+    schema: Schema,
 }
 
-impl <'a> Row<'a> {
-    pub fn new(schema: &'a Schema) -> Row<'a> {
+impl Row {
+    pub fn new(schema: Schema) -> Row {
         let num_columns = schema.columns().len();
 
         let null_columns = if schema.has_nullable_columns() { BitSet::with_capacity(num_columns) }
@@ -38,7 +36,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    pub fn set<V>(&mut self, idx: usize, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
+    pub fn set<'a, V>(&mut self, idx: usize, value: V) -> Result<&mut Row> where V: Value<'a> {
         try!(self.check_column(idx, V::data_type()));
         if value.is_null() {
             if !self.schema.columns()[idx].is_nullable() {
@@ -52,7 +50,7 @@ impl <'a> Row<'a> {
             if self.schema.has_nullable_columns() { self.null_columns.remove(idx); }
 
             if V::is_var_len() {
-                self.indirect_data.insert(idx, value.indirect_data().unwrap());
+                self.indirect_data.insert(idx, value.indirect_data());
             } else {
                 let offset = self.schema.column_offsets()[idx];
                 let len = V::size();
@@ -63,7 +61,7 @@ impl <'a> Row<'a> {
         Ok(self)
     }
 
-    pub fn set_by_name<V>(&mut self, column: &str, value: V) -> Result<&mut Row<'a>> where V: Value<'a> {
+    pub fn set_by_name<'a, V>(&mut self, column: &str, value: V) -> Result<&mut Row> where V: Value<'a> {
         if let Some(idx) = self.schema.column_index(column) {
             self.set(idx, value)
         } else {
@@ -71,7 +69,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    pub fn get<'b, V>(&'b self, idx: usize) -> Result<V> where V: Value<'b> {
+    pub fn get<'a, V>(&'a self, idx: usize) -> Result<V> where V: Value<'a> {
         try!(self.check_column(idx, V::data_type()));
         if !self.set_columns.get(idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
@@ -93,7 +91,7 @@ impl <'a> Row<'a> {
         }
     }
 
-    pub fn get_by_name<'b, V>(&'b self, column: &str) -> Result<Option<V>> where V: Value<'b> {
+    pub fn get_by_name<'a, V>(&'a self, column: &str) -> Result<Option<V>> where V: Value<'a> {
         if let Some(idx) = self.schema.column_index(column) {
             self.get(idx)
         } else {
@@ -188,7 +186,7 @@ mod tests {
     #[test]
     fn test_partial_row() {
         let schema = schema::tests::all_types_schema();
-        let mut row = Row::new(&schema);
+        let mut row = schema.new_row();
 
         row.set::<i32>(0, 12).unwrap();
         assert_eq!(12, row.get::<i32>(0).unwrap());

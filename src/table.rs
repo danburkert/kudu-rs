@@ -49,7 +49,7 @@ impl TableBuilder {
 
     pub fn add_range_split<F>(&mut self, f: F) -> &mut TableBuilder where F: FnOnce(&mut Row) {
         {
-            let mut row = Row::new(&self.schema);
+            let mut row = self.schema.new_row();
             f(&mut row);
             self.range_encoder.encode_range_split(row);
         }
@@ -58,8 +58,8 @@ impl TableBuilder {
 
     pub fn add_range_bound<F>(&mut self, f: F) -> &mut TableBuilder where F: FnOnce(&mut Row, &mut Row) {
         {
-            let mut lower = Row::new(&self.schema);
-            let mut upper = Row::new(&self.schema);
+            let mut lower = self.schema.new_row();
+            let mut upper = self.schema.new_row();
             f(&mut lower, &mut upper);
             self.range_encoder.encode_range_bound(lower, upper);
         }
@@ -125,5 +125,29 @@ impl TableBuilder {
 
         if let Some(num_replicas) = num_replicas { pb.set_num_replicas(num_replicas); }
         pb
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use env_logger;
+
+    use schema::tests::simple_schema;
+    use super::*;
+
+    #[test]
+    fn create_table_builder() {
+        let _ = env_logger::init();
+
+
+        let val = String::from("foo");
+
+        let key_val: &str = &val;
+
+        let mut table_builder = TableBuilder::new("t", simple_schema());
+
+
+        table_builder.add_range_split(|row| { row.set_by_name("key", key_val).unwrap(); });
     }
 }

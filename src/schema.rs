@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kudu_pb::common::{ColumnSchemaPB, SchemaPB};
 
@@ -7,6 +8,7 @@ use DataType;
 use EncodingType;
 use Error;
 use Result;
+use Row;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
@@ -73,7 +75,7 @@ impl Column {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Schema {
+pub struct Inner {
     columns: Vec<Column>,
     columns_by_name: HashMap<String, usize>,
     column_offsets: Vec<usize>,
@@ -82,43 +84,52 @@ pub struct Schema {
     has_nullable_columns: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Schema {
+    inner: Arc<Inner>,
+}
+
 impl Schema {
     pub fn columns(&self) -> &[Column] {
-        &self.columns
+        &self.inner.columns
     }
 
     pub fn column(&self, index: usize) -> Option<&Column> {
-        self.columns.get(index)
+        self.inner.columns.get(index)
     }
 
     pub fn column_by_name(&self, name: &str) -> Option<&Column> {
-        self.column_index(name).map(|idx| &self.columns[idx])
+        self.column_index(name).map(|idx| &self.inner.columns[idx])
     }
 
     pub fn column_index(&self, name: &str) -> Option<usize> {
-        self.columns_by_name.get(name).cloned()
+        self.inner.columns_by_name.get(name).cloned()
     }
 
     pub fn primary_key(&self) -> &[Column] {
-        &self.columns[0..self.num_primary_key_columns]
+        &self.inner.columns[0..self.inner.num_primary_key_columns]
     }
 
     pub fn row_size(&self) -> usize {
-        self.row_size
+        self.inner.row_size
     }
 
     pub fn has_nullable_columns(&self) -> bool {
-        self.has_nullable_columns
+        self.inner.has_nullable_columns
     }
 
     pub fn column_offsets(&self) -> &[usize] {
-        &self.column_offsets
+        &self.inner.column_offsets
+    }
+
+    pub fn new_row(&self) -> Row {
+        Row::new(self.clone())
     }
 
     pub fn as_pb(&self) -> SchemaPB {
         let mut pb = SchemaPB::new();
-        for (idx, column) in self.columns.iter().enumerate() {
-            pb.mut_columns().push(column.to_pb(idx < self.num_primary_key_columns));
+        for (idx, column) in self.inner.columns.iter().enumerate() {
+            pb.mut_columns().push(column.to_pb(idx < self.inner.num_primary_key_columns));
         }
         pb
     }
@@ -202,12 +213,14 @@ impl SchemaBuilder {
         }
 
         Ok(Schema {
-            columns: columns,
-            columns_by_name: columns_by_name,
-            column_offsets: column_offsets,
-            num_primary_key_columns: num_primary_key_columns,
-            row_size: row_size,
-            has_nullable_columns: has_nullable_columns,
+            inner: Arc::new(Inner {
+                columns: columns,
+                columns_by_name: columns_by_name,
+                column_offsets: column_offsets,
+                num_primary_key_columns: num_primary_key_columns,
+                row_size: row_size,
+                has_nullable_columns: has_nullable_columns,
+            }),
         })
     }
 }
@@ -323,6 +336,14 @@ pub mod tests {
 
     use super::*;
     use DataType;
+
+    pub fn simple_schema() -> Schema {
+        let mut builder = SchemaBuilder::new();
+        builder.add_column("key", DataType::String).set_not_null();
+        builder.add_column("val", DataType::String);
+        builder.set_primary_key(vec!["key".to_string()]);
+        builder.build().unwrap()
+    }
 
     pub fn all_types_schema() -> Schema {
         let mut builder = SchemaBuilder::new();
