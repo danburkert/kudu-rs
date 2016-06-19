@@ -2,16 +2,18 @@ use kudu_pb::master::CreateTableRequestPB;
 use kudu_pb::common::{PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
                       PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB};
 
-use Schema;
+use Error;
+use Result;
 use row::OperationEncoder;
-
 use row::Row;
+use Schema;
 
 pub struct TableBuilder {
     name: String,
     schema: Schema,
     range_partition_columns: Vec<String>,
-    range_encoder: OperationEncoder,
+    range_splits: Vec<Row>,
+    range_bounds: Vec<(Row, Row)>,
     hash_partitions: Vec<(Vec<String>, i32, Option<u32>)>,
     num_replicas: Option<i32>,
 }
@@ -23,7 +25,8 @@ impl TableBuilder {
             name: name.into(),
             schema: schema,
             range_partition_columns: Vec::new(),
-            range_encoder: OperationEncoder::new(),
+            range_splits: Vec::new(),
+            range_bounds: Vec::new(),
             hash_partitions: Vec::new(),
             num_replicas: None,
         }
@@ -47,30 +50,25 @@ impl TableBuilder {
         self
     }
 
-    pub fn add_range_split<F>(&mut self, f: F) -> &mut TableBuilder where F: FnOnce(&mut Row) {
-        {
-            let mut row = self.schema.new_row();
-            f(&mut row);
-            self.range_encoder.encode_range_split(row);
-        }
+    pub fn add_range_split<F>(&mut self, split_row: Row) -> &mut TableBuilder {
+        self.range_splits.push(split_row);
         self
     }
 
-    pub fn add_range_bound<F>(&mut self, f: F) -> &mut TableBuilder where F: FnOnce(&mut Row, &mut Row) {
-        {
-            let mut lower = self.schema.new_row();
-            let mut upper = self.schema.new_row();
-            f(&mut lower, &mut upper);
-            self.range_encoder.encode_range_bound(lower, upper);
-        }
+    pub fn add_range_bound<F>(&mut self, lower_bound: Row, upper_bound: Row) -> &mut TableBuilder {
+        self.range_bounds.push((lower_bound, upper_bound));
         self
     }
 
-    pub fn clear_range_splits_and_bounds(&mut self) -> &mut TableBuilder {
-        self.range_encoder.clear();
+    pub fn clear_range_splits(&mut self) -> &mut TableBuilder {
+        self.range_splits.clear();
         self
     }
 
+    pub fn clear_range_bounds(&mut self) -> &mut TableBuilder {
+        self.range_bounds.clear();
+        self
+    }
 
     pub fn add_hash_partitions(&mut self, columns: Vec<String>, num_buckets: i32) -> &mut TableBuilder {
         self.hash_partitions.push((columns, num_buckets, None));
@@ -94,9 +92,21 @@ impl TableBuilder {
         self.num_replicas = Some(num_replicas);
     }
 
-    pub fn into_pb(self) -> CreateTableRequestPB {
-        let TableBuilder { name, schema, range_partition_columns,
-                           range_encoder, hash_partitions, num_replicas } = self;
+    pub fn into_pb(self) -> Result<CreateTableRequestPB> {
+        let TableBuilder { name, schema, range_partition_columns, range_splits,
+                           range_bounds, hash_partitions, num_replicas } = self;
+
+        let range_encoder = OperationEncoder::new();
+        for split in range_splits {
+            if !split.schema().ref_eq(&schema) {
+                return Err(Error::InvalidArgument(
+                        format!("schema of split row {:?} does not match the table schema {:?}",
+                                split, schema)));
+            }
+
+        }
+
+
         let mut pb = CreateTableRequestPB::new();
         pb.set_name(name);
         pb.set_schema(schema.as_pb());
@@ -124,7 +134,7 @@ impl TableBuilder {
         }
 
         if let Some(num_replicas) = num_replicas { pb.set_num_replicas(num_replicas); }
-        pb
+        Ok(pb)
     }
 }
 

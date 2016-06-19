@@ -1,3 +1,5 @@
+use std::fmt;
+
 use byteorder::{ByteOrder, LittleEndian};
 use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationType};
 
@@ -99,6 +101,10 @@ impl Row {
         }
     }
 
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
     /// Checks that the column with the specified index has the expected type.
     fn check_column(&self, idx: usize, data_type: DataType) -> Result<()> {
         if idx >= self.schema.columns().len() {
@@ -113,6 +119,14 @@ impl Row {
         Ok(())
     }
 }
+
+// TODO: improve this
+impl fmt::Debug for Row {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Row")
+    }
+}
+
 
 pub struct OperationEncoder {
     data: Vec<u8>,

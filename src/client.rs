@@ -43,7 +43,9 @@ impl Client {
     /// new table's ID, or an error on failure.
     pub fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<Uuid> {
         let (send, recv) = sync_channel(0);
-        self.master.create_table(deadline, builder.into_pb(), move |resp| send.send(resp).unwrap());
+        self.master.create_table(deadline,
+                                 try!(builder.into_pb()),
+                                 move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|resp| Uuid::parse_str(&String::from_utf8_lossy(resp.get_table_id())).unwrap())
     }
 

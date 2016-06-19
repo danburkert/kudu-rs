@@ -126,6 +126,12 @@ impl Schema {
         Row::new(self.clone())
     }
 
+    pub fn ref_eq(&self, other: &Schema) -> bool {
+        let this: *const Inner = &*self.inner;
+        let that: *const Inner = &*other.inner;
+        this == that
+    }
+
     pub fn as_pb(&self) -> SchemaPB {
         let mut pb = SchemaPB::new();
         for (idx, column) in self.inner.columns.iter().enumerate() {
