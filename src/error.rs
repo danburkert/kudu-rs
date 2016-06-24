@@ -43,8 +43,8 @@ pub enum Error {
     /// An I/O error.
     Io(io::Error),
 
-    /// An error serializing or deserializing a Protobuf message.
-    Protobuf(String),
+    /// An error serializing or deserializing a message.
+    Serialization(String),
 
     /// A UTF8 encoding or decoding error.
     Utf8(Utf8Error),
@@ -88,7 +88,7 @@ impl Clone for Error {
                 // this unwrap is ok.
                 Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
             },
-            Error::Protobuf(ref error) => Error::Protobuf(error.clone()),
+            Error::Serialization(ref error) => Error::Serialization(error.clone()),
             Error::Utf8(ref error) => Error::Utf8(error.clone()),
             Error::Backoff => Error::Backoff,
             Error::TimedOut => Error::TimedOut,
@@ -108,7 +108,7 @@ impl PartialEq for Error {
             (&Error::Master(ref a), &Error::Master(ref b)) => a == b,
             (&Error::TabletServer(ref a), &Error::TabletServer(ref b)) => a == b,
             (&Error::Io(ref a), &Error::Io(ref b)) => a.raw_os_error().unwrap() == b.raw_os_error().unwrap(),
-            (&Error::Protobuf(ref a), &Error::Protobuf(ref b)) => a == b,
+            (&Error::Serialization(ref a), &Error::Serialization(ref b)) => a == b,
             (&Error::Utf8(ref a), &Error::Utf8(ref b)) => a == b,
             (&Error::Backoff, &Error::Backoff) => true,
             (&Error::TimedOut, &Error::TimedOut) => true,
@@ -129,7 +129,7 @@ impl error::Error for Error {
             Error::Master(ref error) => error.description(),
             Error::TabletServer(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
-            Error::Protobuf(ref description) => &description,
+            Error::Serialization(ref description) => &description,
             Error::Utf8(ref error) => error.description(),
             Error::Backoff => "backoff",
             Error::TimedOut => "operation timed out",
@@ -147,7 +147,7 @@ impl error::Error for Error {
             Error::Master(ref error) => error.cause(),
             Error::TabletServer(ref error) => error.cause(),
             Error::Io(ref error) => error.cause(),
-            Error::Protobuf(_) => None,
+            Error::Serialization(_) => None,
             Error::Utf8(ref error) => error.cause(),
             Error::Backoff => None,
             Error::TimedOut => None,
@@ -187,7 +187,7 @@ impl From<ProtobufError> for Error {
     fn from(error: ProtobufError) -> Error {
         match error {
             ProtobufError::IoError(error) => Error::Io(error),
-            ProtobufError::WireError(msg) => Error::Protobuf(msg),
+            ProtobufError::WireError(msg) => Error::Serialization(msg),
             ProtobufError::MessageNotInitialized { message } =>
                 // This should never happen, all Protobuf messages are initialized internally.
                 panic!("Protobuf message not initialized: {}", message),

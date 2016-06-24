@@ -41,6 +41,10 @@ pub use schema::*;
 pub use table::*;
 pub use value::Value;
 
+use std::fmt;
+
+use uuid::Uuid;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
     Bool,
@@ -201,7 +205,7 @@ impl RaftRole {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MasterState {
     /// The permanent UUID of the master server.
-    uuid: Vec<u8>, // TODO: parse into proper UUID
+    id: MasterId,
 
     /// Sequence number incremented on every start-up of the master.
     ///
@@ -217,3 +221,41 @@ pub struct MasterState {
 
     http_addresses: Vec<(String, u32)>,
 }
+
+macro_rules! id {
+    ($id:ident) => {
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct $id {
+            id: Uuid,
+        }
+
+        impl $id {
+            pub fn as_bytes(&self) -> &[u8; 16] {
+                self.id.as_bytes()
+            }
+
+            fn parse(input: &str) -> Result<$id> {
+                Uuid::parse_str(input).map_err(|error| Error::Serialization(format!("{}", error)))
+                                      .map(|id| $id { id: id })
+            }
+        }
+
+        impl fmt::Debug for $id {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.id.simple())
+            }
+        }
+
+        impl fmt::Display for $id {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.id.simple())
+            }
+        }
+    }
+}
+
+id!(MasterId);
+id!(ReplicaId);
+id!(TableId);
+id!(TabletId);
+id!(TabletServerId);

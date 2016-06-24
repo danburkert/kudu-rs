@@ -1,3 +1,4 @@
+
 use kudu_pb::master::CreateTableRequestPB;
 use kudu_pb::common::{PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
                       PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB};
@@ -7,6 +8,13 @@ use Result;
 use row::OperationEncoder;
 use row::Row;
 use Schema;
+use TableId;
+
+pub struct Table {
+    name: String,
+    id: TableId,
+    schema: Schema,
+}
 
 pub struct TableBuilder {
     name: String,

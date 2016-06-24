@@ -4,6 +4,7 @@ use std::net::{
     Ipv4Addr,
     SocketAddr,
 };
+use std::str;
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};
 use std::thread;
@@ -11,14 +12,16 @@ use std::thread;
 use kudu_pb::master::{
     DeleteTableRequestPB,
     IsCreateTableDoneRequestPB,
+    TableIdentifierPB,
 };
-use uuid::Uuid;
 
 use backoff::Backoff;
+use Error;
 use master::MasterProxy;
+use Result;
 use rpc::Messenger;
 use table::TableBuilder;
-use Result;
+use TableId;
 
 #[derive(Clone)]
 pub struct Client {
@@ -41,44 +44,91 @@ impl Client {
 
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
-    pub fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<Uuid> {
+    pub fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<TableId> {
         let (send, recv) = sync_channel(0);
         self.master.create_table(deadline,
                                  try!(builder.into_pb()),
                                  move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|resp| Uuid::parse_str(&String::from_utf8_lossy(resp.get_table_id())).unwrap())
+        recv.recv().unwrap().map(|resp| {
+            str::from_utf8(resp.get_table_id())
+                .map_err(|error| Error::Serialization(format!("{}", error)))
+                .and_then(TableId::parse)
+        }).unwrap()
     }
 
-    /// Returns true if the table is fully created.
-    pub fn is_create_table_done(&self, table: Uuid, deadline: Instant) -> Result<bool> {
+    /// Returns `true` if the table is fully created.
+    pub fn is_create_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_is_create_table_done(identifier, deadline)
+    }
+
+    /// Returns `true` if the table is fully created.
+    pub fn is_create_table_done_by_id(&self, id: &TableId, deadline: Instant) -> Result<bool> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_is_create_table_done(identifier, deadline)
+    }
+
+    fn do_is_create_table_done(&self, table: TableIdentifierPB, deadline: Instant) -> Result<bool> {
         let mut request = IsCreateTableDoneRequestPB::new();
-        request.mut_table().set_table_id(table.simple().to_string().into_bytes());
+        request.set_table(table);
 
         let (send, recv) = sync_channel(0);
         self.master.is_create_table_done(deadline, request, move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|resp| resp.get_done())
     }
 
-    /// Synchronously waits until the table is created. If an error is returned, the table may not
-    /// be created yet.
-    pub fn wait_for_table_creation(&self, table: Uuid, deadline: Instant) -> Result<()> {
+    /// Synchronously waits until the table is created. If an error is returned,
+    /// the table may not be created yet.
+    pub fn wait_for_table_creation<S>(&self, table: S, deadline: Instant) -> Result<()>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_wait_for_table_creation(identifier, deadline)
+    }
+
+    /// Synchronously waits until the table is created. If an error is returned,
+    /// the table may not be created yet.
+    pub fn wait_for_table_creation_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_wait_for_table_creation(identifier, deadline)
+    }
+
+    fn do_wait_for_table_creation(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
         let mut backoff = Backoff::with_duration_range(16, 4096);
 
-        let mut is_create_table_done = self.is_create_table_done(table.clone(), deadline);
+        let mut is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
         while let Ok(false) = is_create_table_done {
             let sleep_ms = backoff.next_backoff_ms();
             debug!("create table not yet complete, waiting {}ms", sleep_ms);
-            // TODO: don't sleep if it would expire the deadline.
+            // TODO: do delayed send instead of sleep
             thread::sleep(Duration::from_millis(sleep_ms));
-            is_create_table_done = self.is_create_table_done(table.clone(), deadline);
+            is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
         }
         is_create_table_done.map(|_| ())
     }
 
     /// Deletes the Kudu table.
-    pub fn delete_table(&self, table: Uuid, deadline: Instant) -> Result<()> {
+    pub fn delete_table<S>(&self, table: S, deadline: Instant) -> Result<()>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_delete_table(identifier, deadline)
+    }
+
+    /// Deletes the Kudu table.
+    pub fn delete_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_delete_table(identifier, deadline)
+    }
+
+    pub fn do_delete_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
         let mut request = DeleteTableRequestPB::new();
-        request.mut_table().set_table_id(table.simple().to_string().into_bytes());
+        request.set_table(table);
 
         let (send, recv) = sync_channel(0);
         self.master.delete_table(deadline, request, move |resp| send.send(resp).unwrap());
@@ -176,8 +226,8 @@ mod tests {
         ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation(table_id, deadline()).unwrap();
+        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
-        client.delete_table(table_id, deadline()).unwrap();
+        client.delete_table_by_id(&table_id, deadline()).unwrap();
     }
 }
