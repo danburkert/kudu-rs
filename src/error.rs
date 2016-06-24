@@ -43,11 +43,11 @@ pub enum Error {
     /// An I/O error.
     Io(io::Error),
 
-    /// An error serializing or deserializing a message.
+    /// An error serializing, deserializing, encoding, or decoding data.
     Serialization(String),
 
-    /// A UTF8 encoding or decoding error.
-    Utf8(Utf8Error),
+    /// An error due to a version mismatch between the client and server.
+    VersionMismatch(String),
 
     /// The send queue is full.
     Backoff,
@@ -89,7 +89,7 @@ impl Clone for Error {
                 Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
             },
             Error::Serialization(ref error) => Error::Serialization(error.clone()),
-            Error::Utf8(ref error) => Error::Utf8(error.clone()),
+            Error::VersionMismatch(ref error) => Error::VersionMismatch(error.clone()),
             Error::Backoff => Error::Backoff,
             Error::TimedOut => Error::TimedOut,
             Error::Cancelled => Error::Cancelled,
@@ -109,7 +109,7 @@ impl PartialEq for Error {
             (&Error::TabletServer(ref a), &Error::TabletServer(ref b)) => a == b,
             (&Error::Io(ref a), &Error::Io(ref b)) => a.raw_os_error().unwrap() == b.raw_os_error().unwrap(),
             (&Error::Serialization(ref a), &Error::Serialization(ref b)) => a == b,
-            (&Error::Utf8(ref a), &Error::Utf8(ref b)) => a == b,
+            (&Error::VersionMismatch(ref a), &Error::VersionMismatch(ref b)) => a == b,
             (&Error::Backoff, &Error::Backoff) => true,
             (&Error::TimedOut, &Error::TimedOut) => true,
             (&Error::Cancelled, &Error::Cancelled) => true,
@@ -130,7 +130,7 @@ impl error::Error for Error {
             Error::TabletServer(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
             Error::Serialization(ref description) => &description,
-            Error::Utf8(ref error) => error.description(),
+            Error::VersionMismatch(ref description) => &description,
             Error::Backoff => "backoff",
             Error::TimedOut => "operation timed out",
             Error::Cancelled => "operation cancelled",
@@ -148,7 +148,7 @@ impl error::Error for Error {
             Error::TabletServer(ref error) => error.cause(),
             Error::Io(ref error) => error.cause(),
             Error::Serialization(_) => None,
-            Error::Utf8(ref error) => error.cause(),
+            Error::VersionMismatch(_) => None,
             Error::Backoff => None,
             Error::TimedOut => None,
             Error::Cancelled => None,
@@ -197,7 +197,7 @@ impl From<ProtobufError> for Error {
 
 impl From<Utf8Error> for Error {
     fn from(error: Utf8Error) -> Error {
-        Error::Utf8(error)
+        Error::Serialization(error.to_string())
     }
 }
 

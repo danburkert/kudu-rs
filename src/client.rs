@@ -11,6 +11,7 @@ use std::thread;
 
 use kudu_pb::master::{
     DeleteTableRequestPB,
+    GetTableSchemaRequestPB,
     IsCreateTableDoneRequestPB,
     ListTablesRequestPB,
     TableIdentifierPB,
@@ -21,6 +22,7 @@ use Error;
 use master::MasterProxy;
 use Result;
 use rpc::Messenger;
+use Schema;
 use table::TableBuilder;
 use TableId;
 
@@ -157,6 +159,32 @@ impl Client {
         }
         Ok(tables)
     }
+
+    /// Returns the schema of a Kudu table.
+    pub fn get_table_schema<S>(&self, table: S, deadline: Instant) -> Result<Schema>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_get_table_schema(identifier, deadline)
+    }
+
+    /// Returns the schema of a Kudu table.
+    pub fn get_table_schema_by_id(&self, id: &TableId, deadline: Instant) -> Result<Schema> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_get_table_schema(identifier, deadline)
+    }
+
+    fn do_get_table_schema(&self, table: TableIdentifierPB, deadline: Instant) -> Result<Schema> {
+        // TODO: expose the partition schema, table id, number of replicas, and is create table
+        // done
+        let mut request = GetTableSchemaRequestPB::new();
+        request.set_table(table);
+
+        let (send, recv) = sync_channel(0);
+        self.master.get_table_schema(deadline, request, move |resp| send.send(resp).unwrap());
+        Schema::from_pb(try!(recv.recv().unwrap()).take_schema())
+    }
 }
 
 impl fmt::Debug for Client {
@@ -239,8 +267,9 @@ mod tests {
         schema_builder.add_column("val", DataType::Int32);
         schema_builder.set_primary_key(vec!["key".to_owned()]);
 
-        let mut table_builder = TableBuilder::new("create_and_delete_table",
-                                                  schema_builder.build().unwrap());
+        let schema = schema_builder.build().unwrap();
+
+        let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
         table_builder.add_hash_partitions(vec!["key".to_owned()], 4);
         table_builder.set_num_replicas(1);
 
@@ -254,6 +283,8 @@ mod tests {
         let tables = client.list_tables(deadline()).unwrap();
         assert_eq!(1, tables.len());
         assert_eq!("create_and_delete_table", &tables[0].0);
+
+        assert_eq!(schema, client.get_table_schema_by_id(&table_id, deadline()).unwrap());
 
         client.delete_table_by_id(&table_id, deadline()).unwrap();
     }

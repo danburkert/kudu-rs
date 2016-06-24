@@ -94,19 +94,19 @@ impl DataType {
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::DataType) -> Option<DataType> {
+    fn from_pb(pb: kudu_pb::common::DataType) -> Result<DataType> {
         match pb {
-            kudu_pb::common::DataType::BOOL => Some(DataType::Bool),
-            kudu_pb::common::DataType::INT8 => Some(DataType::Int8),
-            kudu_pb::common::DataType::INT16 => Some(DataType::Int16),
-            kudu_pb::common::DataType::INT32 => Some(DataType::Int32),
-            kudu_pb::common::DataType::INT64 => Some(DataType::Int64),
-            kudu_pb::common::DataType::TIMESTAMP => Some(DataType::Timestamp),
-            kudu_pb::common::DataType::FLOAT => Some(DataType::Float),
-            kudu_pb::common::DataType::DOUBLE => Some(DataType::Double),
-            kudu_pb::common::DataType::BINARY => Some(DataType::Binary),
-            kudu_pb::common::DataType::STRING => Some(DataType::String),
-            _ => None,
+            kudu_pb::common::DataType::BOOL => Ok(DataType::Bool),
+            kudu_pb::common::DataType::INT8 => Ok(DataType::Int8),
+            kudu_pb::common::DataType::INT16 => Ok(DataType::Int16),
+            kudu_pb::common::DataType::INT32 => Ok(DataType::Int32),
+            kudu_pb::common::DataType::INT64 => Ok(DataType::Int64),
+            kudu_pb::common::DataType::TIMESTAMP => Ok(DataType::Timestamp),
+            kudu_pb::common::DataType::FLOAT => Ok(DataType::Float),
+            kudu_pb::common::DataType::DOUBLE => Ok(DataType::Double),
+            kudu_pb::common::DataType::BINARY => Ok(DataType::Binary),
+            kudu_pb::common::DataType::STRING => Ok(DataType::String),
+            _ => Err(Error::VersionMismatch("unknown data type".to_string())),
         }
     }
 }
@@ -135,16 +135,16 @@ impl EncodingType {
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::EncodingType) -> Option<EncodingType> {
+    fn from_pb(pb: kudu_pb::common::EncodingType) -> Result<EncodingType> {
         match pb {
-            kudu_pb::common::EncodingType::AUTO_ENCODING => Some(EncodingType::Auto),
-            kudu_pb::common::EncodingType::PLAIN_ENCODING => Some(EncodingType::Plain),
-            kudu_pb::common::EncodingType::PREFIX_ENCODING => Some(EncodingType::Prefix),
-            kudu_pb::common::EncodingType::GROUP_VARINT => Some(EncodingType::GroupVarint),
-            kudu_pb::common::EncodingType::RLE => Some(EncodingType::RunLength),
-            kudu_pb::common::EncodingType::DICT_ENCODING => Some(EncodingType::Dictionary),
-            kudu_pb::common::EncodingType::BIT_SHUFFLE => Some(EncodingType::BitShuffle),
-            _ => None,
+            kudu_pb::common::EncodingType::AUTO_ENCODING => Ok(EncodingType::Auto),
+            kudu_pb::common::EncodingType::PLAIN_ENCODING => Ok(EncodingType::Plain),
+            kudu_pb::common::EncodingType::PREFIX_ENCODING => Ok(EncodingType::Prefix),
+            kudu_pb::common::EncodingType::GROUP_VARINT => Ok(EncodingType::GroupVarint),
+            kudu_pb::common::EncodingType::RLE => Ok(EncodingType::RunLength),
+            kudu_pb::common::EncodingType::DICT_ENCODING => Ok(EncodingType::Dictionary),
+            kudu_pb::common::EncodingType::BIT_SHUFFLE => Ok(EncodingType::BitShuffle),
+            _ => Err(Error::VersionMismatch("unknown encoding type".to_string())),
         }
     }
 }
@@ -169,14 +169,14 @@ impl CompressionType {
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::CompressionType) -> Option<CompressionType> {
+    fn from_pb(pb: kudu_pb::common::CompressionType) -> Result<CompressionType> {
         match pb {
-            kudu_pb::common::CompressionType::DEFAULT_COMPRESSION => Some(CompressionType::Default),
-            kudu_pb::common::CompressionType::NO_COMPRESSION => Some(CompressionType::None),
-            kudu_pb::common::CompressionType::SNAPPY => Some(CompressionType::Snappy),
-            kudu_pb::common::CompressionType::LZ4 => Some(CompressionType::Lz4),
-            kudu_pb::common::CompressionType::ZLIB => Some(CompressionType::Zlib),
-            _ => None,
+            kudu_pb::common::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
+            kudu_pb::common::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
+            kudu_pb::common::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
+            kudu_pb::common::CompressionType::LZ4 => Ok(CompressionType::Lz4),
+            kudu_pb::common::CompressionType::ZLIB => Ok(CompressionType::Zlib),
+            _ => Err(Error::VersionMismatch("unknown compression type".to_string())),
         }
     }
 }

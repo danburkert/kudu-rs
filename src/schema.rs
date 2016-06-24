@@ -72,6 +72,17 @@ impl Column {
         pb.set_cfile_block_size(self.block_size);
         pb
     }
+
+    pub fn from_pb(mut pb: ColumnSchemaPB) -> Result<Column> {
+        Ok(Column {
+            name: pb.take_name(),
+            data_type: try!(DataType::from_pb(pb.get_field_type())),
+            is_nullable: pb.get_is_nullable(),
+            compression: try!(CompressionType::from_pb(pb.get_compression())),
+            encoding: try!(EncodingType::from_pb(pb.get_encoding())),
+            block_size: pb.get_cfile_block_size(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +149,39 @@ impl Schema {
             pb.mut_columns().push(column.to_pb(idx < self.inner.num_primary_key_columns));
         }
         pb
+    }
+
+    pub fn from_pb(mut pb: SchemaPB) -> Result<Schema> {
+        let mut num_primary_key_columns = 0;
+        let mut columns = Vec::with_capacity(pb.get_columns().len());
+        for column in pb.take_columns().into_iter() {
+            if column.get_is_key() { num_primary_key_columns += 1 }
+            columns.push(try!(Column::from_pb(column)))
+        }
+
+        let mut columns_by_name = HashMap::with_capacity(columns.len());
+        let mut column_offsets = Vec::with_capacity(columns.len());
+        let mut index = 0;
+        let mut row_size = 0;
+        let mut has_nullable_columns = false;
+        for column in &columns {
+            columns_by_name.insert(column.name().to_string(), index);
+            index += 1;
+            column_offsets.push(row_size);
+            row_size += column.data_type.size();
+            has_nullable_columns |= column.is_nullable();
+        }
+
+        Ok(Schema {
+            inner: Arc::new(Inner {
+                columns: columns,
+                columns_by_name: columns_by_name,
+                column_offsets: column_offsets,
+                num_primary_key_columns: num_primary_key_columns,
+                row_size: row_size,
+                has_nullable_columns: has_nullable_columns,
+            })
+        })
     }
 }
 
