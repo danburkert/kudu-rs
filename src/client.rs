@@ -49,11 +49,11 @@ impl Client {
         self.master.create_table(deadline,
                                  try!(builder.into_pb()),
                                  move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|resp| {
+        recv.recv().unwrap().and_then(|resp| {
             str::from_utf8(resp.get_table_id())
                 .map_err(|error| Error::Serialization(format!("{}", error)))
                 .and_then(TableId::parse)
-        }).unwrap()
+        })
     }
 
     /// Returns `true` if the table is fully created.
