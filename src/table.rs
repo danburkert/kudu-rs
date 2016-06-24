@@ -50,12 +50,12 @@ impl TableBuilder {
         self
     }
 
-    pub fn add_range_split<F>(&mut self, split_row: Row) -> &mut TableBuilder {
+    pub fn add_range_split(&mut self, split_row: Row) -> &mut TableBuilder {
         self.range_splits.push(split_row);
         self
     }
 
-    pub fn add_range_bound<F>(&mut self, lower_bound: Row, upper_bound: Row) -> &mut TableBuilder {
+    pub fn add_range_bound(&mut self, lower_bound: Row, upper_bound: Row) -> &mut TableBuilder {
         self.range_bounds.push((lower_bound, upper_bound));
         self
     }
@@ -96,16 +96,30 @@ impl TableBuilder {
         let TableBuilder { name, schema, range_partition_columns, range_splits,
                            range_bounds, hash_partitions, num_replicas } = self;
 
-        let range_encoder = OperationEncoder::new();
+        let mut range_encoder = OperationEncoder::new();
+
         for split in range_splits {
             if !split.schema().ref_eq(&schema) {
                 return Err(Error::InvalidArgument(
-                        format!("schema of split row {:?} does not match the table schema {:?}",
+                        format!("schema of range split row {:?} does not match the table schema {:?}",
                                 split, schema)));
             }
-
+            range_encoder.encode_range_split(split);
         }
 
+        for (lower, upper) in range_bounds {
+            if !lower.schema().ref_eq(&schema) {
+                return Err(Error::InvalidArgument(
+                        format!("schema of range lower bound row {:?} does not match the table schema {:?}",
+                                lower, schema)));
+            }
+            if !upper.schema().ref_eq(&schema) {
+                return Err(Error::InvalidArgument(
+                        format!("schema of range upper bound row {:?} does not match the table schema {:?}",
+                                upper, schema)));
+            }
+            range_encoder.encode_range_bound(lower, upper);
+        }
 
         let mut pb = CreateTableRequestPB::new();
         pb.set_name(name);
@@ -157,7 +171,9 @@ mod tests {
 
         let mut table_builder = TableBuilder::new("t", simple_schema());
 
+        let mut split_row = table_builder.schema().new_row();
+        split_row.set_by_name("key", key_val).unwrap();
 
-        table_builder.add_range_split(|row| { row.set_by_name("key", key_val).unwrap(); });
+        table_builder.add_range_split(split_row);
     }
 }

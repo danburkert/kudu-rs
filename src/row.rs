@@ -127,7 +127,6 @@ impl fmt::Debug for Row {
     }
 }
 
-
 pub struct OperationEncoder {
     data: Vec<u8>,
     indirect_data: Vec<u8>,
