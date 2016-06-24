@@ -42,6 +42,7 @@ pub use table::*;
 pub use value::Value;
 
 use std::fmt;
+use std::str;
 
 use uuid::Uuid;
 
@@ -237,6 +238,12 @@ macro_rules! id {
             fn parse(input: &str) -> Result<$id> {
                 Uuid::parse_str(input).map_err(|error| Error::Serialization(format!("{}", error)))
                                       .map(|id| $id { id: id })
+            }
+
+            fn parse_bytes(input: &[u8]) -> Result<$id> {
+                str::from_utf8(input)
+                    .map_err(|error| Error::Serialization(format!("{}", error)))
+                    .and_then($id::parse)
             }
         }
 

@@ -12,6 +12,7 @@ use std::thread;
 use kudu_pb::master::{
     DeleteTableRequestPB,
     IsCreateTableDoneRequestPB,
+    ListTablesRequestPB,
     TableIdentifierPB,
 };
 
@@ -126,13 +127,35 @@ impl Client {
         self.do_delete_table(identifier, deadline)
     }
 
-    pub fn do_delete_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
+    fn do_delete_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
         let mut request = DeleteTableRequestPB::new();
         request.set_table(table);
 
         let (send, recv) = sync_channel(0);
         self.master.delete_table(deadline, request, move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|_| ())
+    }
+
+    pub fn list_tables(&self, deadline: Instant) -> Result<Vec<(String, TableId)>> {
+        self.do_list_tables(ListTablesRequestPB::new(), deadline)
+    }
+
+    pub fn list_tables_with_name_filter<S>(&self, name_filter: S, deadline: Instant) -> Result<Vec<(String, TableId)>>
+    where S: Into<String> {
+        let mut request = ListTablesRequestPB::new();
+        request.set_name_filter(name_filter.into());
+        self.do_list_tables(request, deadline)
+    }
+
+    fn do_list_tables(&self, request: ListTablesRequestPB, deadline: Instant) -> Result<Vec<(String, TableId)>> {
+        let (send, recv) = sync_channel(0);
+        self.master.list_tables(deadline, request, move |resp| send.send(resp).unwrap());
+        let mut resp = try!(recv.recv().unwrap());
+        let mut tables = Vec::with_capacity(resp.get_tables().len());
+        for mut table in resp.take_tables().into_iter() {
+            tables.push((table.take_name(), try!(TableId::parse_bytes(table.get_id()))))
+        }
+        Ok(tables)
     }
 }
 
@@ -227,6 +250,10 @@ mod tests {
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+
+        let tables = client.list_tables(deadline()).unwrap();
+        assert_eq!(1, tables.len());
+        assert_eq!("create_and_delete_table", &tables[0].0);
 
         client.delete_table_by_id(&table_id, deadline()).unwrap();
     }
