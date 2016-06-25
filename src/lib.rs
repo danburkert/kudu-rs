@@ -1,5 +1,3 @@
-#![feature(lookup_host)]
-
 #![allow(dead_code)]
 
 extern crate byteorder;

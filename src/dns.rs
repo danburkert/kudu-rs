@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::net::{lookup_host, IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::thread;
 use std::str::FromStr;
 
@@ -18,18 +18,9 @@ pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
             continue;
         }
         // Otherwise fall back to a DNS lookup.
-        match lookup_host(hostport.get_host()) {
-            Ok(lookup_results) => {
-                for result in lookup_results {
-                    match result {
-                        Ok(mut addr) => {
-                            addr.set_port(hostport.get_port() as u16);
-                            addrs.insert(addr);
-                        },
-                        Err(error) => warn!("unable to resolve host '{}': {}",
-                                            hostport.get_host(), error),
-                    }
-                }
+        match (hostport.get_host(), hostport.get_port() as u16).to_socket_addrs() {
+            Ok(resolved_addrs) => {
+                addrs.extend(resolved_addrs);
             },
             Err(error) => warn!("unable to resolve host '{}': {}",
                                 hostport.get_host(), error),
