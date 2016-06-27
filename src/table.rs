@@ -9,11 +9,13 @@ use row::OperationEncoder;
 use row::Row;
 use Schema;
 use TableId;
+use meta_cache::MetaCache;
 
 pub struct Table {
     name: String,
     id: TableId,
     schema: Schema,
+    meta_cache: MetaCache,
 }
 
 pub struct TableBuilder {
@@ -112,7 +114,7 @@ impl TableBuilder {
                         format!("schema of range split row {:?} does not match the table schema {:?}",
                                 split, schema)));
             }
-            range_encoder.encode_range_split(split);
+            range_encoder.encode_range_split(&split);
         }
 
         for (lower, upper) in range_bounds {
@@ -126,7 +128,7 @@ impl TableBuilder {
                         format!("schema of range upper bound row {:?} does not match the table schema {:?}",
                                 upper, schema)));
             }
-            range_encoder.encode_range_bound(lower, upper);
+            range_encoder.encode_range_bound(&lower, &upper);
         }
 
         let mut pb = CreateTableRequestPB::new();

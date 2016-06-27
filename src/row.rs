@@ -23,12 +23,9 @@ pub struct Row {
 impl Row {
     pub fn new(schema: Schema) -> Row {
         let num_columns = schema.columns().len();
-
         let null_columns = if schema.has_nullable_columns() { BitSet::with_capacity(num_columns) }
                            else { BitSet::with_capacity(0) };
-
         let data = vec![0; schema.row_size()].into_boxed_slice();
-
         Row {
             data: data,
             indirect_data: VecMap::with_capacity(num_columns),
@@ -140,43 +137,54 @@ impl OperationEncoder {
         }
     }
 
-    pub fn encode_insert(&mut self, row: Row) {
+    pub fn encode_insert(&mut self, row: &Row) {
         self.encode(OperationType::INSERT, row);
     }
-    pub fn encode_update(&mut self, row: Row) {
+    pub fn encode_update(&mut self, row: &Row) {
         self.encode(OperationType::UPDATE, row);
     }
-    pub fn encode_delete(&mut self, row: Row) {
+    pub fn encode_delete(&mut self, row: &Row) {
         self.encode(OperationType::DELETE, row);
     }
-    pub fn encode_upsert(&mut self, row: Row) {
+    pub fn encode_upsert(&mut self, row: &Row) {
         self.encode(OperationType::UPSERT, row);
     }
-    pub fn encode_range_split(&mut self, row: Row) {
+    pub fn encode_range_split(&mut self, row: &Row) {
         self.encode(OperationType::SPLIT_ROW, row);
     }
-    pub fn encode_range_bound(&mut self, lower: Row, upper: Row) {
+    pub fn encode_range_bound(&mut self, lower: &Row, upper: &Row) {
         self.encode(OperationType::RANGE_LOWER_BOUND, lower);
         self.encode(OperationType::RANGE_UPPER_BOUND, upper);
     }
 
-    fn encode(&mut self, op_type: OperationType, row: Row) {
-        let Row { mut data, indirect_data, set_columns, null_columns, schema } = row;
+    fn encode(&mut self, op_type: OperationType, row: &Row) {
+        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *row;
 
         self.data.push(op_type as u8);
         self.data.extend_from_slice(set_columns.data());
         self.data.extend_from_slice(null_columns.data());
 
-        // Iterate through the indirect data, serializing it to the indirect data buffer, and
-        // rewriting the corresponding data pointer and length.
-        for (idx, indirect_datum) in indirect_data {
-            let offset = schema.column_offsets()[idx];
-            LittleEndian::write_u64(&mut data[offset..], self.indirect_data.len() as u64);
-            LittleEndian::write_u64(&mut data[offset+8..], indirect_datum.len() as u64);
-            self.indirect_data.extend_from_slice(&indirect_datum);
-        }
+        let mut offset = self.data.len();
+        self.data.resize(offset + schema.row_size(), 0);
+        for idx in 0..schema.columns().len() {
+            if !set_columns.get(idx) { continue; }
+            let column = &schema.columns()[idx];
+            if column.is_nullable() && null_columns.get(idx) { continue; }
 
-        self.data.extend_from_slice(&data);
+            let data_type = column.data_type();
+            let size = data_type.size();
+            if data_type.is_var_len() {
+                let data = &indirect_data[idx];
+                LittleEndian::write_u64(&mut self.data[offset..], self.indirect_data.len() as u64);
+                LittleEndian::write_u64(&mut self.data[offset+8..], data.len() as u64);
+                self.indirect_data.extend_from_slice(data);
+            } else {
+                let column_offset = schema.column_offsets()[idx];
+                self.data[offset..offset+size].copy_from_slice(&data[column_offset..column_offset+size]);
+            }
+            offset += size;
+        }
+        self.data.truncate(offset);
     }
 
     pub fn clear(&mut self) {

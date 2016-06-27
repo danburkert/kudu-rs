@@ -390,7 +390,7 @@ pub mod tests {
     pub fn simple_schema() -> Schema {
         let mut builder = SchemaBuilder::new();
         builder.add_column("key", DataType::String).set_not_null();
-        builder.add_column("val", DataType::String);
+        builder.add_column("val", DataType::String).set_not_null();
         builder.set_primary_key(vec!["key".to_string()]);
         builder.build().unwrap()
     }

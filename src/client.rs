@@ -185,6 +185,10 @@ impl Client {
         self.master.get_table_schema(deadline, request, move |resp| send.send(resp).unwrap());
         Schema::from_pb(try!(recv.recv().unwrap()).take_schema())
     }
+
+    pub fn master_proxy(&self) -> &MasterProxy {
+        &self.master
+    }
 }
 
 impl fmt::Debug for Client {

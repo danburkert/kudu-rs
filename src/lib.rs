@@ -22,10 +22,12 @@ mod client;
 mod dns;
 mod error;
 mod master;
+mod meta_cache;
 mod row;
 mod rpc;
 mod schema;
 mod table;
+mod tablet;
 mod util;
 mod value;
 
@@ -223,7 +225,7 @@ pub struct MasterState {
 
 macro_rules! id {
     ($id:ident) => {
-        #[derive(Clone, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq, Hash)]
         pub struct $id {
             id: Uuid,
         }

@@ -94,6 +94,10 @@ impl MasterProxy {
         proxy
     }
 
+    pub fn messenger(&self) -> &Messenger {
+        &self.inner.messenger
+    }
+
     /// Returns the masters which this `MasterProxy` has discovered.
     pub fn masters(&self) -> Vec<SocketAddr> {
         let mut masters = Vec::with_capacity(5);
