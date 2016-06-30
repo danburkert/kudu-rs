@@ -524,9 +524,9 @@ mod tests {
             assert_eq!(covered, entry.is_tablet());
         }
 
-        let cases: Vec<(&[u8], usize)> = vec![//(b"", 6), (b"\0", 6), (b"`", 6),
-                                              //(b"a", 5), (b"a\0", 5), (b"b", 5),
-                                              //(b"c", 4), (b"d", 4), (b"l", 4),
+        let cases: Vec<(&[u8], usize)> = vec![(b"", 6), (b"\0", 6), (b"`", 6),
+                                              (b"a", 5), (b"a\0", 5), (b"b", 5),
+                                              (b"c", 4), (b"d", 4), (b"l", 4),
                                               (b"m", 4), (b"n", 4), (b"o", 4),
                                               (b"p", 2), (b"q", 2), (b"r", 2),
                                               (b"s", 2), (b"z", 2), (b"zzz", 2)];

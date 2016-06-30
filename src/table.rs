@@ -4,18 +4,52 @@ use kudu_pb::common::{PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB
                       PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB};
 
 use Error;
+use meta_cache::MetaCache;
+use partition::PartitionSchema;
 use Result;
 use row::OperationEncoder;
 use row::Row;
 use Schema;
 use TableId;
-use meta_cache::MetaCache;
 
 pub struct Table {
     name: String,
     id: TableId,
     schema: Schema,
+    partition_schema: PartitionSchema,
     meta_cache: MetaCache,
+}
+
+impl Table {
+    pub fn new(name: String,
+               id: TableId,
+               schema: Schema,
+               partition_schema: PartitionSchema,
+               meta_cache: MetaCache) -> Table {
+        Table {
+            name: name,
+            id: id,
+            schema: schema,
+            partition_schema: partition_schema,
+            meta_cache: meta_cache,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn id(&self) -> &TableId {
+        &self.id
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    pub fn partition_schema(&self) -> &PartitionSchema {
+        &self.partition_schema
+    }
 }
 
 pub struct TableBuilder {

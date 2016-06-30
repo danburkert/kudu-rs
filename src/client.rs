@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{
     IpAddr,
@@ -5,6 +6,7 @@ use std::net::{
     SocketAddr,
 };
 use std::str;
+use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};
 use std::thread;
@@ -16,13 +18,17 @@ use kudu_pb::master::{
     ListTablesRequestPB,
     TableIdentifierPB,
 };
+use parking_lot::Mutex;
 
 use backoff::Backoff;
 use Error;
 use master::MasterProxy;
+use meta_cache::MetaCache;
+use partition::PartitionSchema;
 use Result;
 use rpc::Messenger;
 use Schema;
+use table::Table;
 use table::TableBuilder;
 use TableId;
 
@@ -31,6 +37,7 @@ pub struct Client {
     messenger: Messenger,
     master: MasterProxy,
     config: ClientConfig,
+    meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
 }
 
 impl Client {
@@ -42,6 +49,7 @@ impl Client {
             master: master,
             messenger: messenger,
             config: config,
+            meta_caches: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -161,33 +169,47 @@ impl Client {
     }
 
     /// Returns the schema of a Kudu table.
-    pub fn get_table_schema<S>(&self, table: S, deadline: Instant) -> Result<Schema>
+    pub fn open_table<S>(&self, table: S, deadline: Instant) -> Result<Table>
     where S: Into<String> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_name(table.into());
-        self.do_get_table_schema(identifier, deadline)
+        self.do_open_table(identifier, deadline)
     }
 
     /// Returns the schema of a Kudu table.
-    pub fn get_table_schema_by_id(&self, id: &TableId, deadline: Instant) -> Result<Schema> {
+    pub fn open_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<Table> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_id(id.to_string().into_bytes());
-        self.do_get_table_schema(identifier, deadline)
+        self.do_open_table(identifier, deadline)
     }
 
-    fn do_get_table_schema(&self, table: TableIdentifierPB, deadline: Instant) -> Result<Schema> {
-        // TODO: expose the partition schema, table id, number of replicas, and is create table
-        // done
+    fn do_open_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<Table> {
         let mut request = GetTableSchemaRequestPB::new();
         request.set_table(table);
 
         let (send, recv) = sync_channel(0);
         self.master.get_table_schema(deadline, request, move |resp| send.send(resp).unwrap());
-        Schema::from_pb(try!(recv.recv().unwrap()).take_schema())
+
+        let mut resp = try!(recv.recv().unwrap());
+        let name = resp.take_table_name();
+        let id = try!(TableId::parse_bytes(resp.get_table_id()));
+        let partition_schema = PartitionSchema::from_pb(resp.get_partition_schema(),
+                                                        resp.get_schema());
+        let schema = try!(Schema::from_pb(resp.take_schema()));
+        let meta_cache = self.meta_cache(&id);
+        Ok(Table::new(name, id, schema, partition_schema, meta_cache))
     }
 
     pub fn master_proxy(&self) -> &MasterProxy {
         &self.master
+    }
+
+    fn meta_cache(&self, table: &TableId) -> MetaCache {
+        self.meta_caches
+            .lock()
+            .entry(table.clone())
+            .or_insert_with(|| MetaCache::new(table.clone(), self.master.clone()))
+            .clone()
     }
 }
 
@@ -284,11 +306,20 @@ mod tests {
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+
+        assert_eq!("create_and_delete_table", table.name());
+        assert_eq!(&table_id, table.id());
+        assert_eq!(&schema, table.schema());
+        assert_eq!(1, table.partition_schema().hash_partition_schemas().len());
+        assert_eq!(&[0], table.partition_schema().hash_partition_schemas()[0].columns());
+        assert_eq!(4, table.partition_schema().hash_partition_schemas()[0].num_buckets());
+        assert_eq!(0, table.partition_schema().hash_partition_schemas()[0].seed());
+        assert_eq!(&[0], table.partition_schema().range_partition_schema().columns());
+
         let tables = client.list_tables(deadline()).unwrap();
         assert_eq!(1, tables.len());
         assert_eq!("create_and_delete_table", &tables[0].0);
-
-        assert_eq!(schema, client.get_table_schema_by_id(&table_id, deadline()).unwrap());
 
         client.delete_table_by_id(&table_id, deadline()).unwrap();
     }
