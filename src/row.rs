@@ -1,15 +1,20 @@
+use std::cmp;
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use byteorder::{ByteOrder, LittleEndian};
 use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationType};
 
 use bit_set::BitSet;
+use chrono;
 use vec_map::VecMap;
+#[cfg(any(feature="quickcheck", test))] use quickcheck;
 
 use DataType;
 use Error;
 use Result;
 use Schema;
+use util;
 use value::Value;
 
 pub struct Row {
@@ -20,6 +25,9 @@ pub struct Row {
     schema: Schema,
 }
 
+/// TODO: unset/unset_by_name.  Should zero out existing values so that equality can still be fast.
+/// TODO: remove varlen column bytes from `data` (right now it takes up 16 useless bytes) (is this
+/// as easy as changing them to 0 width in the Value trait?).
 impl Row {
     pub fn new(schema: Schema) -> Row {
         let num_columns = schema.columns().len();
@@ -98,6 +106,22 @@ impl Row {
         }
     }
 
+    pub fn is_null(&self, idx: usize) -> Result<bool> {
+        if idx >= self.schema.columns().len() {
+            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                                      idx, self.schema)));
+        }
+        Ok(self.schema.has_nullable_columns() && self.null_columns.get(idx))
+    }
+
+    pub fn is_null_by_name(&self, column: &str) -> Result<bool> {
+        if let Some(idx) = self.schema.column_index(column) {
+            self.is_null(idx)
+        } else {
+            Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
+        }
+    }
+
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
@@ -115,14 +139,111 @@ impl Row {
         }
         Ok(())
     }
-}
 
-// TODO: improve this
-impl fmt::Debug for Row {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Row")
+    #[cfg(any(feature="quickcheck", test))]
+    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row where G: quickcheck::Gen {
+        use quickcheck::Arbitrary;
+        let mut row = schema.new_row();
+        for (idx, column) in schema.columns().iter().enumerate() {
+            match column.data_type() {
+                DataType::Bool => row.set(idx, bool::arbitrary(g)).unwrap(),
+                DataType::Int8 => row.set(idx, i8::arbitrary(g)).unwrap(),
+                DataType::Int16 => row.set(idx, i16::arbitrary(g)).unwrap(),
+                DataType::Int32 => row.set(idx, i32::arbitrary(g)).unwrap(),
+                DataType::Int64 => row.set(idx, i64::arbitrary(g)).unwrap(),
+                DataType::Timestamp => row.set(idx, util::us_to_time(i64::arbitrary(g))).unwrap(),
+                DataType::Float => row.set(idx, f32::arbitrary(g)).unwrap(),
+                DataType::Double => row.set(idx, f64::arbitrary(g)).unwrap(),
+                DataType::Binary => row.set(idx, Vec::arbitrary(g)).unwrap(),
+                DataType::String => row.set(idx, String::arbitrary(g)).unwrap(),
+            };
+        }
+        row
     }
 }
+
+fn format_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
+    let datetime = if timestamp < UNIX_EPOCH {
+        chrono::NaiveDateTime::from_timestamp(0, 0) -
+            chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
+    } else {
+        chrono::NaiveDateTime::from_timestamp(0, 0) +
+            chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
+    };
+
+    write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
+}
+
+impl fmt::Debug for Row {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "("));
+        let mut is_first = true;
+        for (idx, column) in self.schema.columns().iter().enumerate() {
+            if !self.set_columns.get(idx) { continue; }
+
+            if is_first { is_first = false; }
+            else { try!(write!(f, ", ")) }
+
+            try!(write!(f, "{:?} {:?}=", column.data_type(), column.name()));
+            if self.is_null(idx).unwrap() {
+                try!(write!(f, "NULL"))
+            } else {
+                match column.data_type() {
+                    DataType::Bool => try!(write!(f, "{}", self.get::<bool>(idx).unwrap())),
+                    DataType::Int8 => try!(write!(f, "{}", self.get::<i8>(idx).unwrap())),
+                    DataType::Int16 => try!(write!(f, "{}", self.get::<i16>(idx).unwrap())),
+                    DataType::Int32 => try!(write!(f, "{}", self.get::<i32>(idx).unwrap())),
+                    DataType::Int64 => try!(write!(f, "{}", self.get::<i64>(idx).unwrap())),
+                    DataType::Timestamp => try!(format_timestamp(f, self.get::<SystemTime>(idx).unwrap())),
+                    DataType::Float => try!(write!(f, "{}", self.get::<f32>(idx).unwrap())),
+                    DataType::Double => try!(write!(f, "{}", self.get::<f64>(idx).unwrap())),
+                    DataType::Binary => try!(util::fmt_hex(f, self.get::<&[u8]>(idx).unwrap())),
+                    DataType::String => try!(write!(f, "{:?}", self.get::<&str>(idx).unwrap())),
+                }
+            }
+        }
+        write!(f, ")")
+    }
+}
+
+impl cmp::PartialEq for Row {
+    fn eq(&self, other: &Row) -> bool {
+        self.schema == other.schema &&
+            self.set_columns == other.set_columns &&
+            self.null_columns == other.null_columns &&
+            self.data == other.data &&
+            self.indirect_data == other.indirect_data
+    }
+}
+
+impl cmp::Eq for Row {}
+
+/// `Row`s can be compared based on primary key column values. If the schemas do not match or if
+/// some of the primary key columns are not set, the ordering is not defined.
+impl cmp::PartialOrd for Row {
+    fn partial_cmp(&self, other: &Row) -> Option<cmp::Ordering> {
+        if self.schema != other.schema { return None; }
+
+        for (idx, column) in self.schema.primary_key().iter().enumerate() {
+            if self.set_columns.get(idx) && other.set_columns.get(idx) {
+                let ord = match column.data_type() {
+                    DataType::Int8 => self.get::<i8>(idx).unwrap().cmp(&other.get::<i8>(idx).unwrap()),
+                    DataType::Int16 => self.get::<i16>(idx).unwrap().cmp(&other.get::<i16>(idx).unwrap()),
+                    DataType::Int32 => self.get::<i32>(idx).unwrap().cmp(&other.get::<i32>(idx).unwrap()),
+                    DataType::Int64 => self.get::<i64>(idx).unwrap().cmp(&other.get::<i64>(idx).unwrap()),
+                    DataType::Timestamp => self.get::<SystemTime>(idx).unwrap().cmp(&other.get::<SystemTime>(idx).unwrap()),
+                    DataType::Binary => self.get::<&[u8]>(idx).unwrap().cmp(other.get::<&[u8]>(idx).unwrap()),
+                    DataType::String => self.get::<&str>(idx).unwrap().cmp(other.get::<&str>(idx).unwrap()),
+                    _ => unreachable!("primary key column of type {:?}", column.data_type()),
+                };
+                if ord != cmp::Ordering::Equal { return Some(ord); }
+            } else { return None; }
+        }
+        return Some(cmp::Ordering::Equal)
+    }
+}
+
+// TODO: move below to own file
 
 pub struct OperationEncoder {
     data: Vec<u8>,
@@ -201,8 +322,12 @@ impl OperationEncoder {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use quickcheck::{quickcheck, TestResult, StdGen};
+    use rand;
     use schema;
+    use super::*;
 
     #[test]
     fn test_partial_row() {
@@ -212,7 +337,38 @@ mod tests {
         row.set::<i32>(0, 12).unwrap();
         assert_eq!(12, row.get::<i32>(0).unwrap());
 
-        row.set(9, "foo").unwrap();
-        assert_eq!("foo".to_owned(), row.get::<String>(9).unwrap());
+        row.set(10, "foo").unwrap();
+        assert_eq!("foo".to_owned(), row.get::<String>(10).unwrap());
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        let schema = schema::tests::all_types_schema();
+        let mut row = schema.new_row();
+
+        row.set_by_name("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
+        assert_eq!("(Timestamp \"timestamp\"=1969-12-31T23:59:58.766000Z)",
+                   &format!("{:?}", row));
+
+        row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
+        assert_eq!("(Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z)",
+                   &format!("{:?}", row));
+    }
+
+    #[test]
+    fn check_to_string() {
+
+        fn rows_to_string(schema: schema::Schema) -> TestResult {
+            let mut g = StdGen::new(rand::thread_rng(), 100);
+
+            for _ in 0..10 {
+                let row = Row::arbitrary(&mut g, &schema);
+                format!("{:?}", row);
+            }
+
+            TestResult::passed()
+        }
+
+        quickcheck(rows_to_string as fn(schema::Schema) -> TestResult);
     }
 }

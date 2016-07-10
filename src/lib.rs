@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 extern crate byteorder;
+extern crate chrono;
 extern crate kudu_pb;
 extern crate mio;
 extern crate netbuf;
@@ -11,8 +12,10 @@ extern crate slab;
 extern crate uuid;
 extern crate vec_map;
 
-#[cfg(test)] extern crate tempdir;
 #[cfg(test)] extern crate env_logger;
+#[cfg(test)] extern crate tempdir;
+
+#[cfg(any(feature="quickcheck", test))] extern crate quickcheck;
 
 #[macro_use] extern crate log;
 
@@ -111,6 +114,37 @@ impl DataType {
             _ => Err(Error::VersionMismatch("unknown data type".to_string())),
         }
     }
+
+    #[cfg(any(feature="quickcheck", test))]
+    pub fn arbitrary_primary_key<G>(g: &mut G) -> DataType where G: quickcheck::Gen {
+        *g.choose(&[
+                  DataType::Int8,
+                  DataType::Int16,
+                  DataType::Int32,
+                  DataType::Int64,
+                  DataType::Timestamp,
+                  DataType::Binary,
+                  DataType::String,
+        ]).unwrap()
+    }
+}
+
+#[cfg(any(feature="quickcheck", test))]
+impl quickcheck::Arbitrary for DataType {
+    fn arbitrary<G>(g: &mut G) -> DataType where G: quickcheck::Gen {
+        *g.choose(&[
+                  DataType::Bool,
+                  DataType::Int8,
+                  DataType::Int16,
+                  DataType::Int32,
+                  DataType::Int64,
+                  DataType::Timestamp,
+                  DataType::Float,
+                  DataType::Double,
+                  DataType::Binary,
+                  DataType::String,
+        ]).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -149,6 +183,35 @@ impl EncodingType {
             _ => Err(Error::VersionMismatch("unknown encoding type".to_string())),
         }
     }
+
+    #[cfg(any(feature="quickcheck", test))]
+    pub fn arbitrary<G>(g: &mut G, data_type: DataType) -> EncodingType where G: quickcheck::Gen {
+        match data_type {
+            DataType::Bool => *g.choose(&[
+                EncodingType::Auto,
+                EncodingType::Plain,
+                EncodingType::RunLength
+            ]).unwrap(),
+            DataType::Int8 | DataType::Int16 |
+            DataType::Int32 | DataType::Int64 | DataType::Timestamp => *g.choose(&[
+                EncodingType::Auto,
+                EncodingType::Plain,
+                EncodingType::RunLength,
+                EncodingType::BitShuffle
+            ]).unwrap(),
+            DataType::Float | DataType::Double => *g.choose(&[
+                EncodingType::Auto,
+                EncodingType::Plain,
+                EncodingType::BitShuffle
+            ]).unwrap(),
+            DataType::Binary | DataType::String => *g.choose(&[
+                EncodingType::Auto,
+                EncodingType::Plain,
+                EncodingType::Prefix,
+                EncodingType::Dictionary
+            ]).unwrap(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,6 +243,19 @@ impl CompressionType {
             kudu_pb::common::CompressionType::ZLIB => Ok(CompressionType::Zlib),
             _ => Err(Error::VersionMismatch("unknown compression type".to_string())),
         }
+    }
+}
+
+#[cfg(any(feature="quickcheck", test))]
+impl quickcheck::Arbitrary for CompressionType {
+    fn arbitrary<G>(g: &mut G) -> CompressionType where G: quickcheck::Gen {
+        *g.choose(&[
+                  CompressionType::Default,
+                  CompressionType::None,
+                  CompressionType::Snappy,
+                  CompressionType::Lz4,
+                  CompressionType::Zlib,
+        ]).unwrap()
     }
 }
 

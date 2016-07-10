@@ -1,9 +1,11 @@
 use std::str;
+use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
 
 use DataType;
 use Result;
+use util::{time_to_us, us_to_time};
 
 pub trait Value<'a>: Sized {
     fn data_type() -> DataType;
@@ -50,6 +52,13 @@ impl <'a> Value<'a> for i64 {
     fn size() -> usize { 8 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, *self) }
     fn from_data(data: &[u8]) -> Result<i64> { Ok(LittleEndian::read_i64(data)) }
+}
+
+impl <'a> Value<'a> for SystemTime {
+    fn data_type() -> DataType { DataType::Timestamp }
+    fn size() -> usize { 8 }
+    fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, time_to_us(self)) }
+    fn from_data(data: &[u8]) -> Result<SystemTime> { Ok(us_to_time(LittleEndian::read_i64(data))) }
 }
 
 impl <'a> Value<'a> for f32 {

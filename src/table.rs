@@ -21,6 +21,7 @@ pub struct Table {
 }
 
 impl Table {
+
     pub fn new(name: String,
                id: TableId,
                schema: Schema,

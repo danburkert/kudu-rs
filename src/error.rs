@@ -4,6 +4,7 @@ use std::io;
 use std::mem;
 use std::result;
 use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 
 use kudu_pb::master::{
     MasterErrorPB,
@@ -197,6 +198,12 @@ impl From<ProtobufError> for Error {
 
 impl From<Utf8Error> for Error {
     fn from(error: Utf8Error) -> Error {
+        Error::Serialization(error.to_string())
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(error: FromUtf8Error) -> Error {
         Error::Serialization(error.to_string())
     }
 }

@@ -9,12 +9,14 @@ keywords = ["kudu", "database"]
 [dependencies]
 
 byteorder = "0.5"
+chrono = "0.2.22"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 log = "0.3"
 mio = "0.5"
 netbuf = "0.3"
 parking_lot = "0.2"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
+quickcheck = { version = "0.2", optional = true }
 rand = "0.3.14"
 slab = "0.1"
 uuid = "0.2"
@@ -23,3 +25,4 @@ vec_map = "0.6"
 [dev-dependencies]
 tempdir = "0.3"
 env_logger = "*"
+quickcheck = "0.2"
