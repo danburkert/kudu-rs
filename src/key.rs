@@ -100,49 +100,52 @@ pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row> {
 }
 
 fn decode_column<'a>(row: &mut Row, idx: usize, is_last: bool, key: &'a [u8]) -> Result<&'a [u8]> {
-    match row.schema().columns()[idx].data_type() {
-        DataType::Bool => {
-            try!(row.set(idx, if key[0] == 0 { false } else { true }));
-            Ok(&key[1..])
-        },
-        DataType::Int8 => {
-            try!(row.set(idx, key[0] as i8));
-            Ok(&key[1..])
-        },
-        DataType::Int16 => {
-            try!(row.set(idx, BigEndian::read_i16(key)));
-            Ok(&key[2..])
-        },
-        DataType::Int32 => {
-            try!(row.set(idx, BigEndian::read_i32(key)));
-            Ok(&key[4..])
-        },
-        DataType::Int64 =>  {
-            try!(row.set(idx, BigEndian::read_i64(key)));
-            Ok(&key[8..])
-        },
-        DataType::Timestamp => {
-            try!(row.set(idx, us_to_time(BigEndian::read_i64(key))));
-            Ok(&key[8..])
-        },
-        DataType::Float => {
-            try!(row.set(idx, BigEndian::read_f32(key)));
-            Ok(&key[4..])
-        },
-        DataType::Double => {
-            try!(row.set(idx, BigEndian::read_f64(key)));
-            Ok(&key[8..])
-        },
-        DataType::Binary => {
-            let (remaining, value) = try!(decode_binary(key, is_last));
-            try!(row.set(idx, value));
-            Ok(remaining)
-        },
-        DataType::String => {
-            let (remaining, value) = try!(decode_binary(key, is_last));
-            try!(row.set(idx, try!(String::from_utf8(value))));
-            Ok(remaining)
-        },
+    unsafe {
+        // Use set_unchecked since the column type is already checked.
+        match row.schema().columns()[idx].data_type() {
+            DataType::Bool => {
+                row.set_unchecked(idx, if key[0] == 0 { false } else { true });
+                Ok(&key[1..])
+            },
+            DataType::Int8 => {
+                row.set_unchecked(idx, key[0] as i8);
+                Ok(&key[1..])
+            },
+            DataType::Int16 => {
+                row.set_unchecked(idx, BigEndian::read_i16(key));
+                Ok(&key[2..])
+            },
+            DataType::Int32 => {
+                row.set_unchecked(idx, BigEndian::read_i32(key));
+                Ok(&key[4..])
+            },
+            DataType::Int64 =>  {
+                row.set_unchecked(idx, BigEndian::read_i64(key));
+                Ok(&key[8..])
+            },
+            DataType::Timestamp => {
+                row.set_unchecked(idx, us_to_time(BigEndian::read_i64(key)));
+                Ok(&key[8..])
+            },
+            DataType::Float => {
+                row.set_unchecked(idx, BigEndian::read_f32(key));
+                Ok(&key[4..])
+            },
+            DataType::Double => {
+                row.set_unchecked(idx, BigEndian::read_f64(key));
+                Ok(&key[8..])
+            },
+            DataType::Binary => {
+                let (remaining, value) = try!(decode_binary(key, is_last));
+                row.set_unchecked(idx, value);
+                Ok(remaining)
+            },
+            DataType::String => {
+                let (remaining, value) = try!(decode_binary(key, is_last));
+                row.set_unchecked(idx, try!(String::from_utf8(value)));
+                Ok(remaining)
+            },
+        }
     }
 }
 

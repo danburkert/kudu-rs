@@ -44,28 +44,10 @@ impl Row {
     }
 
     pub fn set<'a, V>(&mut self, idx: usize, value: V) -> Result<&mut Row> where V: Value<'a> {
-        try!(self.check_column(idx, V::data_type()));
-        if value.is_null() {
-            if !self.schema.columns()[idx].is_nullable() {
-                return Err(Error::InvalidArgument(format!("null value provided for column {:?}",
-                                                  self.schema.columns()[idx])))
-            }
-            self.set_columns.insert(idx);
-            self.null_columns.insert(idx);
-        } else {
-            self.set_columns.insert(idx);
-            if self.schema.has_nullable_columns() { self.null_columns.remove(idx); }
-
-            if V::is_var_len() {
-                self.indirect_data.insert(idx, value.indirect_data());
-            } else {
-                let offset = self.schema.column_offsets()[idx];
-                let len = V::size();
-                value.copy_data(&mut self.data[offset..offset+len]);
-            }
-
+        try!(self.check_column::<V>(idx));
+        unsafe {
+            Ok(self.set_unchecked(idx, value))
         }
-        Ok(self)
     }
 
     pub fn set_by_name<'a, V>(&mut self, column: &str, value: V) -> Result<&mut Row> where V: Value<'a> {
@@ -76,8 +58,28 @@ impl Row {
         }
     }
 
+    pub unsafe fn set_unchecked<'a, V>(&mut self,
+                                       idx: usize,
+                                       value: V)
+                                       -> &mut Row where V: Value<'a> {
+        debug_assert_eq!(Ok(()), self.check_column::<V>(idx));
+        self.set_columns.insert(idx);
+        if value.is_null() {
+            self.null_columns.insert(idx);
+        } else {
+            if self.schema.has_nullable_columns() { self.null_columns.remove(idx); }
+            if V::is_var_len() {
+                self.indirect_data.insert(idx, value.indirect_data());
+            } else {
+                let offset = self.schema.column_offsets()[idx];
+                value.copy_data(&mut self.data[offset..offset+V::size()]);
+            }
+        }
+        self
+    }
+
     pub fn get<'a, V>(&'a self, idx: usize) -> Result<V> where V: Value<'a> {
-        try!(self.check_column(idx, V::data_type()));
+        try!(self.check_column::<V>(idx));
         if !self.set_columns.get(idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
                                                self.schema.columns()[idx].name(), idx)))
@@ -122,20 +124,41 @@ impl Row {
         }
     }
 
+    pub fn is_set(&self, idx: usize) -> Result<bool> {
+        if idx >= self.schema.columns().len() {
+            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                                      idx, self.schema)));
+        }
+        Ok(self.set_columns.get(idx))
+    }
+
+    pub fn is_set_by_name(&self, column: &str) -> Result<bool> {
+        if let Some(idx) = self.schema.column_index(column) {
+            self.is_set(idx)
+        } else {
+            Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
+        }
+    }
+
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
 
     /// Checks that the column with the specified index has the expected type.
-    fn check_column(&self, idx: usize, data_type: DataType) -> Result<()> {
+    fn check_column<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
         if idx >= self.schema.columns().len() {
             return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                       idx, self.schema)));
         }
-        if data_type != self.schema.columns()[idx].data_type() {
+        let column = &self.schema.columns()[idx];
+        if V::data_type() != column.data_type() {
             return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
-                                                      data_type,
-                                                      self.schema.columns()[idx])));
+                                                      V::data_type(),
+                                                      column)));
+        }
+        if V::is_nullable() && !column.is_nullable() {
+            return Err(Error::InvalidArgument(format!("nullable type is invalid for column {:?}",
+                                                      column)));
         }
         Ok(())
     }
@@ -145,18 +168,21 @@ impl Row {
         use quickcheck::Arbitrary;
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {
-            match column.data_type() {
-                DataType::Bool => row.set(idx, bool::arbitrary(g)).unwrap(),
-                DataType::Int8 => row.set(idx, i8::arbitrary(g)).unwrap(),
-                DataType::Int16 => row.set(idx, i16::arbitrary(g)).unwrap(),
-                DataType::Int32 => row.set(idx, i32::arbitrary(g)).unwrap(),
-                DataType::Int64 => row.set(idx, i64::arbitrary(g)).unwrap(),
-                DataType::Timestamp => row.set(idx, util::us_to_time(i64::arbitrary(g))).unwrap(),
-                DataType::Float => row.set(idx, f32::arbitrary(g)).unwrap(),
-                DataType::Double => row.set(idx, f64::arbitrary(g)).unwrap(),
-                DataType::Binary => row.set(idx, Vec::arbitrary(g)).unwrap(),
-                DataType::String => row.set(idx, String::arbitrary(g)).unwrap(),
-            };
+            unsafe {
+                // Use set_unchecked since the column type is already checked.
+                match column.data_type() {
+                    DataType::Bool => row.set_unchecked(idx, bool::arbitrary(g)),
+                    DataType::Int8 => row.set_unchecked(idx, i8::arbitrary(g)),
+                    DataType::Int16 => row.set_unchecked(idx, i16::arbitrary(g)),
+                    DataType::Int32 => row.set_unchecked(idx, i32::arbitrary(g)),
+                    DataType::Int64 => row.set_unchecked(idx, i64::arbitrary(g)),
+                    DataType::Timestamp => row.set_unchecked(idx, util::us_to_time(i64::arbitrary(g))),
+                    DataType::Float => row.set_unchecked(idx, f32::arbitrary(g)),
+                    DataType::Double => row.set_unchecked(idx, f64::arbitrary(g)),
+                    DataType::Binary => row.set_unchecked(idx, Vec::arbitrary(g)),
+                    DataType::String => row.set_unchecked(idx, String::arbitrary(g)),
+                };
+            }
         }
         row
     }
