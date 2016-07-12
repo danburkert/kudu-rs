@@ -190,12 +190,13 @@ fn get_executable_path(executable: &str) -> PathBuf {
     let path_bytes = Command::new("which")
                              .arg(executable)
                              .output()
-                             .expect(&format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
-                                              executable))
+                             .unwrap()
                              .stdout;
     let path = CString::new(path_bytes).unwrap().into_string().unwrap();
 
-    PathBuf::from(path.lines().next().unwrap())
+    PathBuf::from(path.lines().next().expect(
+            &format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
+                     executable)))
 }
 
 /// Mini cluster configuration options. Unless otherwise specified, the defaults match the master
