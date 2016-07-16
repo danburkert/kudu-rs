@@ -137,6 +137,7 @@ impl TableBuilder {
         self.num_replicas = Some(num_replicas);
     }
 
+    #[doc(hidden)]
     pub fn into_pb(self) -> Result<CreateTableRequestPB> {
         let TableBuilder { name, schema, range_partition_columns, range_splits,
                            range_bounds, hash_partitions, num_replicas } = self;

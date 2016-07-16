@@ -32,6 +32,10 @@ use table::Table;
 use table::TableBuilder;
 use TableId;
 
+/// A Kudu database client.
+///
+/// Encapsulates the connection to a Kudu cluster. Only a single `Client` instance should be used
+/// per application.
 #[derive(Clone)]
 pub struct Client {
     messenger: Messenger,
@@ -42,6 +46,7 @@ pub struct Client {
 
 impl Client {
 
+    /// Creates a new client with the provided configuration.
     pub fn new(config: ClientConfig) -> Client {
         let messenger = Messenger::new().unwrap();
         let master = MasterProxy::new(config.master_addresses(), messenger.clone());
@@ -122,7 +127,7 @@ impl Client {
         is_create_table_done.map(|_| ())
     }
 
-    /// Deletes the Kudu table.
+    /// Deletes the table.
     pub fn delete_table<S>(&self, table: S, deadline: Instant) -> Result<()>
     where S: Into<String> {
         let mut identifier = TableIdentifierPB::new();
@@ -130,7 +135,7 @@ impl Client {
         self.do_delete_table(identifier, deadline)
     }
 
-    /// Deletes the Kudu table.
+    /// Deletes the table.
     pub fn delete_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_id(id.to_string().into_bytes());
@@ -146,14 +151,18 @@ impl Client {
         recv.recv().unwrap().map(|_| ())
     }
 
+    /// Lists all tables and their associated table ID.
     pub fn list_tables(&self, deadline: Instant) -> Result<Vec<(String, TableId)>> {
         self.do_list_tables(ListTablesRequestPB::new(), deadline)
     }
 
-    pub fn list_tables_with_name_filter<S>(&self, name_filter: S, deadline: Instant) -> Result<Vec<(String, TableId)>>
+    /// Lists all tables with the a name matching the provided prefix, and their associated table
+    /// ID.
+    pub fn list_tables_with_prefix<S>(&self, name_prefix: S, deadline: Instant) ->
+        Result<Vec<(String, TableId)>>
     where S: Into<String> {
         let mut request = ListTablesRequestPB::new();
-        request.set_name_filter(name_filter.into());
+        request.set_name_filter(name_prefix.into());
         self.do_list_tables(request, deadline)
     }
 
@@ -168,7 +177,7 @@ impl Client {
         Ok(tables)
     }
 
-    /// Returns the schema of a Kudu table.
+    /// Returns an open table.
     pub fn open_table<S>(&self, table: S, deadline: Instant) -> Result<Table>
     where S: Into<String> {
         let mut identifier = TableIdentifierPB::new();
@@ -176,7 +185,8 @@ impl Client {
         self.do_open_table(identifier, deadline)
     }
 
-    /// Returns the schema of a Kudu table.
+
+    /// Returns an open table.
     pub fn open_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<Table> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_id(id.to_string().into_bytes());
@@ -200,6 +210,7 @@ impl Client {
         Ok(Table::new(name, id, schema, partition_schema, meta_cache))
     }
 
+    #[doc(hidden)]
     pub fn master_proxy(&self) -> &MasterProxy {
         &self.master
     }
@@ -219,14 +230,12 @@ impl fmt::Debug for Client {
     }
 }
 
+/// Client configuration options.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientConfig {
 
     /// A seed set of master addresses. Must contain at least one active master in the cluster.
     master_addresses: Vec<SocketAddr>,
-
-    /// The default timeout for admin operations.
-    default_admin_operation_timeout: Duration,
 }
 
 impl ClientConfig {
@@ -245,22 +254,12 @@ impl ClientConfig {
         self.master_addresses = master_addresses;
         self
     }
-
-    pub fn default_admin_operation_timeout(&self) -> Duration {
-        self.default_admin_operation_timeout
-    }
-
-    pub fn set_default_admin_operation_timeout(&mut self, timeout: Duration) -> &mut ClientConfig {
-        self.default_admin_operation_timeout = timeout;
-        self
-    }
 }
 
 impl Default for ClientConfig {
     fn default() -> ClientConfig {
         ClientConfig {
             master_addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 7051)],
-            default_admin_operation_timeout: Duration::from_secs(30),
         }
     }
 }

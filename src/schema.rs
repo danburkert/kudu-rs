@@ -107,7 +107,7 @@ impl fmt::Debug for Column {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Inner {
+struct Inner {
     columns: Vec<Column>,
     columns_by_name: HashMap<String, usize>,
     column_offsets: Vec<usize>,
@@ -142,7 +142,7 @@ impl Schema {
         &self.inner.columns[0..self.inner.num_primary_key_columns]
     }
 
-    /// TODO: make this private
+    #[doc(hidden)]
     pub fn num_primary_key_columns(&self) -> usize {
         self.inner.num_primary_key_columns
     }
@@ -169,6 +169,7 @@ impl Schema {
         this == that
     }
 
+    #[doc(hidden)]
     pub fn as_pb(&self) -> SchemaPB {
         let mut pb = SchemaPB::new();
         for (idx, column) in self.inner.columns.iter().enumerate() {

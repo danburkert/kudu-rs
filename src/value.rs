@@ -7,15 +7,25 @@ use DataType;
 use Result;
 use util::{time_to_us, us_to_time};
 
+/// Marker trait for types which can be stored in a Kudu column.
 pub trait Value<'a>: Sized {
+    #[doc(hidden)]
     fn data_type() -> DataType;
+    #[doc(hidden)]
     fn size() -> usize;
+    #[doc(hidden)]
     fn is_var_len() -> bool { false }
+    #[doc(hidden)]
     fn is_nullable() -> bool { false }
+    #[doc(hidden)]
     fn is_null(&self) -> bool { false }
+    #[doc(hidden)]
     fn copy_data(&self, _dest: &mut [u8]) { unreachable!() }
+    #[doc(hidden)]
     fn indirect_data(self) -> Vec<u8> { unreachable!() }
+    #[doc(hidden)]
     fn from_data(data: &'a [u8]) -> Result<Self>;
+    #[doc(hidden)]
     fn from_null() -> Self { unreachable!() }
 }
 

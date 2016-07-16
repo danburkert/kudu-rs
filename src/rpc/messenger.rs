@@ -77,7 +77,7 @@ pub enum TimeoutKind {
     Timer,
 }
 
-pub struct Inner {
+struct Inner {
     channel: Sender<Command>,
     thread: JoinHandle<io::Result<()>>,
 }
