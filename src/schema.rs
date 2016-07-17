@@ -24,17 +24,6 @@ pub struct Column {
 
 impl Column {
 
-    fn new(name: String, data_type: DataType) -> Column {
-        Column {
-            name: name,
-            data_type: data_type,
-            is_nullable: true,
-            compression: CompressionType::Default,
-            encoding: EncodingType::Auto,
-            block_size: 0,
-        }
-    }
-
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -122,6 +111,31 @@ pub struct Schema {
 }
 
 impl Schema {
+
+    fn new(columns: Vec<Column>, num_primary_key_columns: usize) -> Schema {
+        let mut columns_by_name = HashMap::with_capacity(columns.len());
+        let mut column_offsets = Vec::with_capacity(columns.len());
+        let mut row_size = 0;
+        let mut has_nullable_columns = false;
+        for (idx, column) in columns.iter().enumerate() {
+            columns_by_name.insert(column.name().to_string(), idx);
+            column_offsets.push(row_size);
+            row_size += column.data_type.size();
+            has_nullable_columns |= column.is_nullable();
+        }
+
+        Schema {
+            inner: Arc::new(Inner {
+                columns: columns,
+                columns_by_name: columns_by_name,
+                column_offsets: column_offsets,
+                num_primary_key_columns: num_primary_key_columns,
+                row_size: row_size,
+                has_nullable_columns: has_nullable_columns,
+            })
+        }
+    }
+
     pub fn columns(&self) -> &[Column] {
         &self.inner.columns
     }
@@ -145,6 +159,10 @@ impl Schema {
     #[doc(hidden)]
     pub fn num_primary_key_columns(&self) -> usize {
         self.inner.num_primary_key_columns
+    }
+
+    pub fn primary_key_projection(&self) -> Schema {
+        Schema::new(self.primary_key().to_owned(), self.num_primary_key_columns())
     }
 
     pub fn row_size(&self) -> usize {
@@ -178,6 +196,7 @@ impl Schema {
         pb
     }
 
+    #[doc(hidden)]
     pub fn from_pb(mut pb: SchemaPB) -> Result<Schema> {
         let mut num_primary_key_columns = 0;
         let mut columns = Vec::with_capacity(pb.get_columns().len());
@@ -185,30 +204,7 @@ impl Schema {
             if column.get_is_key() { num_primary_key_columns += 1 }
             columns.push(try!(Column::from_pb(column)))
         }
-
-        let mut columns_by_name = HashMap::with_capacity(columns.len());
-        let mut column_offsets = Vec::with_capacity(columns.len());
-        let mut index = 0;
-        let mut row_size = 0;
-        let mut has_nullable_columns = false;
-        for column in &columns {
-            columns_by_name.insert(column.name().to_string(), index);
-            index += 1;
-            column_offsets.push(row_size);
-            row_size += column.data_type.size();
-            has_nullable_columns |= column.is_nullable();
-        }
-
-        Ok(Schema {
-            inner: Arc::new(Inner {
-                columns: columns,
-                columns_by_name: columns_by_name,
-                column_offsets: column_offsets,
-                num_primary_key_columns: num_primary_key_columns,
-                row_size: row_size,
-                has_nullable_columns: has_nullable_columns,
-            })
-        })
+        Ok(Schema::new(columns, num_primary_key_columns))
     }
 }
 
@@ -363,13 +359,7 @@ impl SchemaBuilder {
                     "primary key must have at least one column".to_owned()));
         }
 
-        let num_primary_key_columns = self.primary_key.len();
-
         let mut columns = Vec::with_capacity(self.columns.len());
-        let mut columns_by_name = HashMap::with_capacity(self.columns.len());
-        let mut column_offsets = Vec::with_capacity(self.columns.len());
-        let mut row_size = 0;
-        let mut has_nullable_columns = false;
 
         for column_name in &self.primary_key {
             let idx = self.columns.iter().position(|col| col.name() == column_name);
@@ -382,27 +372,9 @@ impl SchemaBuilder {
             }
         }
 
-        for column in self.columns {
-            columns.push(column.build())
-        }
+        columns.extend(self.columns.into_iter().map(ColumnBuilder::build));
 
-        for (idx, column) in columns.iter().enumerate() {
-            columns_by_name.insert(column.name().to_owned(), idx);
-            column_offsets.push(row_size);
-            row_size += column.data_type.size();
-            if column.is_nullable { has_nullable_columns = true; }
-        }
-
-        Ok(Schema {
-            inner: Arc::new(Inner {
-                columns: columns,
-                columns_by_name: columns_by_name,
-                column_offsets: column_offsets,
-                num_primary_key_columns: num_primary_key_columns,
-                row_size: row_size,
-                has_nullable_columns: has_nullable_columns,
-            }),
-        })
+        Ok(Schema::new(columns, self.primary_key.len()))
     }
 }
 

@@ -19,11 +19,14 @@ use rpc::{
 use Error;
 use MasterError;
 use MasterErrorCode;
+use MasterId;
+use RaftRole;
 use Result;
 use Status;
 
 use parking_lot::Mutex;
 use kudu_pb::common::HostPortPB;
+use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 use kudu_pb::master::{
     AlterTableRequestPB, AlterTableResponsePB,
     CreateTableRequestPB, CreateTableResponsePB,
@@ -38,7 +41,7 @@ use kudu_pb::master::{
     ListTabletServersRequestPB, ListTabletServersResponsePB,
     PingRequestPB, PingResponsePB,
 };
-use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
+use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
 
 /// Maximum number of RPCs to queue in the master proxy during leader discovery. When the queue is
 /// full, additional attempts to send RPCs will immediately fail with `RpcError::Backoff`.
@@ -501,6 +504,76 @@ where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static {
             }
             Err(error) => self.1(Err(error)),
         }
+    }
+}
+
+/// Master metadata.
+///
+/// This information should be considered 'point-in-time', and may change as the cluster topology
+/// changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Master {
+    id: MasterId,
+    rpc_addrs: Vec<(String, u16)>,
+    http_addrs: Vec<(String, u16)>,
+    seqno: i64,
+    role: RaftRole,
+}
+
+impl Master {
+    pub fn id(&self) -> &MasterId {
+        &self.id
+    }
+
+    pub fn rpc_addrs(&self) -> &[(String, u16)] {
+        &self.rpc_addrs
+    }
+
+    pub fn http_addrs(&self) -> &[(String, u16)] {
+        &self.http_addrs
+    }
+
+    pub fn seqno(&self) -> i64 {
+        self.seqno
+    }
+
+    pub fn role(&self) -> RaftRole {
+        self.role
+    }
+
+    #[doc(hidden)]
+    pub fn from_pb(mut master: MasterEntry) -> Result<Master> {
+        if master.has_error() {
+            return Err(Error::from(MasterError::new(MasterErrorCode::UnknownError,
+                                                    Status::from(master.take_error()))))
+        }
+
+        let id = try!(MasterId::parse_bytes(master.get_instance_id().get_permanent_uuid()));
+        let seqno = master.get_instance_id().get_instance_seqno();
+
+        // TODO: check bounds on port casts.
+        let rpc_addrs = master.mut_registration()
+                                     .take_rpc_addresses()
+                                     .into_iter()
+                                     .map(|mut host_port| (host_port.take_host(),
+                                                           host_port.get_port() as u16))
+                                     .collect::<Vec<_>>();
+        let http_addrs = master.mut_registration()
+                                      .take_http_addresses()
+                                      .into_iter()
+                                      .map(|mut host_port| (host_port.take_host(),
+                                                            host_port.get_port() as u16))
+                                      .collect::<Vec<_>>();
+
+        let role = RaftRole::from_pb(master.get_role());
+
+        Ok(Master {
+            id: id,
+            rpc_addrs: rpc_addrs,
+            http_addrs: http_addrs,
+            seqno: seqno,
+            role: role,
+        })
     }
 }
 

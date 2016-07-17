@@ -6,9 +6,11 @@ use std::time::Instant;
 use kudu_pb::master::{GetTableLocationsRequestPB, TabletLocationsPB};
 use parking_lot::Mutex;
 
-use master::MasterProxy;
+use PartitionSchema;
 use Result;
+use Schema;
 use TableId;
+use master::MasterProxy;
 use tablet::Tablet;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
@@ -40,14 +42,14 @@ impl Entry {
 
     fn partition_lower_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition_lower_bound(),
+            Entry::Tablet(ref tablet) => tablet.partition().lower_bound_encoded(),
             Entry::NonCoveredRange { ref partition_lower_bound, .. } => partition_lower_bound,
         }
     }
 
     fn partition_upper_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition_upper_bound(),
+            Entry::Tablet(ref tablet) => tablet.partition().upper_bound_encoded(),
             Entry::NonCoveredRange { ref partition_upper_bound, .. } => partition_upper_bound,
         }
     }
@@ -90,8 +92,8 @@ impl Entry {
                 // Sanity check that if the tablet IDs match, the ranges also match. If this fails,
                 // something is very wrong (possibly in the server).
                 debug_assert!(a.id() != b.id() ||
-                              (a.partition_lower_bound() == b.partition_lower_bound() &&
-                               a.partition_upper_bound() == b.partition_upper_bound()));
+                              (a.partition().lower_bound_encoded() == b.partition().lower_bound_encoded() &&
+                               a.partition().upper_bound_encoded() == b.partition().upper_bound_encoded()));
                 a.id() == b.id()
             },
             (&Entry::NonCoveredRange { partition_lower_bound: ref a_lower,
@@ -108,6 +110,8 @@ impl Entry {
 #[derive(Clone)]
 pub struct MetaCache {
     table: TableId,
+    primary_key_schema: Schema,
+    partition_schema: PartitionSchema,
     entries: Arc<Mutex<Vec<Entry>>>,
     master: MasterProxy,
 }
@@ -115,9 +119,14 @@ pub struct MetaCache {
 impl MetaCache {
 
     pub fn new(table: TableId,
-               master: MasterProxy) -> MetaCache {
+               primary_key_schema: Schema,
+               partition_schema: PartitionSchema,
+               master: MasterProxy)
+               -> MetaCache {
         MetaCache {
             table: table,
+            primary_key_schema: primary_key_schema,
+            partition_schema: partition_schema,
             entries: Arc::new(Mutex::new(Vec::new())),
             master: master,
         }
@@ -151,11 +160,11 @@ impl MetaCache {
         });
     }
 
-    fn add_tablet_locations<F>(self,
+    fn add_tablet_locations<F>(&self,
                                partition_key: Vec<u8>,
                                tablets: Vec<TabletLocationsPB>,
                                cb: F) where F: FnOnce(Result<Entry>) + Send + 'static {
-        match tablet_locations_to_entries(&partition_key, tablets) {
+        match self.tablet_locations_to_entries(&partition_key, tablets) {
             Ok(entries) => {
                 self.splice_entries(entries);
                 cb(Ok(self.get_cached(&partition_key).unwrap()));
@@ -217,56 +226,57 @@ impl MetaCache {
         }
     }
 
+    /// Converts the results of a `GetTableLocations` RPC to a set of entries for the meta cache.
+    /// The entries are guaranteed to be contiguous in the partition key space. The partition key
+    /// must match the partition key of the get table locations request. The request must not
+    /// have an end key.
+    fn tablet_locations_to_entries(&self,
+                                   partition_key: &[u8],
+                                   tablets: Vec<TabletLocationsPB>)
+                                   -> Result<VecDeque<Entry>> {
+        if tablets.is_empty() {
+            // If there are no tablets in the response, then the table is empty. If
+            // there were any tablets in the table they would have been returned, since
+            // the master guarantees that the if the partition key falls in a
+            // non-covered range, the previous tablet will be returned, and we did not
+            // set an upper bound partition key on the request.
+            let mut entries = VecDeque::with_capacity(1);
+            entries.push_back(Entry::non_covered_range(Vec::new(), Vec::new()));
+            return Ok(entries);
+        }
+
+        let tablet_count = tablets.len();
+        let mut entries = VecDeque::with_capacity(tablets.len());
+        let mut last_upper_bound = tablets[0].get_partition().get_partition_key_start().to_owned();
+
+        if partition_key < &last_upper_bound {
+            // If the first tablet is past the requested partition key, then the partition key fell in
+            // an initial non-covered range.
+            entries.push_back(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
+        }
+
+        for tablet in tablets {
+            let tablet = try!(Tablet::from_pb(&self.primary_key_schema, &self.partition_schema, tablet));
+            if tablet.partition().lower_bound_encoded() > &last_upper_bound {
+                entries.push_back(Entry::non_covered_range(last_upper_bound,
+                                                           tablet.partition().lower_bound_encoded().to_owned()));
+            }
+            last_upper_bound = tablet.partition().upper_bound_encoded().to_owned();
+            entries.push_back(Entry::Tablet(tablet));
+        }
+
+        if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
+            entries.push_back(Entry::non_covered_range(last_upper_bound, Vec::new()));
+        }
+
+        trace!("discovered table locations: {:?}", entries);
+        Ok(entries)
+    }
+
+
     fn clear(&self) {
         self.entries.lock().clear()
     }
-}
-
-/// Converts the results of a `GetTableLocations` RPC to a set of entries for the meta cache.
-/// The entries are guaranteed to be contiguous in the partition key space. The partition key
-/// must match the partition key of the get table locations request. The request must not
-/// have an end key.
-fn tablet_locations_to_entries(partition_key: &[u8],
-                               tablets: Vec<TabletLocationsPB>)
-                               -> Result<VecDeque<Entry>> {
-
-    if tablets.is_empty() {
-        // If there are no tablets in the response, then the table is empty. If
-        // there were any tablets in the table they would have been returned, since
-        // the master guarantees that the if the partition key falls in a
-        // non-covered range, the previous tablet will be returned, and we did not
-        // set an upper bound partition key on the request.
-        let mut entries = VecDeque::with_capacity(1);
-        entries.push_back(Entry::non_covered_range(Vec::new(), Vec::new()));
-        return Ok(entries);
-    }
-
-    let tablet_count = tablets.len();
-    let mut entries = VecDeque::with_capacity(tablets.len());
-    let mut last_upper_bound = tablets[0].get_partition().get_partition_key_start().to_owned();
-
-    if partition_key < &last_upper_bound {
-        // If the first tablet is past the requested partition key, then the partition key fell in
-        // an initial non-covered range.
-        entries.push_back(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
-    }
-
-    for tablet in tablets {
-        let tablet = try!(Tablet::from_pb(tablet));
-        if tablet.partition_lower_bound() > &last_upper_bound {
-            entries.push_back(Entry::non_covered_range(last_upper_bound,
-                                                       tablet.partition_lower_bound().to_owned()));
-        }
-        last_upper_bound = tablet.partition_upper_bound().to_owned();
-        entries.push_back(Entry::Tablet(tablet));
-    }
-
-    if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
-        entries.push_back(Entry::non_covered_range(last_upper_bound, Vec::new()));
-    }
-
-    trace!("discovered table locations: {:?}", entries);
-    Ok(entries)
 }
 
 #[cfg(test)]
@@ -282,7 +292,6 @@ mod tests {
     use mini_cluster::MiniCluster;
     use schema::tests::simple_schema;
     use TableBuilder;
-    use super::*;
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
@@ -308,7 +317,8 @@ mod tests {
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
-        let cache = MetaCache::new(table_id, client.master_proxy().clone());
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let cache = table.meta_cache().clone();
 
         let (send, recv) = sync_channel(0);
 
@@ -368,7 +378,8 @@ mod tests {
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
-        let cache = MetaCache::new(table_id, client.master_proxy().clone());
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let cache = table.meta_cache().clone();
 
         let (send, recv) = sync_channel(1);
 
@@ -440,7 +451,8 @@ mod tests {
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
-        let cache = MetaCache::new(table_id, client.master_proxy().clone());
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let cache = table.meta_cache().clone();
 
         let (send, recv) = sync_channel(2);
 
@@ -500,7 +512,8 @@ mod tests {
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
-        let cache = MetaCache::new(table_id, client.master_proxy().clone());
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let cache = table.meta_cache().clone();
         let (send, recv) = sync_channel(10);
 
         let s = send.clone();

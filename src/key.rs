@@ -1,11 +1,13 @@
 //! Utility functions for working with keys.
 
 use std::time::SystemTime;
+use std::{i8, i16, i32, i64};
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt, NativeEndian};
 
 use DataType;
 use Error;
+use RangePartitionSchema;
 use Result;
 use Row;
 use Schema;
@@ -58,16 +60,16 @@ pub fn encode_primary_key(row: &Row) -> Vec<u8> {
 
 fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) {
     match row.schema().columns()[idx].data_type() {
-        DataType::Bool => buf.push(if row.get::<bool>(idx).unwrap() { 1 } else { 0 }),
-        DataType::Int8 => buf.push(row.get::<i8>(idx).unwrap() as u8),
-        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx).unwrap()).unwrap(),
-        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx).unwrap()).unwrap(),
-        DataType::Int64 => buf.write_i32::<BigEndian>(row.get::<i32>(idx).unwrap()).unwrap(),
-        DataType::Timestamp => buf.write_i64::<BigEndian>(time_to_us(&row.get::<SystemTime>(idx).unwrap())).unwrap(),
-        DataType::Float => buf.write_f32::<BigEndian>(row.get::<f32>(idx).unwrap()).unwrap(),
-        DataType::Double => buf.write_f64::<BigEndian>(row.get::<f64>(idx).unwrap()).unwrap(),
+        DataType::Int8 => buf.push((row.get::<i8>(idx).unwrap() ^ i8::MIN) as u8),
+        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx).unwrap() ^ i16::MIN).unwrap(),
+        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx).unwrap() ^ i32::MIN).unwrap(),
+        DataType::Int64 => buf.write_i64::<BigEndian>(row.get::<i64>(idx).unwrap() ^ i64::MIN).unwrap(),
+        DataType::Timestamp => buf.write_i64::<BigEndian>(time_to_us(&row.get::<SystemTime>(idx).unwrap()) ^ i64::MIN).unwrap(),
         DataType::Binary => encode_binary(row.get(idx).unwrap(), is_last, buf),
         DataType::String => encode_binary(row.get::<&str>(idx).unwrap().as_bytes(), is_last, buf),
+        DataType::Bool | DataType::Float | DataType::Double => {
+            panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
+        },
     }
 }
 
@@ -94,7 +96,26 @@ pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row> {
 
     if !key.is_empty() {
         return Err(Error::Serialization(
-                "bytes remaining after decoding all key key columns".to_owned()));
+                "bytes remaining after decoding all primary key columns".to_owned()));
+    }
+    Ok(row)
+}
+
+pub fn decode_range_partition_key(schema: &Schema,
+                                  range_partition_schema: &RangePartitionSchema,
+                                  mut key: &[u8]) -> Result<Row> {
+    let mut row = schema.new_row();
+    if range_partition_schema.columns().is_empty() { return Ok(row) }
+    let last_idx = *range_partition_schema.columns().last().unwrap();
+
+    for &idx in range_partition_schema.columns() {
+        if key.is_empty() { break; }
+        key = try!(decode_column(&mut row, idx, idx == last_idx, key));
+    }
+
+    if !key.is_empty() {
+        return Err(Error::Serialization(
+                "bytes remaining after decoding all partition key columns".to_owned()));
     }
     Ok(row)
 }
@@ -103,36 +124,24 @@ fn decode_column<'a>(row: &mut Row, idx: usize, is_last: bool, key: &'a [u8]) ->
     unsafe {
         // Use set_unchecked since the column type is already checked.
         match row.schema().columns()[idx].data_type() {
-            DataType::Bool => {
-                row.set_unchecked(idx, if key[0] == 0 { false } else { true });
-                Ok(&key[1..])
-            },
             DataType::Int8 => {
-                row.set_unchecked(idx, key[0] as i8);
+                row.set_unchecked(idx, (key[0] as i8) ^ i8::MIN);
                 Ok(&key[1..])
             },
             DataType::Int16 => {
-                row.set_unchecked(idx, BigEndian::read_i16(key));
+                row.set_unchecked(idx, BigEndian::read_i16(key) ^ i16::MIN);
                 Ok(&key[2..])
             },
             DataType::Int32 => {
-                row.set_unchecked(idx, BigEndian::read_i32(key));
+                row.set_unchecked(idx, BigEndian::read_i32(key) ^ i32::MIN);
                 Ok(&key[4..])
             },
             DataType::Int64 =>  {
-                row.set_unchecked(idx, BigEndian::read_i64(key));
+                row.set_unchecked(idx, BigEndian::read_i64(key) ^ i64::MIN);
                 Ok(&key[8..])
             },
             DataType::Timestamp => {
-                row.set_unchecked(idx, us_to_time(BigEndian::read_i64(key)));
-                Ok(&key[8..])
-            },
-            DataType::Float => {
-                row.set_unchecked(idx, BigEndian::read_f32(key));
-                Ok(&key[4..])
-            },
-            DataType::Double => {
-                row.set_unchecked(idx, BigEndian::read_f64(key));
+                row.set_unchecked(idx, us_to_time(BigEndian::read_i64(key) ^ i64::MIN));
                 Ok(&key[8..])
             },
             DataType::Binary => {
@@ -144,6 +153,9 @@ fn decode_column<'a>(row: &mut Row, idx: usize, is_last: bool, key: &'a [u8]) ->
                 let (remaining, value) = try!(decode_binary(key, is_last));
                 row.set_unchecked(idx, try!(String::from_utf8(value)));
                 Ok(remaining)
+            },
+            DataType::Bool | DataType::Float | DataType::Double => {
+                panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
             },
         }
     }
@@ -183,7 +195,6 @@ fn decode_binary(mut key: &[u8], is_last: bool) -> Result<(&[u8], Vec<u8>)> {
         Ok((key, ret))
     }
 }
-
 
 #[cfg(test)]
 mod test {

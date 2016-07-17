@@ -33,6 +33,7 @@ mod rpc;
 mod schema;
 mod table;
 mod tablet;
+mod tablet_server;
 mod util;
 mod value;
 
@@ -41,9 +42,12 @@ mod mini_cluster;
 
 pub use client::*;
 pub use error::*;
+pub use partition::*;
 pub use row::Row;
 pub use schema::*;
 pub use table::*;
+pub use tablet::*;
+pub use tablet_server::TabletServer;
 pub use value::Value;
 
 use std::fmt;
@@ -279,26 +283,6 @@ impl RaftRole {
             kudu_pb::consensus_metadata::RaftPeerPB_Role::NON_PARTICIPANT => RaftRole::NonParticipant,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MasterState {
-    /// The permanent UUID of the master server.
-    id: MasterId,
-
-    /// Sequence number incremented on every start-up of the master.
-    ///
-    /// This makes it easy to detect when an instance has restarted.
-    ///
-    /// On a freshly initialized server, the first sequence number should be 0.
-    seqno: i64,
-
-    /// The Raft role of the master.
-    role: RaftRole,
-
-    rpc_addresses: Vec<(String, u32)>,
-
-    http_addresses: Vec<(String, u32)>,
 }
 
 macro_rules! id {

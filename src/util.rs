@@ -2,6 +2,8 @@ use std::fmt;
 use std::time::Duration;
 use std::time::{UNIX_EPOCH, SystemTime};
 
+use chrono;
+
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + duration.subsec_nanos() as u64 / 1000_000
 }
@@ -44,9 +46,26 @@ pub fn us_to_time(us: i64) -> SystemTime {
     }
 }
 
+pub fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
+    let datetime = if timestamp < UNIX_EPOCH {
+        chrono::NaiveDateTime::from_timestamp(0, 0) -
+            chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
+    } else {
+        chrono::NaiveDateTime::from_timestamp(0, 0) +
+            chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
+    };
+
+    write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::time::{Duration, UNIX_EPOCH};
+
     use quickcheck::{quickcheck, TestResult};
+
+    use schema;
     use super::*;
 
     #[test]
@@ -57,5 +76,19 @@ mod tests {
         }
 
         quickcheck(roundtrip as fn(i64) -> TestResult);
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        let schema = schema::tests::all_types_schema();
+        let mut row = schema.new_row();
+
+        row.set_by_name("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
+        assert_eq!("Timestamp \"timestamp\"=1969-12-31T23:59:58.766000Z",
+                   &format!("{:?}", row));
+
+        row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
+        assert_eq!("Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z",
+                   &format!("{:?}", row));
     }
 }

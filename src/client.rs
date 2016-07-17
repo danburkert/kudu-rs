@@ -15,22 +15,26 @@ use kudu_pb::master::{
     DeleteTableRequestPB,
     GetTableSchemaRequestPB,
     IsCreateTableDoneRequestPB,
+    ListMastersRequestPB,
     ListTablesRequestPB,
+    ListTabletServersRequestPB,
     TableIdentifierPB,
 };
 use parking_lot::Mutex;
 
-use backoff::Backoff;
 use Error;
+use Result;
+use Schema;
+use TableId;
+use TabletServer;
+use backoff::Backoff;
+use master::Master;
 use master::MasterProxy;
 use meta_cache::MetaCache;
 use partition::PartitionSchema;
-use Result;
 use rpc::Messenger;
-use Schema;
 use table::Table;
 use table::TableBuilder;
-use TableId;
 
 /// A Kudu database client.
 ///
@@ -91,7 +95,7 @@ impl Client {
         let mut request = IsCreateTableDoneRequestPB::new();
         request.set_table(table);
 
-        let (send, recv) = sync_channel(0);
+        let (send, recv) = sync_channel(1);
         self.master.is_create_table_done(deadline, request, move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|resp| resp.get_done())
     }
@@ -177,6 +181,30 @@ impl Client {
         Ok(tables)
     }
 
+    fn list_masters(&self, deadline: Instant) -> Result<Vec<Master>> {
+        let request = ListMastersRequestPB::new();
+        let (send, recv) = sync_channel(1);
+        self.master.list_masters(deadline, request, move |resp| send.send(resp).unwrap());
+        let mut resp = try!(recv.recv().unwrap());
+        let mut masters = Vec::with_capacity(resp.get_masters().len());
+        for master in resp.take_masters().into_iter() {
+            masters.push(try!(Master::from_pb(master)));
+        }
+        Ok(masters)
+    }
+
+    fn list_tablet_servers(&self, deadline: Instant) -> Result<Vec<TabletServer>> {
+        let request = ListTabletServersRequestPB::new();
+        let (send, recv) = sync_channel(1);
+        self.master.list_tablet_servers(deadline, request, move |resp| send.send(resp).unwrap());
+        let mut resp = try!(recv.recv().unwrap());
+        let mut tablet_servers = Vec::with_capacity(resp.get_servers().len());
+        for server in resp.take_servers().into_iter() {
+            tablet_servers.push(try!(TabletServer::from_pb(server)));
+        }
+        Ok(tablet_servers)
+    }
+
     /// Returns an open table.
     pub fn open_table<S>(&self, table: S, deadline: Instant) -> Result<Table>
     where S: Into<String> {
@@ -206,21 +234,21 @@ impl Client {
         let partition_schema = PartitionSchema::from_pb(resp.get_partition_schema(),
                                                         resp.get_schema());
         let schema = try!(Schema::from_pb(resp.take_schema()));
-        let meta_cache = self.meta_cache(&id);
+        let meta_cache = self.meta_caches
+                             .lock()
+                             .entry(id.clone())
+                             .or_insert_with(|| MetaCache::new(id.clone(),
+                                                               schema.primary_key_projection(),
+                                                               partition_schema.clone(),
+                                                               self.master.clone()))
+                             .clone();
+
         Ok(Table::new(name, id, schema, partition_schema, meta_cache))
     }
 
     #[doc(hidden)]
     pub fn master_proxy(&self) -> &MasterProxy {
         &self.master
-    }
-
-    fn meta_cache(&self, table: &TableId) -> MetaCache {
-        self.meta_caches
-            .lock()
-            .entry(table.clone())
-            .or_insert_with(|| MetaCache::new(table.clone(), self.master.clone()))
-            .clone()
     }
 }
 
@@ -268,7 +296,7 @@ impl Default for ClientConfig {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use mini_cluster::MiniCluster;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use SchemaBuilder;
     use super::*;
     use TableBuilder;
@@ -321,5 +349,33 @@ mod tests {
         assert_eq!("create_and_delete_table", &tables[0].0);
 
         client.delete_table_by_id(&table_id, deadline()).unwrap();
+    }
+
+    #[test]
+    fn list_tablet_servers() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(3));
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+
+        // The tablet server is real slow coming up.
+        // TODO: add MiniCluster::wait_for_startup() or equivalent.
+        ::std::thread::sleep_ms(2000);
+
+        let tablet_servers = client.list_tablet_servers(deadline()).unwrap();
+        assert_eq!(3, tablet_servers.len());
+    }
+
+    #[test]
+    fn list_masters() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(3)
+                                                         .num_tservers(0));
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+
+        let masters = client.list_masters(deadline()).unwrap();
+        assert_eq!(3, masters.len());
     }
 }

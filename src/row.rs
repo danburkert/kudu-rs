@@ -1,12 +1,11 @@
 use std::cmp;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
 use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationType};
 
 use bit_set::BitSet;
-use chrono;
 use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
@@ -17,6 +16,7 @@ use Schema;
 use util;
 use value::Value;
 
+#[derive(Clone)]
 pub struct Row {
     data: Box<[u8]>,
     indirect_data: VecMap<Vec<u8>>,
@@ -188,21 +188,8 @@ impl Row {
     }
 }
 
-fn format_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
-    let datetime = if timestamp < UNIX_EPOCH {
-        chrono::NaiveDateTime::from_timestamp(0, 0) -
-            chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
-    } else {
-        chrono::NaiveDateTime::from_timestamp(0, 0) +
-            chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
-    };
-
-    write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
-}
-
 impl fmt::Debug for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f, "("));
         let mut is_first = true;
         for (idx, column) in self.schema.columns().iter().enumerate() {
             if !self.set_columns.get(idx) { continue; }
@@ -220,7 +207,7 @@ impl fmt::Debug for Row {
                     DataType::Int16 => try!(write!(f, "{}", self.get::<i16>(idx).unwrap())),
                     DataType::Int32 => try!(write!(f, "{}", self.get::<i32>(idx).unwrap())),
                     DataType::Int64 => try!(write!(f, "{}", self.get::<i64>(idx).unwrap())),
-                    DataType::Timestamp => try!(format_timestamp(f, self.get::<SystemTime>(idx).unwrap())),
+                    DataType::Timestamp => try!(util::fmt_timestamp(f, self.get::<SystemTime>(idx).unwrap())),
                     DataType::Float => try!(write!(f, "{}", self.get::<f32>(idx).unwrap())),
                     DataType::Double => try!(write!(f, "{}", self.get::<f64>(idx).unwrap())),
                     DataType::Binary => try!(util::fmt_hex(f, self.get::<&[u8]>(idx).unwrap())),
@@ -228,7 +215,7 @@ impl fmt::Debug for Row {
                 }
             }
         }
-        write!(f, ")")
+        Ok(())
     }
 }
 
@@ -348,8 +335,6 @@ impl OperationEncoder {
 #[cfg(test)]
 mod tests {
 
-    use std::time::{Duration, UNIX_EPOCH};
-
     use quickcheck::{quickcheck, TestResult, StdGen};
     use rand;
     use schema;
@@ -365,20 +350,6 @@ mod tests {
 
         row.set(10, "foo").unwrap();
         assert_eq!("foo".to_owned(), row.get::<String>(10).unwrap());
-    }
-
-    #[test]
-    fn test_format_timestamp() {
-        let schema = schema::tests::all_types_schema();
-        let mut row = schema.new_row();
-
-        row.set_by_name("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
-        assert_eq!("(Timestamp \"timestamp\"=1969-12-31T23:59:58.766000Z)",
-                   &format!("{:?}", row));
-
-        row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
-        assert_eq!("(Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z)",
-                   &format!("{:?}", row));
     }
 
     #[test]

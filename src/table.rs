@@ -1,17 +1,21 @@
+use std::sync::mpsc::sync_channel;
+use std::time::Instant;
 
 use kudu_pb::master::CreateTableRequestPB;
 use kudu_pb::common::{PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
                       PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB};
 
 use Error;
-use meta_cache::MetaCache;
-use partition::PartitionSchema;
 use Result;
-use row::OperationEncoder;
-use row::Row;
 use Schema;
 use TableId;
+use Tablet;
+use meta_cache::{Entry, MetaCache};
+use partition::PartitionSchema;
+use row::OperationEncoder;
+use row::Row;
 
+#[derive(Clone)]
 pub struct Table {
     name: String,
     id: TableId,
@@ -22,6 +26,7 @@ pub struct Table {
 
 impl Table {
 
+    #[doc(hidden)]
     pub fn new(name: String,
                id: TableId,
                schema: Schema,
@@ -50,6 +55,36 @@ impl Table {
 
     pub fn partition_schema(&self) -> &PartitionSchema {
         &self.partition_schema
+    }
+
+    pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {
+        let mut tablets = Vec::new();
+        let (send, recv) = sync_channel(1);
+        let mut last_partition_key = Vec::new();
+
+        loop {
+            let send = send.clone();
+            self.meta_cache.get(&last_partition_key, deadline,
+                                move |entry| send.send(entry).unwrap());
+
+            match try!(recv.recv().unwrap()) {
+                Entry::Tablet(tablet) => {
+                    last_partition_key = tablet.partition().upper_bound_encoded().to_owned();
+                    tablets.push(tablet);
+                },
+                Entry::NonCoveredRange { partition_upper_bound, .. } => {
+                    last_partition_key = partition_upper_bound;
+                },
+            };
+            if last_partition_key.is_empty() { break; }
+        }
+
+        Ok(tablets)
+    }
+
+    #[doc(hidden)]
+    pub fn meta_cache(&self) -> &MetaCache {
+        &self.meta_cache
     }
 }
 
@@ -201,25 +236,74 @@ impl TableBuilder {
 #[cfg(test)]
 mod tests {
 
+    use std::time::{Duration, Instant};
+
     use env_logger;
 
     use schema::tests::simple_schema;
     use super::*;
+    use DataType;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use Client;
+    use ClientConfig;
+    use SchemaBuilder;
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
 
     #[test]
     fn create_table_builder() {
         let _ = env_logger::init();
 
-
-        let val = String::from("foo");
-
-        let key_val: &str = &val;
-
         let mut table_builder = TableBuilder::new("t", simple_schema());
 
         let mut split_row = table_builder.schema().new_row();
-        split_row.set_by_name("key", key_val).unwrap();
+        split_row.set_by_name("key", "foo").unwrap();
 
         table_builder.add_range_split(split_row);
+    }
+
+    #[test]
+    fn list_tablets() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(3));
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+
+        // The tablet server is real slow coming up.
+        // TODO: add MiniCluster::wait_for_startup() or equivalent.
+        ::std::thread::sleep_ms(2000);
+
+        let mut schema_builder = SchemaBuilder::new();
+        schema_builder.add_column("key", DataType::Int32).set_not_null();
+        schema_builder.add_column("val", DataType::Int32);
+        schema_builder.set_primary_key(vec!["key".to_owned()]);
+        let schema = schema_builder.build().unwrap();
+
+        let mut table_builder = TableBuilder::new("list_tablets", schema.clone());
+        table_builder.add_hash_partitions(vec!["key".to_owned()], 4);
+        table_builder.set_num_replicas(3);
+
+        let mut lower_bound = schema.new_row();
+        let mut upper_bound = schema.new_row();
+        lower_bound.set(0, 0i32).unwrap();
+        upper_bound.set(0, 100i32).unwrap();
+        table_builder.add_range_bound(lower_bound, upper_bound);
+
+        let mut lower_bound = schema.new_row();
+        let mut upper_bound = schema.new_row();
+        lower_bound.set(0, 200i32).unwrap();
+        upper_bound.set(0, 300i32).unwrap();
+        table_builder.add_range_bound(lower_bound, upper_bound);
+
+        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        client.wait_for_table_creation_by_id(&table_id, deadline() + Duration::from_secs(10)).unwrap();
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+
+        let tablets = table.list_tablets(deadline()).unwrap();
+
+        assert_eq!(8, tablets.len());
     }
 }
