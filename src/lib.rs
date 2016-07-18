@@ -42,6 +42,7 @@ mod mini_cluster;
 
 pub use client::*;
 pub use error::*;
+pub use master::Master;
 pub use partition::*;
 pub use row::Row;
 pub use schema::*;
