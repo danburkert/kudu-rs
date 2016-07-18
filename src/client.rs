@@ -181,7 +181,7 @@ impl Client {
         Ok(tables)
     }
 
-    fn list_masters(&self, deadline: Instant) -> Result<Vec<Master>> {
+    pub fn list_masters(&self, deadline: Instant) -> Result<Vec<Master>> {
         let request = ListMastersRequestPB::new();
         let (send, recv) = sync_channel(1);
         self.master.list_masters(deadline, request, move |resp| send.send(resp).unwrap());
@@ -193,7 +193,7 @@ impl Client {
         Ok(masters)
     }
 
-    fn list_tablet_servers(&self, deadline: Instant) -> Result<Vec<TabletServer>> {
+    pub fn list_tablet_servers(&self, deadline: Instant) -> Result<Vec<TabletServer>> {
         let request = ListTabletServersRequestPB::new();
         let (send, recv) = sync_channel(1);
         self.master.list_tablet_servers(deadline, request, move |resp| send.send(resp).unwrap());
