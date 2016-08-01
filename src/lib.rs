@@ -33,6 +33,7 @@ mod rpc;
 mod schema;
 mod table;
 mod tablet;
+mod tablet_proxy;
 mod tablet_server;
 mod util;
 mod value;

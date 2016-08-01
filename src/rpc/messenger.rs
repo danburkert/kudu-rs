@@ -349,7 +349,7 @@ mod tests {
         let messenger = Messenger::new().unwrap();
 
         let now = Instant::now();
-        let mut rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(300),
+        let mut rpc = master::ping(cluster.master_addrs()[0], now + Duration::from_millis(100),
                                    kudu_pb::master::PingRequestPB::new());
 
         let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
@@ -367,8 +367,8 @@ mod tests {
         let elapsed = Instant::now().duration_since(now);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(275), "expected: 300ms, elapsed: {:?}", elapsed);
-        assert!(elapsed < Duration::from_millis(325), "expected: 300ms, elapsed: {:?}", elapsed);
+        assert!(elapsed > Duration::from_millis(75), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(125), "expected: 100ms, elapsed: {:?}", elapsed);
     }
 
     #[test]
