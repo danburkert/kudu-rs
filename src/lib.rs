@@ -28,6 +28,7 @@ mod key;
 mod master;
 mod meta_cache;
 mod partition;
+mod queue_map;
 mod row;
 mod rpc;
 mod schema;
