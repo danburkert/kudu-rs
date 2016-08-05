@@ -110,10 +110,11 @@ impl Row {
 
     pub fn is_null(&self, idx: usize) -> Result<bool> {
         if idx >= self.schema.columns().len() {
-            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                                      idx, self.schema)));
+            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                               idx, self.schema)))
+        } else {
+            Ok(self.schema.has_nullable_columns() && self.null_columns.get(idx))
         }
-        Ok(self.schema.has_nullable_columns() && self.null_columns.get(idx))
     }
 
     pub fn is_null_by_name(&self, column: &str) -> Result<bool> {
@@ -126,10 +127,11 @@ impl Row {
 
     pub fn is_set(&self, idx: usize) -> Result<bool> {
         if idx >= self.schema.columns().len() {
-            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                                      idx, self.schema)));
+            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                               idx, self.schema)))
+        } else {
+            Ok(self.set_columns.get(idx))
         }
-        Ok(self.set_columns.get(idx))
     }
 
     pub fn is_set_by_name(&self, column: &str) -> Result<bool> {
@@ -252,7 +254,7 @@ impl cmp::PartialOrd for Row {
                 if ord != cmp::Ordering::Equal { return Some(ord); }
             } else { return None; }
         }
-        return Some(cmp::Ordering::Equal)
+        Some(cmp::Ordering::Equal)
     }
 }
 
@@ -300,9 +302,8 @@ impl OperationEncoder {
 
         let mut offset = self.data.len();
         self.data.resize(offset + schema.row_size(), 0);
-        for idx in 0..schema.columns().len() {
+        for (idx, column) in schema.columns().iter().enumerate() {
             if !set_columns.get(idx) { continue; }
-            let column = &schema.columns()[idx];
             if column.is_nullable() && null_columns.get(idx) { continue; }
 
             let data_type = column.data_type();

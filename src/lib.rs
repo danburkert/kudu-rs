@@ -4,6 +4,7 @@ extern crate byteorder;
 extern crate chrono;
 extern crate kudu_pb;
 extern crate mio;
+extern crate net2;
 extern crate netbuf;
 extern crate parking_lot;
 extern crate protobuf;

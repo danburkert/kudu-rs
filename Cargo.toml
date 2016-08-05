@@ -13,6 +13,7 @@ chrono = "0.2.22"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 log = "0.3"
 mio = "0.5"
+net2 = "0.2"
 netbuf = "0.3"
 parking_lot = "0.2"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }

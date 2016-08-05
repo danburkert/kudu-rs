@@ -673,7 +673,7 @@ mod tests {
         let now = Instant::now();
 
         let (send, recv) = sync_channel(0);
-        proxy.list_tables(now + Duration::from_millis(300),
+        proxy.list_tables(now + Duration::from_millis(100),
                           ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
 
         let result = recv.recv().unwrap();
@@ -683,8 +683,8 @@ mod tests {
         assert_eq!(Err(Error::TimedOut), result);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(275), "expected: 300ms, elapsed: {:?}", elapsed);
-        assert!(elapsed < Duration::from_millis(325), "expected: 300ms, elapsed: {:?}", elapsed);
+        assert!(elapsed > Duration::from_millis(100), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(150), "expected: 100ms, elapsed: {:?}", elapsed);
     }
 
     /// Tests that the `MasterProxy` will discover and reroute RPCs to a new leader when the

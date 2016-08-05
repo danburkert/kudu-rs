@@ -1,23 +1,22 @@
-use std::cmp;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::fmt;
+use std::i32;
 use std::io::{self, ErrorKind, Write};
-use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use backoff::Backoff;
-use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
-use kudu_pb::rpc_header;
-use rpc::messenger::{Loop, TimeoutKind};
-use rpc::Rpc;
-use util::duration_to_ms;
 use Error;
 use Result;
+use backoff::Backoff;
 use error::RpcError;
+use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
+use kudu_pb::rpc_header;
+use queue_map::QueueMap;
+use rpc::Rpc;
+use rpc::messenger::{Loop, TimeoutKind};
+use util::duration_to_ms;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use mio::{
@@ -27,9 +26,10 @@ use mio::{
     Token,
 };
 use mio::tcp::TcpStream;
+use net2::TcpBuilder;
+use netbuf::Buf;
 use protobuf::{parse_length_delimited_from, Clear, CodedInputStream, Message};
 use protobuf::rt::ProtobufVarint;
-use netbuf::Buf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionOptions {
@@ -48,30 +48,18 @@ pub struct ConnectionOptions {
     /// Initial time in milliseconds to wait after an error before attempting to reconnect to the
     /// server.
     ///
-    /// Defaults to 8ms.
+    /// Defaults to 10 ms.
     pub backoff_initial: u32,
 
     /// Maximum time in milliseconds to wait after an error before attempting to reconnect to the
     /// server.
     ///
-    /// Defaults to 4 seconds.
+    /// Defaults to 30 seconds.
     pub backoff_max: u32,
 
-    /// Maximum time in milliseconds to keep an idle connection.
-    ///
-    /// If the connection is idle for longer than this period (no queued RPCs), then it will be
-    /// shut down.
-    ///
-    /// Defaults to 1 minute.
-    pub idle_timeout: u32,
-
-    /// Maxmimum time in milliseconds to allow for initializing a new connection to a server.
-    ///
-    /// If the connection is unable to succefully connect to the server in this amount of time, it
-    /// will be reset and another attempt will be made after a backoff period.
-    pub negotiation_timeout: u32,
-
     /// Maximum allowable message length.
+    ///
+    /// Defaults to 5 MiB.
     pub max_message_length: u32,
 }
 
@@ -80,10 +68,8 @@ impl Default for ConnectionOptions {
         ConnectionOptions {
             nodelay: true,
             rpc_queue_len: 256,
-            backoff_initial: 8,
-            backoff_max: 4096,
-            idle_timeout: 60 * 1000,
-            negotiation_timeout: 4096,
+            backoff_initial: 10,
+            backoff_max: 30_000,
             max_message_length: 5 * 1024 * 1024,
         }
     }
@@ -92,30 +78,48 @@ impl Default for ConnectionOptions {
 /// The state of a connection to a Kudu server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
-
     /// The connection is initiating.
     Initiating,
 
     /// The connection is active.
     Connected,
 
-    /// The connection has been shut down due to an error. It will be reestablished after a backoff
-    /// period.
+    /// The connection has been shut down due to an error.
+    ///
+    /// The connection will automatically be reestablished after a backoff period, if there are
+    /// queued RPCs.
     Reset,
 }
 
-/// `Connection` is a state machine that manages a single client connection to a Kudu server.
+/// Wraps an `Rpc` and a timeout timer.
 ///
-/// A connection internally manages a TCP connection to the server, as well as a FIFO queue of
+/// If the RPC completes before the timer fires, the timeout should be cleared.
+struct QueuedRpc {
+    rpc: Rpc,
+    timer: Timeout,
+}
+
+/// Wraps an `Rpc`, a delay timer and the delay time.
+///
+/// If the RPC completes before the timer fires, the timeout should be cleared.
+struct DelayedRpc {
+    rpc: Rpc,
+    timer: Timeout,
+    delay: Instant,
+}
+
+/// `Connection` is a state machine that manages connections to a Kudu server.
+///
+/// A connection internally manages a single TCP connection to the server, and keeps track of
 /// in-flight RPCs.
 ///
-/// If an error occurs that requires tearing down the connection to the server (e.g. a
+/// If an error occurs that requires reseting the socket connection to the server (e.g. a
 /// [de]serialization failure, or a fatal error response), the connection will automatically
 /// attempt to reconnect after waiting for a backoff period. Consecutive retries will be delayed
-/// with an exponentially increasing backoff with jitter.
+/// with an exponentially increasing backoff with jitter. In-flight RPCs will be failed when the
+/// connection is reset.
 ///
-/// If at any point the connection is idle for longer than the idle timeout, or if the connection
-/// is reset and does not have any queued RPCs, then it will automatically be shut down.
+/// If the connection is reset and has no queued RPCs, then it will automatically be shut down.
 pub struct Connection {
     /// The connection options.
     options: Rc<ConnectionOptions>,
@@ -125,40 +129,33 @@ pub struct Connection {
     stream: Option<TcpStream>,
     /// The address of the remote Kudu server.
     addr: SocketAddr,
+
     /// Queue of RPCs to send.
-    send_queue: VecDeque<Rpc>,
+    send_queue: QueueMap<QueuedRpc>,
     /// RPCs which have been sent and are awaiting response.
-    recv_queue: HashMap<i32, Rpc>,
+    recv_queue: HashMap<u32, QueuedRpc>,
+    /// Queue of RPCs to send after a delay.
+    delay_queue: QueueMap<DelayedRpc>,
+
     /// RPC request header, kept internally to reduce memory allocations.
     request_header: rpc_header::RequestHeader,
     /// RPC response header, kept internally to reduce memory allocations.
     response_header: rpc_header::ResponseHeader,
+
     /// Byte buffer holding the next incoming response.
     recv_buf: Buf,
     /// Byte buffer holding the next outgoing request.
     send_buf: Buf,
-    /// The call ID of the next outbound request.
-    next_call_id: i32,
 
     /// Backoff tracker.
     backoff: Backoff,
-
-    /// The registered RPC timeout, and its deadline.
-    ///
-    /// Active while there are queued RPCs.
-    rpc_timeout: Option<(Instant, Timeout)>,
-
-    /// The registered state timeout.
-    ///
-    /// Inactive if the connection is connected and there are queued RPCs.
-    state_timeout: Option<Timeout>,
 }
 
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Connection {{ state: {:?}, addr: {}, queue (tx/rx): {}/{}, buf (tx/rx): {}/{} }}",
+        write!(f, "Connection {{ state: {:?}, addr: {}, queue (tx/rx/d): {}/{}/{}, buf (tx/rx): {}/{} }}",
                self.state, self.addr, self.send_queue.len(), self.recv_queue.len(),
-               self.send_buf.len(), self.recv_buf.len())
+               self.delay_queue.len(), self.send_buf.len(), self.recv_buf.len())
     }
 }
 
@@ -178,16 +175,14 @@ impl Connection {
             state: ConnectionState::Initiating,
             stream: None,
             addr: addr,
-            send_queue: VecDeque::new(),
+            send_queue: QueueMap::new(),
             recv_queue: HashMap::new(),
+            delay_queue: QueueMap::new(),
             request_header: rpc_header::RequestHeader::new(),
             response_header: rpc_header::ResponseHeader::new(),
             recv_buf: Buf::new(),
             send_buf: Buf::new(),
-            next_call_id: 0,
             backoff: backoff,
-            rpc_timeout: None,
-            state_timeout: None,
         };
         connection.connect(event_loop, token);
         connection
@@ -197,15 +192,15 @@ impl Connection {
         &self.addr
     }
 
-    /// Notifies the connection of event readiness.
+    /// Notifies the connection of socket events.
     pub fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
-        fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token, events: EventSet) -> Result<()> {
+        fn inner(cxn: &mut Connection, event_loop: &mut Loop, events: EventSet) -> Result<()> {
             match cxn.state {
                 ConnectionState::Initiating => {
                     if events.is_readable() {
                         assert!(!events.is_writable());
                         assert!(cxn.send_buf.is_empty());
-                        try!(cxn.recv(event_loop, token))
+                        try!(cxn.recv(event_loop))
                     } else if events.is_writable() {
                         assert!(!events.is_readable());
                         assert!(cxn.recv_buf.is_empty());
@@ -214,9 +209,9 @@ impl Connection {
                 },
                 ConnectionState::Connected => {
                     if events.is_readable() {
-                        try!(cxn.recv(event_loop, token))
+                        try!(cxn.recv(event_loop))
                     } else if events.is_writable() {
-                        try!(cxn.send())
+                        try!(cxn.send(event_loop))
                     }
                 },
                 _ => unreachable!("{:?}: unexpected ready, events: {:?}", cxn, events),
@@ -225,59 +220,75 @@ impl Connection {
         }
 
         debug!("{:?}: ready; events: {:?}", self, events);
-        if events.is_error() {
+        if events.is_error() || events.is_hup() {
             self.reset(event_loop, token, Error::ConnectionError);
-        } else if events.is_hup() {
-            self.reset(event_loop, token, Error::ConnectionHangup);
         } else {
-            inner(self, event_loop, token, events).and_then(|_| self.reregister(event_loop, token))
-                                                  .unwrap_or_else(|error| {
-                                                      info!("{:?} error: {}", self, &error);
-                                                      self.reset(event_loop, token, error)
-                                                  })
+            inner(self, event_loop, events).and_then(|_| self.reregister(event_loop, token))
+                                           .unwrap_or_else(|error| {
+                                               info!("{:?} error: {}", self, &error);
+                                               self.reset(event_loop, token, error)
+                                           })
         }
     }
 
-    /// Send an RPC to the connected Kudu server.
+    /// Send an RPC to the Kudu server.
     pub fn send_rpc(&mut self, event_loop: &mut Loop, token: Token, rpc: Rpc) {
         trace!("{:?}: queueing rpc: {:?}", self, rpc);
 
-        let queue_len = self.send_queue.len() + self.recv_queue.len();
+        let now = Instant::now();
         if rpc.cancelled() {
-            trace!("{:?}: cancelling {:?}", self, rpc);
             return rpc.fail(Error::Cancelled);
-        } else if queue_len > self.options.rpc_queue_len as usize {
-            debug!("{:?}: send queue full; failing {:?}", self, rpc);
+        } else if rpc.timed_out(now) {
+            return rpc.fail(Error::TimedOut);
+        } else if self.queue_len() > self.options.rpc_queue_len as usize {
             return rpc.fail(Error::Backoff);
-        } else {
-            // If the RPC's deadline is before the currently scheduled timeout, then reset the
-            // timeout to the earlier time.
-            if self.rpc_timeout.map(|(deadline, _)| rpc.deadline < deadline).unwrap_or(true) {
-                let now = Instant::now();
-                if rpc.timed_out(now) {
-                    trace!("{:?}: timing out {:?}", self, rpc);
-                    return rpc.fail(Error::TimedOut);
-                } else {
-                    self.clear_rpc_timeout(event_loop);
-                    let timeout = duration_to_ms(&rpc.deadline.duration_since(now));
-                    trace!("{:?}: setting new RPC timeout: {:?}ms", self, timeout);
-                    self.rpc_timeout = Some((rpc.deadline,
-                                             event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token), timeout).unwrap()));
-                }
-            }
-
-            self.send_queue.push_back(rpc);
-            // If this is the only message in the queue, then optimistically try to write it to the
-            // socket.
-            if self.state == ConnectionState::Connected && queue_len == 0 {
-                self.send()
-                    .and_then(|_| self.reregister(event_loop, token))
-                    .unwrap_or_else(|error| {
-                        info!("{:?} error sending RPC: {}", self, error);
-                        self.reset(event_loop, token, error)
-                    });
-            }
         }
+
+        self.send_queue.push_with(|call_id| {
+            let timer = event_loop.timeout_ms((token, TimeoutKind::Rpc(call_id)),
+                                              duration_to_ms(&rpc.deadline.duration_since(now)));
+            QueuedRpc { rpc: rpc, timer: timer.unwrap() }
+        });
+
+        // If this is the only message in the queue, optimistically try to write it to the socket.
+        if self.state == ConnectionState::Connected &&
+           self.send_buf.is_empty() &&
+           self.send_queue.len() == 1 {
+            self.send(event_loop)
+                .and_then(|_| self.reregister(event_loop, token))
+                .unwrap_or_else(|error| {
+                    info!("{:?} error sending RPC: {}", self, error);
+                    self.reset(event_loop, token, error)
+                });
+        }
+    }
+
+    /// Send an RPC to the Kudu server after waiting for a delay period.
+    pub fn send_delayed_rpc(&mut self,
+                            event_loop: &mut Loop,
+                            token: Token,
+                            rpc: Rpc,
+                            delay: Duration) {
+        trace!("{:?}: queueing delayed rpc: {:?}, delay: {:?}", self, rpc, delay);
+        let now = Instant::now();
+        if rpc.cancelled() {
+            return rpc.fail(Error::Cancelled);
+        } else if rpc.timed_out(now + delay) {
+            return rpc.fail(Error::TimedOut);
+        } else if self.queue_len() > self.options.rpc_queue_len as usize {
+            return rpc.fail(Error::Backoff);
+        }
+
+        self.delay_queue.push_with(|id| {
+            let timer = event_loop.timeout_ms((token, TimeoutKind::DelayedRpc(id)),
+                                              duration_to_ms(&delay))
+                                  .unwrap();
+            DelayedRpc {
+                rpc: rpc,
+                timer: timer,
+                delay: now + delay,
+            }
+        });
     }
 
     /// Notifies the connection that the timeout has fired. Returns `true` if the connection should
@@ -285,74 +296,39 @@ impl Connection {
     pub fn timeout(&mut self, event_loop: &mut Loop, token: Token, kind: TimeoutKind) -> bool {
         trace!("{:?}: {:?} timeout", self, kind);
 
-        self.short_circuit_rpcs(event_loop, token);
-        let queue_len = self.queue_len();
-        if queue_len == 0 && self.state != ConnectionState::Connected { return true; }
-        if kind == TimeoutKind::ConnectionState {
-            // If we don't have any active RPCs, then close the connection.
-            if queue_len == 0 { return true; }
-
-            match self.state {
-                ConnectionState::Initiating => {
-                    info!("{:?} negotiation timed out", self);
-                    self.reset(event_loop, token, Error::NegotiationError("negotiation timed out"))
-                },
-                ConnectionState::Reset => self.connect(event_loop, token),
-                ConnectionState::Connected => unreachable!("idle timeout fired with active RPCs"),
-            }
-        };
+        match kind {
+            TimeoutKind::ConnectionReset => {
+                assert!(self.state == ConnectionState::Reset, "{:?}: illegal {:?}", self, kind);
+                if self.queue_len() == 0 {
+                    // If the queue is empty then tear down the connection. This prevents a
+                    // connection to a permanently partitioned tablet server from attempting to
+                    // reconnect indefinitely. Eventually all RPCs will timeout and the retries
+                    // will cease.
+                    return true;
+                }
+                self.connect(event_loop, token);
+            },
+            TimeoutKind::Rpc(call_id) => {
+                // No need to cancel the timeout here, since it fired.
+                self.send_queue
+                    .remove(call_id)
+                    .or_else(|| self.recv_queue.remove(&(call_id as u32)))
+                    .expect("timed out RPC not found in send or recv queue")
+                    .rpc
+                    .fail(Error::TimedOut);
+            },
+            TimeoutKind::DelayedRpc(id) => {
+                // No need to cancel the timeout here, since it fired.
+                let rpc = self.delay_queue
+                              .remove(id)
+                              .expect("delayed RPC not found in delay queue")
+                              .rpc;
+                self.send_rpc(event_loop, token, rpc);
+            },
+            TimeoutKind::Timer => unreachable!(),
+        }
 
         false
-    }
-
-    /// Fails all inflight RPCs which are timed out, cancels all inflight RPCs which have
-    /// cancellation requests, and resets the active RPC timeout.
-    ///
-    /// There is a balance between constantly calling this in the hope that there are cancelled
-    /// RPCs (e.g. on every `ready` event), and the overhead that would require. Right now we
-    /// settle for calling it whenever an RPC timeout fires.
-    fn short_circuit_rpcs(&mut self, event_loop: &mut Loop, token: Token) {
-        // TODO: there is likely a way to do this in O(n) without reallocating both queues.
-
-        let now = Instant::now();
-        let mut next_deadline = None;
-        let mut send_queue = VecDeque::with_capacity(self.send_queue.len());
-        for rpc in self.send_queue.drain(..) {
-            if rpc.cancelled() {
-                trace!("cancelling {:?}", rpc);
-                rpc.fail(Error::Cancelled);
-            } else if rpc.timed_out(now) {
-                trace!("now: {:?}, timing out {:?}", now, rpc);
-                rpc.fail(Error::TimedOut);
-            } else {
-                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
-                send_queue.push_back(rpc);
-            }
-        }
-        mem::replace(&mut self.send_queue, send_queue);
-
-        let mut recv_queue = HashMap::with_capacity(self.recv_queue.len());
-        for (call_id, rpc) in self.recv_queue.drain() {
-            if rpc.cancelled() {
-                trace!("cancelling {:?}", rpc);
-                rpc.fail(Error::Cancelled);
-            } else if rpc.timed_out(now) {
-                trace!("now: {:?}, timing out {:?}", now, rpc);
-                rpc.fail(Error::TimedOut);
-            } else {
-                next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
-                recv_queue.insert(call_id, rpc);
-            }
-        }
-        mem::replace(&mut self.recv_queue, recv_queue);
-
-        self.clear_rpc_timeout(event_loop);
-        if let Some(deadline) = next_deadline {
-            let timeout = event_loop.timeout_ms((TimeoutKind::ConnectionRpc, token),
-                                                duration_to_ms(&deadline.duration_since(now)))
-                                    .unwrap();
-            self.rpc_timeout = Some((deadline, timeout));
-        }
     }
 
     /// Connects an inactive connection to the server.
@@ -360,21 +336,32 @@ impl Connection {
         fn inner(cxn: &mut Connection, event_loop: &mut Loop, token: Token) -> Result<()> {
             assert!(cxn.recv_queue.is_empty());
             debug!("{:?}: connecting", cxn);
-            let stream = try!(TcpStream::connect(&cxn.addr));
+
+            // Create the stream via the net2 StreamBuilder API so that set_nodelay can be called
+            // before connect as a workaround to mio#446. This is mostly copied from mio.
+            let stream_builder = try!(match cxn.addr {
+                SocketAddr::V4(..) => TcpBuilder::new_v4(),
+                SocketAddr::V6(..) => TcpBuilder::new_v6(),
+            });
+            // Required on Windows for a future `connect_overlapped` operation to be
+            // executed successfully.
+            if cfg!(windows) {
+                try!(stream_builder.bind(&inaddr_any(&cxn.addr)));
+            }
+            let stream = try!(stream_builder.to_tcp_stream());
             try!(stream.set_nodelay(cxn.options.nodelay));
-            cxn.stream = Some(stream);
+
+            cxn.stream = Some(try!(TcpStream::connect_stream(stream, &cxn.addr)));
             cxn.state = ConnectionState::Initiating;
 
-            let timeout = cxn.options.negotiation_timeout as u64;
-            cxn.set_state_timeout(event_loop, token, timeout);
-
+            // Write the connection header and SASL negotiation messages to the send buffer.
+            try!(cxn.buffer_connection_header());
+            try!(cxn.buffer_sasl_negotiation());
             // Optimistically flush the connection header and SASL negotiation to the TCP socket.
             // Even though the socket has not yet been registered, this will usually succeed
             // because the socket will have sufficient internal buffer space. This sometimes fails
-            // on OS X with Not Connected errors, but they are safe to ignore since the flush will
-            // be retried after then next writeable event.
-            try!(cxn.send_connection_header());
-            try!(cxn.send_sasl_negotiate());
+            // on OS X with Not Connected errors, but they are safe to ignore, since the flush will
+            // be retried on the next writeable event.
             let _ = cxn.flush();
             cxn.register(event_loop, token)
         };
@@ -389,8 +376,8 @@ impl Connection {
         let event_set = self.event_set();
         let poll_opt = self.poll_opt();
         trace!("{:?}: register event_set: {:?}, poll_opt: {:?}", self, event_set, poll_opt);
-        try!(event_loop.register(self.stream.as_mut().unwrap(), token, event_set, poll_opt));
-        Ok(())
+        event_loop.register(self.stream.as_mut().unwrap(), token, event_set, poll_opt)
+                  .map_err(From::from)
     }
 
     /// Reregisters the connection with the event loop in order to enable readiness notifications.
@@ -398,13 +385,14 @@ impl Connection {
         let event_set = self.event_set();
         let poll_opt = self.poll_opt();
         trace!("{:?}: reregister event_set: {:?}, poll_opt: {:?}", self, event_set, poll_opt);
-        try!(event_loop.reregister(self.stream.as_mut().unwrap(), token, event_set, poll_opt));
-        Ok(())
+        event_loop.reregister(self.stream.as_mut().unwrap(), token, event_set, poll_opt)
+                  .map_err(From::from)
     }
 
     /// Resets the connection following an error.
     fn reset(&mut self, event_loop: &mut Loop, token: Token, error: Error) {
-        warn!("{:?}: reset, error: {}", self, error);
+        let backoff_ms = self.backoff.next_backoff_ms();
+        warn!("{:?}: reset, error: {}, backoff: {}ms", self, error, backoff_ms);
         self.state = ConnectionState::Reset;
         self.stream.take();
         let recv_buf_len = self.recv_buf.len();
@@ -412,53 +400,78 @@ impl Connection {
         let send_buf_len = self.send_buf.len();
         self.send_buf.consume(send_buf_len);
 
-        for (_, rpc) in self.recv_queue.drain() {
-            rpc.fail(error.clone());
+        let now = Instant::now();
+
+        let fail = |rpc: Rpc| {
+            let error = if rpc.cancelled() { Error::Cancelled }
+                        else if rpc.timed_out(now) { Error::TimedOut }
+                        else { error.clone() };
+            rpc.fail(error);
+        };
+
+        for (_, QueuedRpc { rpc, timer }) in self.recv_queue.drain() {
+            event_loop.clear_timeout(timer);
+            fail(rpc);
         }
 
-        for rpc in self.send_queue.drain(..) {
-            rpc.fail(error.clone());
+        while let Some((_, QueuedRpc { rpc, timer })) = self.send_queue.pop() {
+            event_loop.clear_timeout(timer);
+            fail(rpc);
         }
 
-        let timeout = self.backoff.next_backoff_ms();
-        self.set_state_timeout(event_loop, token, timeout);
+        while let Some((_, DelayedRpc { rpc, timer, .. })) = self.delay_queue.pop() {
+            event_loop.clear_timeout(timer);
+            fail(rpc);
+        }
+
+        event_loop.timeout_ms((token, TimeoutKind::ConnectionReset), backoff_ms).unwrap();
     }
 
-    /// Adds the message to the send buffer with connection's request header. Does not flush the
-    /// buffer. If an error is returned, the connection should be torn down.
-    fn send_message(&mut self, msg: &Message) -> Result<()> {
+    /// Writes the message to the send buffer with a request header.
+    ///
+    /// Does not flush the buffer.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn buffer_message(&mut self, msg: &Message) -> Result<()> {
         trace!("{:?}: send message: {:?}", self, msg);
         let header_len = self.request_header.compute_size();
         let msg_len = msg.compute_size();
         let len = header_len + header_len.len_varint() + msg_len + msg_len.len_varint();
         try!(self.send_buf.write_u32::<BigEndian>(len));
         try!(self.request_header.write_length_delimited_to(&mut self.send_buf));
-        try!(msg.write_length_delimited_to(&mut self.send_buf));
-        Ok(())
+        msg.write_length_delimited_to(&mut self.send_buf).map_err(From::from)
     }
 
-    /// Adds the KRPC connection header to the send buffer. Does not flush the buffer. If an error
-    /// is returned, the connection should be torn down.
-    fn send_connection_header(&mut self) -> Result<()> {
+    /// Writes the KRPC connection header to the send buffer.
+    ///
+    /// Does not flush the buffer.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn buffer_connection_header(&mut self) -> Result<()> {
         trace!("{:?}: sending connection header to server", self);
-        try!(self.send_buf.write(b"hrpc\x09\0\0"));
-        Ok(())
+        self.send_buf.write(b"hrpc\x09\0\0").map(|_| ()).map_err(From::from)
     }
 
-    /// Adds a SASL negotiate message to the send buffer. Does not flush the buffer. If an error
-    /// is returned, the connection should be torn down.
-    fn send_sasl_negotiate(&mut self) -> Result<()> {
+    /// Writes a SASL negotiate message to the send buffer.
+    ///
+    /// Does not flush the buffer.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn buffer_sasl_negotiation(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL NEGOTIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
         let mut msg = rpc_header::SaslMessagePB::new();
         msg.set_state(SaslState::NEGOTIATE);
-        self.send_message(&msg)
+        self.buffer_message(&msg)
     }
 
-    /// Adds a SASL initiate message to the send buffer. Does not flush the buffer. If an error is
-    /// returned, the connection should be torn down.
-    fn send_sasl_initiate(&mut self) -> Result<()> {
+    /// Writes a SASL initiate message to the send buffer.
+    ///
+    /// Does not flush the buffer.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn buffer_sasl_initiate(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL INITIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
@@ -468,31 +481,34 @@ impl Connection {
         let mut auth = rpc_header::SaslMessagePB_SaslAuth::new();
         auth.mut_mechanism().push_str("PLAIN");
         msg.mut_auths().push(auth);
-        self.send_message(&msg)
+        self.buffer_message(&msg)
     }
 
-    /// Adds a session context message to the send buffer. Does not flush the buffer. If an error
-    /// is returned, the connection should be torn down.
-    fn send_connection_context(&mut self) -> Result<()> {
+    /// Writes a session context message to the send buffer.
+    ///
+    /// Does not flush the buffer.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn buffer_connection_context(&mut self) -> Result<()> {
         trace!("{:?}: sending connection context to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-3);
         let mut msg = rpc_header::ConnectionContextPB::new();
         msg.mut_user_info().set_effective_user("user".to_string());
         msg.mut_user_info().set_real_user("user".to_string());
-        self.send_message(&msg)
+        self.buffer_message(&msg)
     }
 
+    /// Handles a SASL handshake response message.
     fn handle_sasl_message(&mut self,
                            event_loop: &mut Loop,
-                           token: Token,
                            msg: rpc_header::SaslMessagePB)
                            -> Result<()> {
         trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
         match msg.get_state() {
             SaslState::NEGOTIATE => {
                 if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
-                    try!(self.send_sasl_initiate());
+                    try!(self.buffer_sasl_initiate());
                     try!(self.flush());
                     Ok(())
                 } else {
@@ -500,37 +516,35 @@ impl Connection {
                 }
             },
             SaslState::SUCCESS => {
-                try!(self.send_connection_context());
+                try!(self.buffer_connection_context());
                 self.state = ConnectionState::Connected;
                 self.backoff.reset();
-
-                if self.queue_len() == 0 {
-                    let timeout = self.options.idle_timeout as u64;
-                    self.set_state_timeout(event_loop, token, timeout);
-                } else {
-                    self.clear_state_timeout(event_loop);
-                }
 
                 // Optimistically flush the connection context and send any queued messages. The
                 // connection has not necessarily received a writeable event at this point, but it
                 // is highly likely that there is space available in the socket's write buffer.
-                self.send()
+                self.send(event_loop)
             },
             _ => unreachable!("Unexpected SASL message: {:?}", msg),
         }
     }
 
-    /// Receive messages until no more messages are available on the socket. Should be called when
-    /// the connection's socket is readable. If an error is returned, the connection should be torn
-    /// down.
-    fn recv(&mut self, event_loop: &mut Loop, token: Token) -> Result<()> {
+    /// Reads available messages from the socket.
+    ///
+    /// If this connection is in the `Initiating` state, the message is assumed to be a SASL
+    /// handshake message, and is passed to `Connection::handle_sasl_message`. If this connection
+    /// is in the `Connected` state, the message is assumed to be an RPC response, and the
+    /// corresponding queued `Rpc` is completed with the deserialized response.
+    ///
+    /// This method should be called when the connection's socket is readable.
+    ///
+    /// If an error is returned, the connection should be torn down.
+    fn recv(&mut self, event_loop: &mut Loop) -> Result<()> {
         trace!("{:?}: recv", self);
 
-        let maybe_start_idle_timer =
-            self.state == ConnectionState::Connected && self.queue_len() == 0;
-
         loop {
-            // Read, or continue reading, a message from the socket into the receive buffer.
+            // Read, or continue reading, an RPC response message from the socket into the receive
+            // buffer. Every RPC response is prefixed with a 4 bytes length header.
             if self.recv_buf.len() < 4 {
                 let needed = 4 - self.recv_buf.len();
                 let read = try!(self.read(needed));
@@ -540,7 +554,7 @@ impl Connection {
             let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
             if msg_len > self.options.max_message_length as usize {
                 return Err(RpcError::invalid_rpc_header(format!(
-                           "RPC message is too long; length: {}, max length: {}",
+                           "RPC response message is too long; length: {}, max length: {}",
                             msg_len, self.options.max_message_length)).into());
             }
             if self.recv_buf.len() - 4 < msg_len {
@@ -549,13 +563,17 @@ impl Connection {
                 if read < needed { break; }
             }
 
-            // The whole message has been read
+            // The whole message has been read. Skip the length prefix.
             self.recv_buf.consume(4);
+
+            // TODO: the below would be a lot simpler if a single CodedInputStream wrapping
+            // self.recv_buf could be used, but unfortunately that trips the borrow checker.
+            // Perhaps once non-lexical lifetimes land it can be cleaned up.
 
             // Read the response header into self.response_header
             self.response_header.clear();
             let header_len = {
-                let mut coded_stream = CodedInputStream::from_bytes(&self.recv_buf[..]);
+                let mut coded_stream = CodedInputStream::from_bytes(&self.recv_buf[..msg_len]);
                 try!(coded_stream.merge_message(&mut self.response_header));
                 coded_stream.pos() as usize
             };
@@ -576,18 +594,20 @@ impl Connection {
                                             &mut CodedInputStream::from_bytes(&self.recv_buf[..]))))));
                     }
 
-                    let msg: rpc_header::SaslMessagePB = try!(parse_length_delimited_from(
+                    let sasl_msg = try!(parse_length_delimited_from(
                             &mut CodedInputStream::from_bytes(&self.recv_buf[..])));
-                    try!(self.handle_sasl_message(event_loop, token, msg));
+                    try!(self.handle_sasl_message(event_loop, sasl_msg));
                 },
                 ConnectionState::Connected => {
                     trace!("{:?}: received response from server: {:?}", self, self.response_header);
                     if self.response_header.get_is_error() {
                         let error = RpcError::from(try!(
                                 parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                    &mut CodedInputStream::from_bytes(&self.recv_buf[..]))));
-                        // Remove the RPC from the recv queue, and fail it.
-                        if let Some(rpc) = self.recv_queue.remove(&self.response_header.get_call_id()) {
+                                    &mut CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len]))));
+                        // Remove the RPC from the recv queue, and fail it. The message may not be
+                        // in the recv queue if it has already timed out.
+                        if let Some(QueuedRpc { rpc, timer }) = self.recv_queue.remove(&(self.response_header.get_call_id() as u32)) {
+                            event_loop.clear_timeout(timer);
                             rpc.fail(Error::Rpc(error.clone()));
                         }
                         // If the message is fatal, then return an error in order to have the
@@ -595,28 +615,23 @@ impl Connection {
                         if error.is_fatal() {
                             return Err(Error::Rpc(error.clone()))
                         }
-                    } else {
+                    } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(self.response_header.get_call_id() as u32) {
                         // Use the entry API so that the RPC is not removed from the recv queue
-                        // if the protobuf decode step fails. Since it isn't removed, it will be
-                        // retried when the error is bubbled up to the MessengerHandler.
-                        match self.recv_queue.entry(self.response_header.get_call_id()) {
-                            Entry::Occupied(mut entry) => {
-                                {
-                                    try!(CodedInputStream::from_bytes(&self.recv_buf[..])
-                                                          .merge_message(&mut *entry.get_mut().response));
-                                }
+                        // if the protobuf decode step fails. Since it isn't removed, it has the
+                        // opportunity to be retried when the error is bubbled up and the
+                        // connection is reset.
+                        //
+                        // The message may not be in the recv queue if it has already timed out.
+                        try!(CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len])
+                             .merge_message(&mut *entry.get_mut().rpc.response));
 
-                                if !self.response_header.get_sidecar_offsets().is_empty() {
-                                    panic!("sidecar decoding not implemented");
-                                }
-
-                                entry.remove().complete();
-                            },
-                            _ => {
-                                // The rpc has already been removed from the recv queue, most
-                                // likely due to a timeout or cancellation.
-                            }
+                        if !self.response_header.get_sidecar_offsets().is_empty() {
+                            panic!("sidecar decoding not implemented");
                         }
+
+                        let QueuedRpc { rpc, timer } = entry.remove();
+                        event_loop.clear_timeout(timer);
+                        rpc.complete();
                     }
                 },
                 _ => unreachable!("{:?}: recv"),
@@ -624,48 +639,47 @@ impl Connection {
             self.recv_buf.consume(msg_len - header_len);
         };
 
-        // Register the idle timer if all queued RPCs have been completed.
-        if maybe_start_idle_timer && self.queue_len() == 0 {
-            let timeout = self.options.idle_timeout as u64;
-            self.set_state_timeout(event_loop, token, timeout)
-        }
         Ok(())
     }
 
     /// Send messages until either there are no more messages to send, or the socket can not accept
     /// any more writes. If an error is returned, the connection should be torn down.
-    fn send(&mut self) -> Result<()> {
+    fn send(&mut self, event_loop: &mut Loop) -> Result<()> {
         trace!("{:?}: send", self);
         assert_eq!(self.state, ConnectionState::Connected);
 
         let now = Instant::now();
         while !self.send_buf.is_empty() || !self.send_queue.is_empty() {
             while self.send_buf.len() < 4096 && !self.send_queue.is_empty() {
-                let rpc = self.send_queue.pop_front().unwrap();
+                let (call_id, QueuedRpc { rpc, timer }) = self.send_queue.pop().unwrap();
 
                 if rpc.cancelled() {
                     trace!("{:?}: cancelling {:?}", self, rpc);
+                    event_loop.clear_timeout(timer);
                     rpc.fail(Error::Cancelled);
                     break;
                 } else if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
+                    event_loop.clear_timeout(timer);
                     rpc.fail(Error::TimedOut);
                     break;
                 }
 
-                let call_id = self.next_call_id;
-                self.next_call_id += 1;
+                if call_id > i32::MAX as usize {
+                    warn!("{:?}: call id overflowed", self);
+                    return Err(Error::ConnectionError);
+                }
 
                 self.request_header.clear();
-                self.request_header.set_call_id(call_id);
-                self.request_header.mut_remote_method().mut_service_name().push_str(&rpc.service_name);
-                self.request_header.mut_remote_method().mut_method_name().push_str(&rpc.method_name);
+                self.request_header.set_call_id(call_id as i32);
+                self.request_header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
+                self.request_header.mut_remote_method().mut_method_name().push_str(rpc.method_name);
                 self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
                 self.request_header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
 
                 trace!("{:?}: sending rpc to server; call ID: {}", self, call_id);
-                try!(self.send_message(&*rpc.request));
-                self.recv_queue.insert(call_id, rpc);
+                try!(self.buffer_message(&*rpc.request));
+                self.recv_queue.insert(call_id as u32, QueuedRpc { rpc: rpc, timer: timer });
             }
 
             if try!(self.flush()) == 0 {
@@ -705,32 +719,16 @@ impl Connection {
         Ok(sent)
     }
 
+    /// Returns the number of queued RPCs.
     fn queue_len(&self) -> usize {
-        self.send_queue.len() + self.recv_queue.len()
-    }
-
-    fn set_state_timeout(&mut self, event_loop: &mut Loop, token: Token, timeout: u64) {
-        self.clear_state_timeout(event_loop);
-        let timeout_handle = event_loop.timeout_ms((TimeoutKind::ConnectionState, token), timeout as u64);
-        self.state_timeout = Some(timeout_handle.unwrap());
-    }
-
-    fn clear_state_timeout(&mut self, event_loop: &mut Loop) {
-        if let Some(timeout) = self.state_timeout.take() {
-            event_loop.clear_timeout(timeout);
-        }
-    }
-
-    fn clear_rpc_timeout(&mut self, event_loop: &mut Loop) {
-        if let Some((_, timeout)) = self.rpc_timeout.take() {
-            event_loop.clear_timeout(timeout);
-        }
+        self.send_queue.len() + self.recv_queue.len() + self.delay_queue.len()
     }
 
     fn poll_opt(&self) -> PollOpt {
         PollOpt::edge() | PollOpt::oneshot()
     }
 
+    /// Returns the event set that the connection should register to handle.
     fn event_set(&self) -> EventSet {
         let mut event_set = EventSet::hup() | EventSet::error() | EventSet::readable();
 
@@ -738,12 +736,27 @@ impl Connection {
             if !self.send_buf.is_empty() {
                 event_set = event_set | EventSet::writable();
             }
-        } else {
-            if !self.send_buf.is_empty() || !self.send_queue.is_empty() {
-                event_set = event_set | EventSet::writable();
-            }
+        } else if !self.send_buf.is_empty() || !self.send_queue.is_empty() {
+            event_set = event_set | EventSet::writable();
         }
 
         event_set
+    }
+}
+
+/// Copied from mio.
+fn inaddr_any(other: &SocketAddr) -> SocketAddr {
+    use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+    match *other {
+        SocketAddr::V4(..) => {
+            let any = Ipv4Addr::new(0, 0, 0, 0);
+            let addr = SocketAddrV4::new(any, 0);
+            SocketAddr::V4(addr)
+        }
+        SocketAddr::V6(..) => {
+            let any = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0);
+            let addr = SocketAddrV6::new(any, 0, 0, 0);
+            SocketAddr::V6(addr)
+        }
     }
 }

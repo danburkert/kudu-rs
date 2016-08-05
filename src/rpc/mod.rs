@@ -47,7 +47,7 @@ impl <F> RetryNetworkErrorCB<F> where F: FnMut(Result<()>, Rpc) + Send + 'static
 }
 impl <F> Callback for RetryNetworkErrorCB<F> where F: FnMut(Result<()>, Rpc) + Send + 'static {
     fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-        if result.as_ref().err().map(|error| error.is_network_error()).unwrap_or(false) {
+        if result.as_ref().err().map_or(false, |error| error.is_network_error()) {
             trace!("retrying RPC {:?} after network error: {}", rpc, result.unwrap_err());
             let messenger = self.messenger.clone();
             rpc.response.clear();
@@ -126,7 +126,7 @@ impl Rpc {
 
     /// Returns `true` if this RPC has been requested to be cancelled.
     pub fn cancelled(&self) -> bool {
-        self.cancel.as_ref().map(|b| b.load(Ordering::Relaxed)).unwrap_or(false)
+        self.cancel.as_ref().map_or(false, |b| b.load(Ordering::Relaxed))
     }
 
     /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.

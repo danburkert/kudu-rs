@@ -46,34 +46,22 @@ impl fmt::Debug for Command {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimeoutKind {
-    /// A state timeout.
-    ///
-    /// This timeout has different actions depending on the current state of the connection:
-    ///
-    /// * *Initializing* the timeout is a negotiation timeout. If the connection is unable to
-    ///                  complete negotiation and succesfully connect to the server before the
-    ///                  timeout exprires, then the connection is reset and initialization is
-    ///                  retried after a backoff period.
-    ///
-    /// * *Connected* the timeout is an idle timeout. This should only be active while the
-    ///               connection has no queued RPCs. After expiration, the connection is closed
-    ///               by the `MessengerHandler`.
-    ///
-    /// * *Reset* The timeout is the reset timer. Upon expiration the connection will attempt to
-    ///           reinitialize the connection with the server if the connection has queued RPCs.
-    ///           Otherwise, the connection is closed by the `MessengerHandler`.
-    ConnectionState,
+
+    /// Active while a connection is reset. After expiration, the connection creates a new socket
+    /// and attempts negotiation.
+    ConnectionReset,
 
     /// An RPC timeout.
     ///
-    /// This timeout tracks the next RPC timeout deadline. When it expires, any timed out RPCs are
-    /// failed.
-    ConnectionRpc,
+    /// This timeout tracks an RPC timeout deadline. When it expires, the RPC should be timed out.
+    Rpc(usize),
 
     /// A delayed RPC send.
-    DelayedSend,
+    ///
+    /// This timeout tracks the send delay of an RPC. When it expires, the RPC should be sent.
+    DelayedRpc(usize),
 
-    /// An independent timer timeout.
+    /// A general timer timeout.
     Timer,
 }
 
@@ -138,7 +126,6 @@ impl Messenger {
 
 pub struct MessengerHandler {
     connection_slab: Slab<Connection, Token>,
-    delayed_send_slab: Slab<Rpc, Token>,
     timer_slab: Slab<Box<FnMut()>, Token>,
     index: HashMap<SocketAddr, Token>,
     cxn_options: Rc<ConnectionOptions>,
@@ -148,7 +135,6 @@ impl MessengerHandler {
     fn new() -> MessengerHandler {
         MessengerHandler {
             connection_slab: Slab::new(128),
-            delayed_send_slab: Slab::new(128),
             timer_slab: Slab::new(128),
             index: HashMap::new(),
             cxn_options: Rc::new(ConnectionOptions::default()),
@@ -158,15 +144,15 @@ impl MessengerHandler {
 
 impl fmt::Debug for MessengerHandler {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MessengerHandler {{ connections: {}, delayed_rpcs: {}, timers: {} }}",
-               self.connection_slab.count(), self.delayed_send_slab.count(),
+        write!(f, "MessengerHandler {{ connections: {}, timers: {} }}",
+               self.connection_slab.count(),
                self.timer_slab.count())
     }
 }
 
 impl Handler for MessengerHandler {
 
-    type Timeout = (TimeoutKind, Token);
+    type Timeout = (Token, TimeoutKind);
     type Message = Command;
 
     fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
@@ -177,7 +163,7 @@ impl Handler for MessengerHandler {
         match command {
             Command::Shutdown => event_loop.shutdown(),
             Command::Send(rpc) => {
-                let token = self.index.get(&rpc.addr).map(|t| *t).unwrap_or_else(|| {
+                let token = self.index.get(&rpc.addr).cloned().unwrap_or_else(|| {
                     // No open connection for the socket address; create a new one.
                     if !self.connection_slab.has_remaining() {
                         let count = self.connection_slab.count();
@@ -185,8 +171,9 @@ impl Handler for MessengerHandler {
                     }
                     let cxn_options = self.cxn_options.clone();
                     let token = self.connection_slab
-                                    .insert_with(|token| Connection::new(event_loop, token,
-                                                                         rpc.addr.clone(),
+                                    .insert_with(|token| Connection::new(event_loop,
+                                                                         token,
+                                                                         rpc.addr,
                                                                          cxn_options))
                                     .unwrap();
                     self.index.insert(rpc.addr, token);
@@ -195,16 +182,23 @@ impl Handler for MessengerHandler {
                 self.connection_slab[token].send_rpc(event_loop, token, rpc);
             },
             Command::DelayedSend((delay, rpc)) => {
-                if !self.delayed_send_slab.has_remaining() {
-                    let count = self.delayed_send_slab.count();
-                    self.delayed_send_slab.grow(count / 2);
-                }
-                let token = match self.delayed_send_slab.insert(rpc) {
-                    Ok(token) => token,
-                    Err(_) => unreachable!()
-                };
-
-                event_loop.timeout_ms((TimeoutKind::DelayedSend, token), duration_to_ms(&delay)).unwrap();
+                let token = self.index.get(&rpc.addr).cloned().unwrap_or_else(|| {
+                    // No open connection for the socket address; create a new one.
+                    if !self.connection_slab.has_remaining() {
+                        let count = self.connection_slab.count();
+                        self.connection_slab.grow(count / 2);
+                    }
+                    let cxn_options = self.cxn_options.clone();
+                    let token = self.connection_slab
+                                    .insert_with(|token| Connection::new(event_loop,
+                                                                         token,
+                                                                         rpc.addr,
+                                                                         cxn_options))
+                                    .unwrap();
+                    self.index.insert(rpc.addr, token);
+                    token
+                });
+                self.connection_slab[token].send_delayed_rpc(event_loop, token, rpc, delay);
             },
             Command::Timer((duration, callback)) => {
                 if !self.timer_slab.has_remaining() {
@@ -215,35 +209,30 @@ impl Handler for MessengerHandler {
                     Ok(token) => token,
                     Err(_) => unreachable!()
                 };
-                event_loop.timeout_ms((TimeoutKind::Timer, token), duration_to_ms(&duration)).unwrap();
+                event_loop.timeout_ms((token, TimeoutKind::Timer), duration_to_ms(&duration)).unwrap();
             }
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut Loop, timeout_token: (TimeoutKind, Token)) {
-        let (timeout, token) = timeout_token;
-
+    fn timeout(&mut self, event_loop: &mut Loop, (token, timeout): (Token, TimeoutKind)) {
         match timeout {
-            TimeoutKind::Timer => {
-                self.timer_slab.remove(token).unwrap()();
-            },
-            TimeoutKind::DelayedSend => {
-                let rpc = self.delayed_send_slab.remove(token).unwrap();
-                trace!("{:?}: sending delayed {:?}", self, rpc);
-                self.notify(event_loop, Command::Send(rpc));
-            },
+            TimeoutKind::Timer => self.timer_slab.remove(token).unwrap()(),
             _ => {
-                let mut drop_cxn = false;
-                if let Some(cxn) = self.connection_slab.get_mut(token) {
-                    drop_cxn = cxn.timeout(event_loop, token, timeout);
-                };
+                // Connection timeout. A note on the unwrap calls below: the connection carefully
+                // cancels all outstanding timers before asking to be torn down in
+                // Connection#timeout, so if a connection timer fires, the connection must still
+                // exist.
+                let drop_cxn = self.connection_slab
+                                   .get_mut(token)
+                                   .unwrap()
+                                   .timeout(event_loop, token, timeout);
                 if drop_cxn {
                     let cxn = self.connection_slab.remove(token).unwrap();
                     let removed_token = self.index.remove(cxn.addr()).unwrap();
                     assert!(removed_token == token);
                     debug!("{:?}: closing", cxn);
                 }
-            },
+            }
         }
     }
 }
@@ -272,6 +261,7 @@ mod tests {
                                                          .num_tservers(0)
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
+
         let messenger = Messenger::new().unwrap();
         let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
         let mut rpc = master::ping(cluster.master_addrs()[0],
@@ -298,7 +288,7 @@ mod tests {
         struct PingCB(u8, Messenger, SyncSender<Result<()>>);
         impl Callback for PingCB {
             fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-                if result.as_ref().err().map(|error| error.is_network_error()).unwrap_or(false) {
+                if result.as_ref().err().map_or(false, |error| error.is_network_error()) {
                     trace!("retrying RPC {:?} after network error: {}", rpc, result.unwrap_err());
                     let messenger = self.1.clone();
                     rpc.response.clear();
@@ -367,8 +357,8 @@ mod tests {
         let elapsed = Instant::now().duration_since(now);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(75), "expected: 100ms, elapsed: {:?}", elapsed);
-        assert!(elapsed < Duration::from_millis(125), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed > Duration::from_millis(100), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(150), "expected: 100ms, elapsed: {:?}", elapsed);
     }
 
     #[test]
@@ -401,8 +391,6 @@ mod tests {
         }
 
         let elapsed = Instant::now().duration_since(now);
-        println!("elapsed: {:?}", elapsed);
-
         assert!(elapsed < Duration::from_millis(25), "expected: 0ms, elapsed: {:?}", elapsed);
     }
 
@@ -469,6 +457,6 @@ mod tests {
                                kudu_pb::master::PingRequestPB::new());
 
         let (result, _) = messenger.send_sync(rpc);
-        assert_eq!(Err(Error::ConnectionHangup), result);
+        assert_eq!(Err(Error::ConnectionError), result);
     }
 }

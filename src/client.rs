@@ -270,7 +270,6 @@ impl ClientConfig {
     pub fn new(master_addresses: Vec<SocketAddr>) -> ClientConfig {
         ClientConfig {
             master_addresses: master_addresses,
-            ..Default::default()
         }
     }
 

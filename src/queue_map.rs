@@ -25,6 +25,12 @@ impl <T> QueueMap<T> {
         key
     }
 
+    pub fn push_with<F>(&mut self, f: F) where F: FnOnce(usize) -> T {
+        self.queue.push_back(Some(f(self.next_key)));
+        self.next_key += 1;
+        self.len += 1;
+    }
+
     pub fn pop(&mut self) -> Option<(usize, T)> {
         let key = self.next_key - self.queue.len() as usize;
         let val = self.queue.pop_front().map(Option::unwrap);
@@ -36,9 +42,7 @@ impl <T> QueueMap<T> {
     }
 
     pub fn remove(&mut self, key: usize) -> Option<T> {
-        if key >= self.next_key {
-            None
-        } else if key < self.next_key - self.queue.len() {
+        if key >= self.next_key || key < self.next_key - self.queue.len() {
             None
         } else {
             let offset = self.queue.len() - (self.next_key - key);
@@ -61,6 +65,10 @@ impl <T> QueueMap<T> {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 

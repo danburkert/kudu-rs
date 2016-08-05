@@ -34,9 +34,9 @@ impl Entry {
     }
 
     fn is_tablet(&self) -> bool {
-        match self {
-            &Entry::Tablet(_) => true,
-            &Entry::NonCoveredRange { .. } => false,
+        match *self {
+            Entry::Tablet(_) => true,
+            Entry::NonCoveredRange { .. } => false,
         }
     }
 
@@ -59,15 +59,13 @@ impl Entry {
     /// (`Ordering::Greater`).
     fn cmp_partition_key(&self, partition_key: &[u8]) -> Ordering {
         let upper_bound = self.partition_upper_bound();
-        let result = if !upper_bound.is_empty() && partition_key >= upper_bound {
+        if !upper_bound.is_empty() && partition_key >= upper_bound {
             Ordering::Less
         } else if partition_key < self.partition_lower_bound() {
             Ordering::Greater
         } else {
             Ordering::Equal
-        };
-
-        result
+        }
     }
 
     /// Returns `Ordering::Equal` if the entries intersect, `Ordering::Less` if this entry falls
@@ -175,18 +173,16 @@ impl MetaCache {
 
     fn get_cached(&self, partition_key: &[u8]) -> Option<Entry> {
         let entries = self.entries.lock();
-        let result = match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
+        match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
             Ok(index) => Some(entries[index].clone()),
             Err(_) => None,
-        };
-        result
+        }
     }
 
     fn splice_entries(&self, mut new_entries: VecDeque<Entry>) {
         let mut entries = self.entries.lock();
         let splice_point = match entries.binary_search_by(|entry| entry.cmp_entry(&new_entries[0])) {
-            Ok(idx) => idx,
-            Err(idx) => idx,
+            Ok(idx) | Err(idx) => idx,
         };
 
         let mut existing_entries = entries.drain(splice_point..).collect::<VecDeque<_>>();

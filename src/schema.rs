@@ -312,7 +312,7 @@ impl quickcheck::Arbitrary for Schema {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SchemaBuilder {
     columns: Vec<ColumnBuilder>,
     primary_key: Vec<String>,
