@@ -364,7 +364,7 @@ mod tests {
         let schema = simple_schema();
 
         let mut table_builder = TableBuilder::new("multi_tablet", schema.clone());
-        table_builder.add_hash_partitions(vec!["key".to_owned()], 12);
+        table_builder.add_hash_partition(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.
@@ -437,7 +437,7 @@ mod tests {
         let schema = simple_schema();
 
         let mut table_builder = TableBuilder::new("multi_tablet_concurrent", schema.clone());
-        table_builder.add_hash_partitions(vec!["key".to_owned()], 12);
+        table_builder.add_hash_partition(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.

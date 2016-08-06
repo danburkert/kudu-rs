@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -163,7 +164,7 @@ impl fmt::Debug for Column {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct Inner {
     columns: Vec<Column>,
     columns_by_name: HashMap<String, usize>,
@@ -173,7 +174,7 @@ struct Inner {
     has_nullable_columns: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Schema {
     inner: Arc<Inner>,
 }
@@ -275,6 +276,16 @@ impl Schema {
         Ok(Schema::new(columns, num_primary_key_columns))
     }
 }
+
+impl cmp::PartialEq for Schema {
+    fn eq(&self, other: &Schema) -> bool {
+        self.ref_eq(other) ||
+            (self.inner.num_primary_key_columns == other.inner.num_primary_key_columns &&
+             self.inner.columns == other.inner.columns)
+    }
+}
+
+impl cmp::Eq for Schema { }
 
 impl fmt::Debug for Schema {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -14,6 +14,7 @@ use std::thread;
 use kudu_pb::master::{
     DeleteTableRequestPB,
     GetTableSchemaRequestPB,
+    IsAlterTableDoneRequestPB,
     IsCreateTableDoneRequestPB,
     ListMastersRequestPB,
     ListTablesRequestPB,
@@ -33,6 +34,7 @@ use master::MasterProxy;
 use meta_cache::MetaCache;
 use partition::PartitionSchema;
 use rpc::Messenger;
+use table::AlterTableBuilder;
 use table::Table;
 use table::TableBuilder;
 
@@ -118,7 +120,7 @@ impl Client {
     }
 
     fn do_wait_for_table_creation(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
-        let mut backoff = Backoff::with_duration_range(16, 4096);
+        let mut backoff = Backoff::with_duration_range(5, 5000);
 
         let mut is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
         while let Ok(false) = is_create_table_done {
@@ -153,6 +155,84 @@ impl Client {
         let (send, recv) = sync_channel(0);
         self.master.delete_table(deadline, request, move |resp| send.send(resp).unwrap());
         recv.recv().unwrap().map(|_| ())
+    }
+
+    pub fn alter_table<S>(&self, table: S, alter: AlterTableBuilder, deadline: Instant) -> Result<()>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_alter_table(identifier, alter, deadline)
+    }
+
+    pub fn alter_table_by_id(&self, id: &TableId, alter: AlterTableBuilder, deadline: Instant) -> Result<()> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_alter_table(identifier, alter, deadline)
+    }
+
+    fn do_alter_table(&self, table: TableIdentifierPB, alter: AlterTableBuilder, deadline: Instant) -> Result<()> {
+        let AlterTableBuilder { error, mut pb, .. } = alter;
+        try!(error);
+        pb.set_table(table);
+
+        let (send, recv) = sync_channel(0);
+        self.master.alter_table(deadline, pb, move |resp| send.send(resp).unwrap());
+        recv.recv().unwrap().map(|_| ())
+    }
+
+    /// Returns `true` if the table is fully altered.
+    pub fn is_alter_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_is_alter_table_done(identifier, deadline)
+    }
+
+    /// Returns `true` if the table is fully altered.
+    pub fn is_alter_table_done_by_id(&self, id: &TableId, deadline: Instant) -> Result<bool> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_is_alter_table_done(identifier, deadline)
+    }
+
+    fn do_is_alter_table_done(&self, table: TableIdentifierPB, deadline: Instant) -> Result<bool> {
+        let mut request = IsAlterTableDoneRequestPB::new();
+        request.set_table(table);
+
+        let (send, recv) = sync_channel(1);
+        self.master.is_alter_table_done(deadline, request, move |resp| send.send(resp).unwrap());
+        recv.recv().unwrap().map(|resp| resp.get_done())
+    }
+
+    /// Synchronously waits until the table is altered. If an error is returned,
+    /// the table may not be altered yet.
+    pub fn wait_for_table_alteration<S>(&self, table: S, deadline: Instant) -> Result<()>
+    where S: Into<String> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_name(table.into());
+        self.do_wait_for_table_alteration(identifier, deadline)
+    }
+
+    /// Synchronously waits until the table is altered. If an error is returned,
+    /// the table may not be altered yet.
+    pub fn wait_for_table_alteration_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
+        let mut identifier = TableIdentifierPB::new();
+        identifier.set_table_id(id.to_string().into_bytes());
+        self.do_wait_for_table_alteration(identifier, deadline)
+    }
+
+    fn do_wait_for_table_alteration(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
+        let mut backoff = Backoff::with_duration_range(5, 5000);
+
+        let mut is_table_alter_done = self.do_is_alter_table_done(table.clone(), deadline);
+        while let Ok(false) = is_table_alter_done {
+            let sleep_ms = backoff.next_backoff_ms();
+            debug!("alter table not yet complete, waiting {}ms", sleep_ms);
+            // TODO: do delayed send instead of sleep
+            thread::sleep(Duration::from_millis(sleep_ms));
+            is_table_alter_done = self.do_is_alter_table_done(table.clone(), deadline);
+        }
+        is_table_alter_done.map(|_| ())
     }
 
     /// Lists all tables and their associated table ID.
@@ -243,7 +323,7 @@ impl Client {
                                                                self.master.clone()))
                              .clone();
 
-        Ok(Table::new(name, id, schema, partition_schema, meta_cache))
+        Ok(Table::new(name, id, schema, partition_schema, self.master.clone(), meta_cache))
     }
 
     #[doc(hidden)]
@@ -294,11 +374,13 @@ impl Default for ClientConfig {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use AlterTableBuilder;
     use Column;
     use DataType;
     use SchemaBuilder;
     use TableBuilder;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use schema::tests::simple_schema;
     use super::*;
 
     use env_logger;
@@ -322,7 +404,7 @@ mod tests {
             .unwrap();
 
         let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
-        table_builder.add_hash_partitions(vec!["key".to_owned()], 4);
+        table_builder.add_hash_partition(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.
@@ -376,5 +458,54 @@ mod tests {
 
         let masters = client.list_masters(deadline()).unwrap();
         assert_eq!(3, masters.len());
+    }
+
+    #[test]
+    fn alter_table() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(1));
+
+        // The tablet server is real slow coming up.
+        // TODO: add MiniCluster::wait_for_startup() or equivalent.
+        ::std::thread::sleep_ms(2000);
+
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+        let mut table_builder = TableBuilder::new("t", simple_schema());
+        table_builder.set_num_replicas(1);
+        table_builder.set_range_partition_columns(vec!["key"]);
+        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        client.wait_for_table_creation("t", deadline()).unwrap();
+
+        client.alter_table("t", AlterTableBuilder::new()
+                           .add_column(Column::builder("c0", DataType::Int32)),
+                           deadline()).unwrap();
+        client.wait_for_table_alteration("t", deadline()).unwrap();
+
+        let schema = client.open_table("t", deadline()).unwrap().schema().clone();
+        assert_eq!(3, schema.columns().len());
+
+        client.alter_table_by_id(&table_id,
+                                 AlterTableBuilder::new().drop_range_partition(&schema.new_row(),
+                                                                               &schema.new_row()),
+                                 deadline()).unwrap();
+        client.wait_for_table_alteration("t", deadline()).unwrap();
+
+        let mut lower_bound = schema.new_row();
+        let mut upper_bound = schema.new_row();
+
+        lower_bound.set_by_name("key", "a").unwrap();
+        upper_bound.set_by_name("key", "z").unwrap();
+
+        client.alter_table_by_id(&table_id,
+                                 AlterTableBuilder::new().add_range_partition(&lower_bound,
+                                                                              &upper_bound)
+                                                         .rename_table("u")
+                                                         .drop_column("c0"),
+                                 deadline()).unwrap();
+        client.wait_for_table_alteration("u", deadline()).unwrap();
+        let schema = client.open_table("u", deadline()).unwrap().schema().clone();
+        assert_eq!(2, schema.columns().len());
     }
 }

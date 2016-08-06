@@ -1,19 +1,27 @@
 use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
-use kudu_pb::master::CreateTableRequestPB;
-use kudu_pb::common::{PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
-                      PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB};
+use kudu_pb::master::{
+    AlterTableRequestPB,
+    AlterTableRequestPB_StepType as StepType,
+    CreateTableRequestPB
+};
+use kudu_pb::common::{
+    PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
+    PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB
+};
 
+use Column;
 use Error;
+use master::MasterProxy;
+use meta_cache::{Entry, MetaCache};
+use partition::PartitionSchema;
 use Result;
+use row::OperationEncoder;
+use row::Row;
 use Schema;
 use TableId;
 use Tablet;
-use meta_cache::{Entry, MetaCache};
-use partition::PartitionSchema;
-use row::OperationEncoder;
-use row::Row;
 
 #[derive(Clone)]
 pub struct Table {
@@ -21,6 +29,7 @@ pub struct Table {
     id: TableId,
     schema: Schema,
     partition_schema: PartitionSchema,
+    master_proxy: MasterProxy,
     meta_cache: MetaCache,
 }
 
@@ -31,12 +40,14 @@ impl Table {
                id: TableId,
                schema: Schema,
                partition_schema: PartitionSchema,
+               master_proxy: MasterProxy,
                meta_cache: MetaCache) -> Table {
         Table {
             name: name,
             id: id,
             schema: schema,
             partition_schema: partition_schema,
+            master_proxy: master_proxy,
             meta_cache: meta_cache,
         }
     }
@@ -120,8 +131,9 @@ impl TableBuilder {
         &self.schema
     }
 
-    pub fn set_range_partition_columns(&mut self, columns: Vec<String>) -> &mut TableBuilder {
-        self.range_partition_columns = columns;
+    pub fn set_range_partition_columns<S>(&mut self, columns: Vec<S>) -> &mut TableBuilder
+    where S: Into<String> {
+        self.range_partition_columns = columns.into_iter().map(Into::into).collect();
         self
     }
 
@@ -150,15 +162,18 @@ impl TableBuilder {
         self
     }
 
-    pub fn add_hash_partitions(&mut self, columns: Vec<String>, num_buckets: i32) -> &mut TableBuilder {
-        self.hash_partitions.push((columns, num_buckets, None));
-        self
+    pub fn add_hash_partition<S>(&mut self, columns: Vec<S>, num_buckets: i32) -> &mut TableBuilder
+    where S: Into<String> {
+        self.add_hash_partition_with_seed(columns, num_buckets, 0)
     }
 
-    pub fn add_hash_partitions_with_seed(&mut self,
-                                         columns: Vec<String>,
-                                         num_buckets: i32,
-                                         seed: u32) -> &mut TableBuilder {
+    pub fn add_hash_partition_with_seed<S>(&mut self,
+                                           columns: Vec<S>,
+                                           num_buckets: i32,
+                                           seed: u32)
+                                           -> &mut TableBuilder
+    where S: Into<String> {
+        let columns = columns.into_iter().map(Into::into).collect();
         self.hash_partitions.push((columns, num_buckets, Some(seed)));
         self
     }
@@ -233,6 +248,165 @@ impl TableBuilder {
     }
 }
 
+pub struct AlterTableBuilder {
+    #[doc(hidden)]
+    pub error: Result<()>,
+    #[doc(hidden)]
+    pub schema: Option<Schema>,
+    #[doc(hidden)]
+    pub pb: AlterTableRequestPB,
+}
+
+impl AlterTableBuilder {
+
+    pub fn new() -> AlterTableBuilder {
+        AlterTableBuilder {
+            error: Ok(()),
+            schema: None,
+            pb: AlterTableRequestPB::new(),
+        }
+    }
+
+    pub fn rename_table<S>(mut self, new_name: S) -> AlterTableBuilder where S: Into<String> {
+        self.rename_table_by_ref(new_name.into());
+        self
+    }
+
+    pub fn rename_table_by_ref<S>(&mut self, new_name: S) -> &mut AlterTableBuilder where S: Into<String> {
+        self.pb.set_new_table_name(new_name.into());
+        self
+    }
+
+    pub fn add_column(mut self, column: Column) -> AlterTableBuilder {
+        self.add_column_by_ref(column);
+        self
+    }
+
+    pub fn add_column_by_ref(&mut self, column: Column) -> &mut AlterTableBuilder {
+        {
+            let mut step = self.pb.mut_alter_schema_steps().push_default();
+            step.set_field_type(StepType::ADD_COLUMN);
+            step.mut_add_column().set_schema(column.to_pb(false));
+        }
+        self
+    }
+
+    pub fn drop_column<S>(mut self, column: S) -> AlterTableBuilder where S: Into<String> {
+        self.drop_column_by_ref(column.into());
+        self
+    }
+
+    pub fn drop_column_by_ref<S>(&mut self, column: S) -> &mut AlterTableBuilder where S: Into<String> {
+        {
+            let mut step = self.pb.mut_alter_schema_steps().push_default();
+            step.set_field_type(StepType::DROP_COLUMN);
+            step.mut_drop_column().set_name(column.into());
+        }
+        self
+    }
+
+    pub fn rename_column<S1, S2>(mut self, old_name: S1, new_name: S2) -> AlterTableBuilder
+    where S1: Into<String>,
+          S2: Into<String> {
+        self.rename_column_by_ref(old_name.into(), new_name.into());
+        self
+    }
+
+    pub fn rename_column_by_ref<S1, S2>(&mut self, old_name: S1, new_name: S2) -> &mut AlterTableBuilder
+    where S1: Into<String>,
+          S2: Into<String> {
+        {
+            let mut step = self.pb.mut_alter_schema_steps().push_default();
+            step.set_field_type(StepType::RENAME_COLUMN);
+            step.mut_rename_column().set_old_name(old_name.into());
+            step.mut_rename_column().set_new_name(new_name.into());
+        }
+        self
+    }
+
+    pub fn add_range_partition(mut self, lower_bound: &Row, upper_bound: &Row) -> AlterTableBuilder {
+        self.add_range_partition_by_ref(lower_bound, upper_bound);
+        self
+    }
+
+    pub fn add_range_partition_by_ref(&mut self, lower_bound: &Row, upper_bound: &Row) -> &mut AlterTableBuilder {
+        fn inner(schema: &mut Option<Schema>, pb: &mut AlterTableRequestPB, lower_bound: &Row, upper_bound: &Row) -> Result<()> {
+            let schema_error =
+                || Error::InvalidArgument("schemas of range partition bounds must match".to_string());
+
+            if let Some(ref schema) = *schema {
+                if schema != lower_bound.schema() || schema != upper_bound.schema() {
+                    return Err(schema_error());
+                }
+            } else if lower_bound.schema() != upper_bound.schema() {
+                return Err(schema_error());
+            } else {
+                pb.set_schema(lower_bound.schema().as_pb());
+                *schema = Some(lower_bound.schema().clone());
+            }
+
+            let mut step = pb.mut_alter_schema_steps().push_default();
+            step.set_field_type(StepType::ADD_RANGE_PARTITION);
+
+            let mut encoder = OperationEncoder::new();
+            encoder.encode_range_bound(lower_bound, upper_bound);
+            let (data, indirect_data) = encoder.unwrap();
+            step.mut_add_range_partition().mut_range_bounds().set_rows(data);
+            step.mut_add_range_partition().mut_range_bounds().set_indirect_data(indirect_data);
+            Ok(())
+        }
+
+        {
+            let AlterTableBuilder { ref mut error, ref mut schema, ref mut pb } = *self;
+            if error.is_ok() {
+                *error = inner(schema, pb, lower_bound, upper_bound);
+            }
+        }
+        self
+    }
+
+    pub fn drop_range_partition(mut self, lower_bound: &Row, upper_bound: &Row) -> AlterTableBuilder {
+        self.drop_range_partition_by_ref(lower_bound, upper_bound);
+        self
+    }
+
+    pub fn drop_range_partition_by_ref(&mut self, lower_bound: &Row, upper_bound: &Row) -> &mut AlterTableBuilder {
+        fn inner(schema: &mut Option<Schema>, pb: &mut AlterTableRequestPB, lower_bound: &Row, upper_bound: &Row) -> Result<()> {
+            let schema_error =
+                || Error::InvalidArgument("schemas of range partition bounds must match".to_string());
+
+            if let Some(ref schema) = *schema {
+                if schema != lower_bound.schema() || schema != upper_bound.schema() {
+                    return Err(schema_error());
+                }
+            } else if lower_bound.schema() != upper_bound.schema() {
+                return Err(schema_error());
+            } else {
+                pb.set_schema(lower_bound.schema().as_pb());
+                *schema = Some(lower_bound.schema().clone());
+            }
+
+            let mut step = pb.mut_alter_schema_steps().push_default();
+            step.set_field_type(StepType::DROP_RANGE_PARTITION);
+
+            let mut encoder = OperationEncoder::new();
+            encoder.encode_range_bound(lower_bound, upper_bound);
+            let (data, indirect_data) = encoder.unwrap();
+            step.mut_drop_range_partition().mut_range_bounds().set_rows(data);
+            step.mut_drop_range_partition().mut_range_bounds().set_indirect_data(indirect_data);
+            Ok(())
+        }
+
+        {
+            let AlterTableBuilder { ref mut error, ref mut schema, ref mut pb } = *self;
+            if error.is_ok() {
+                *error = inner(schema, pb, lower_bound, upper_bound);
+            }
+        }
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -285,7 +459,7 @@ mod tests {
             .unwrap();
 
         let mut table_builder = TableBuilder::new("list_tablets", schema.clone());
-        table_builder.add_hash_partitions(vec!["key".to_owned()], 4);
+        table_builder.add_hash_partition(vec!["key"], 4);
         table_builder.set_num_replicas(3);
 
         let mut lower_bound = schema.new_row();

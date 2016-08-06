@@ -373,11 +373,24 @@ impl From<StatusCodePB> for StatusCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Status {
     code: StatusCode,
     message: Option<String>,
     posix_code: Option<i32>,
+}
+
+impl fmt::Debug for Status {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "{:?}", self.code));
+        if let Some(code) = self.posix_code {
+            try!(write!(f, "({})", code));
+        }
+        if let Some(ref message) = self.message {
+            try!(write!(f, ": {}", message));
+        }
+        Ok(())
+    }
 }
 
 impl From<StatusPB> for Status {
