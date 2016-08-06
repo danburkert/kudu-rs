@@ -4,7 +4,7 @@ set -euo pipefail
 IFS=$'\n\t'
 set -x
 
-PROTOC=${PROTOC:-protoc}
+PROTOC=${PROTOC:-$KUDU_HOME/thirdparty/installed-deps/bin/protoc}
 
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/client/client.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/common.proto
@@ -12,10 +12,10 @@ $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/opid.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/fs/fs.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/master/master.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/rpc/rpc_header.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $KUDU_HOME/thirdparty/protobuf-2.6.1/src $KUDU_HOME/src/kudu/rpc/rpc_header.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/tablet.proto
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver_service.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $KUDU_HOME/thirdparty/protobuf-2.6.1/src $KUDU_HOME/src/kudu/tserver/tserver_service.proto
 
 $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/metadata.proto
 mv src/metadata.rs src/consensus_metadata.rs
