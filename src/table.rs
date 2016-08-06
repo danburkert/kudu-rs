@@ -240,13 +240,14 @@ mod tests {
 
     use env_logger;
 
-    use schema::tests::simple_schema;
-    use super::*;
-    use DataType;
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use Client;
     use ClientConfig;
+    use Column;
+    use DataType;
     use SchemaBuilder;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use schema::tests::simple_schema;
+    use super::*;
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
@@ -276,11 +277,12 @@ mod tests {
         // TODO: add MiniCluster::wait_for_startup() or equivalent.
         ::std::thread::sleep_ms(2000);
 
-        let mut schema_builder = SchemaBuilder::new();
-        schema_builder.add_column("key", DataType::Int32).set_not_null();
-        schema_builder.add_column("val", DataType::Int32);
-        schema_builder.set_primary_key(vec!["key".to_owned()]);
-        let schema = schema_builder.build().unwrap();
+        let schema = SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::Int32).set_not_null())
+            .add_column(Column::builder("val", DataType::Int32))
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap();
 
         let mut table_builder = TableBuilder::new("list_tablets", schema.clone());
         table_builder.add_hash_partitions(vec!["key".to_owned()], 4);

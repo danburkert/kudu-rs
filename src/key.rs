@@ -199,10 +199,11 @@ fn decode_binary(mut key: &[u8], is_last: bool) -> Result<(&[u8], Vec<u8>)> {
 #[cfg(test)]
 mod test {
 
-    use SchemaBuilder;
-    use DataType;
-
     use super::*;
+
+    use Column;
+    use DataType;
+    use SchemaBuilder;
 
     #[test]
     fn test_murmur2_64() {
@@ -213,12 +214,13 @@ mod test {
 
     #[test]
     fn primary_key_encode_decode() {
-        let mut builder = SchemaBuilder::new();
-        builder.add_column("a", DataType::String).set_not_null();
-        builder.add_column("b", DataType::Int32).set_not_null();
-        builder.add_column("c", DataType::String).set_not_null();
-        builder.set_primary_key(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-        let schema = builder.build().unwrap();
+        let schema = SchemaBuilder::new()
+            .add_column(Column::builder("a", DataType::String).set_not_null())
+            .add_column(Column::builder("b", DataType::Int32).set_not_null())
+            .add_column(Column::builder("c", DataType::String).set_not_null())
+            .set_primary_key(vec!["a", "b", "c"])
+            .build()
+            .unwrap();
 
         {
             let mut row = schema.new_row();

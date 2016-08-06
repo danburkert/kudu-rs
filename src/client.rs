@@ -261,7 +261,6 @@ impl fmt::Debug for Client {
 /// Client configuration options.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientConfig {
-
     /// A seed set of master addresses. Must contain at least one active master in the cluster.
     master_addresses: Vec<SocketAddr>,
 }
@@ -295,11 +294,12 @@ impl Default for ClientConfig {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use SchemaBuilder;
-    use super::*;
-    use TableBuilder;
+    use Column;
     use DataType;
+    use SchemaBuilder;
+    use TableBuilder;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use super::*;
 
     use env_logger;
 
@@ -314,12 +314,12 @@ mod tests {
 
         let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
 
-        let mut schema_builder = SchemaBuilder::new();
-        schema_builder.add_column("key", DataType::Int32).set_not_null();
-        schema_builder.add_column("val", DataType::Int32);
-        schema_builder.set_primary_key(vec!["key".to_owned()]);
-
-        let schema = schema_builder.build().unwrap();
+        let schema = SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::Int32).set_not_null())
+            .add_column(Column::builder("val", DataType::Int32))
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap();
 
         let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
         table_builder.add_hash_partitions(vec!["key".to_owned()], 4);

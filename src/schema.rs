@@ -12,6 +12,10 @@ use Error;
 use Result;
 use Row;
 
+/// `Column` instances hold metadata information about columns in a Kudu table.
+///
+/// `Column` also serves as a builder object for specifying new columns during create and alter
+/// table operations.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Column {
     name: String,
@@ -52,6 +56,69 @@ impl Column {
         }
     }
 
+    /// Returns a new column builder.
+    pub fn builder<S>(name: S, data_type: DataType) -> Column where S: Into<String> {
+        Column {
+            name: name.into(),
+            data_type: data_type,
+            is_nullable: true,
+            compression: CompressionType::Default,
+            encoding: EncodingType::Auto,
+            block_size: 0,
+        }
+    }
+
+    pub fn set_nullable(mut self) -> Column {
+        self.set_nullable_by_ref();
+        self
+    }
+
+    pub fn set_nullable_by_ref(&mut self) -> &mut Column {
+        self.is_nullable = true;
+        self
+    }
+
+    pub fn set_not_null(mut self) -> Column {
+        self.set_not_null_by_ref();
+        self
+    }
+
+    pub fn set_not_null_by_ref(&mut self) -> &mut Column {
+        self.is_nullable = false;
+        self
+    }
+
+    pub fn set_encoding(mut self, encoding: EncodingType) -> Column {
+        self.set_encoding_by_ref(encoding);
+        self
+    }
+
+    pub fn set_encoding_by_ref(&mut self, encoding: EncodingType) -> &mut Column {
+        self.encoding = encoding;
+        self
+    }
+
+    pub fn set_compression(mut self, compression: CompressionType) -> Column {
+        self.set_compression_by_ref(compression);
+        self
+    }
+
+    pub fn set_compression_by_ref(&mut self, compression: CompressionType) -> &mut Column {
+        self.compression = compression;
+        self
+    }
+
+    pub fn set_block_size(mut self, block_size: i32) -> Column {
+        self.set_block_size_by_ref(block_size);
+        self
+    }
+
+    pub fn set_block_size_by_ref(&mut self, block_size: i32) -> &mut Column {
+        self.block_size = block_size;
+        self
+    }
+
+    #[doc(hidden)]
     pub fn to_pb(&self, is_key: bool) -> ColumnSchemaPB {
         let mut pb = ColumnSchemaPB::new();
         pb.set_name(self.name.clone());
@@ -64,6 +131,7 @@ impl Column {
         pb
     }
 
+    #[doc(hidden)]
     pub fn from_pb(mut pb: ColumnSchemaPB) -> Result<Column> {
         Ok(Column {
             name: pb.take_name(),
@@ -259,22 +327,25 @@ impl quickcheck::Arbitrary for Schema {
             let data_type = if is_pk { DataType::arbitrary_primary_key(g) }
                                 else { DataType::arbitrary(g) };
 
-            let mut column = builder.add_column(column.as_str(), data_type);
 
-            if is_pk || bool::arbitrary(g) { column.set_not_null() }
-            else { column.set_nullable() };
+            let mut column = Column::builder(column.as_str(), data_type);
 
-            column.set_encoding(EncodingType::arbitrary(g, data_type));
-            column.set_compression(CompressionType::arbitrary(g));
+            if is_pk || bool::arbitrary(g) { column.set_not_null_by_ref() }
+            else { column.set_nullable_by_ref() };
+
+            column.set_encoding_by_ref(EncodingType::arbitrary(g, data_type));
+            column.set_compression_by_ref(CompressionType::arbitrary(g));
             if bool::arbitrary(g) {
-                column.set_block_size(i32::arbitrary(g));
+                // TODO: can Kudu support arbitrary block sizes?
+                column.set_block_size_by_ref(i32::arbitrary(g));
             }
+            builder.add_column_by_ref(column);
         }
 
         let mut primary_key_columns: Vec<String> = primary_key_columns.iter().cloned().collect();
         g.shuffle(&mut primary_key_columns);
 
-        builder.set_primary_key(primary_key_columns);
+        builder.set_primary_key_by_ref(primary_key_columns);
         builder.build().unwrap()
     }
 
@@ -288,15 +359,8 @@ impl quickcheck::Arbitrary for Schema {
         for idx in (start_idx..self.columns().len()).rev() {
             let mut builder = SchemaBuilder::new();
 
-            for column in self.columns()[..idx].iter().chain(self.columns()[idx+1..].iter()) {
-                let mut column_builder = builder.add_column(column.name(), column.data_type());
-                if  column.is_nullable() { column_builder.set_nullable() }
-                else { column_builder.set_not_null() };
-                column_builder.set_encoding(column.encoding());
-                column_builder.set_compression(column.compression());
-                if let Some(block_size) = column.block_size() {
-                    column_builder.set_block_size(block_size);
-                }
+            for column in self.columns()[..idx].iter().chain(self.columns()[idx+1..].iter()).cloned() {
+                builder.add_column_by_ref(column);
             }
 
             let mut primary_key_columns = Vec::new();
@@ -304,7 +368,7 @@ impl quickcheck::Arbitrary for Schema {
                 if idx == pk_idx { continue; }
                 primary_key_columns.push(self.columns()[pk_idx].name().to_owned());
             }
-            builder.set_primary_key(primary_key_columns);
+            builder.set_primary_key_by_ref(primary_key_columns);
             schemas.push(builder.build().unwrap());
         }
 
@@ -314,7 +378,7 @@ impl quickcheck::Arbitrary for Schema {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SchemaBuilder {
-    columns: Vec<ColumnBuilder>,
+    columns: Vec<Column>,
     primary_key: Vec<String>,
     range_partition_columns: Vec<String>,
 }
@@ -329,27 +393,35 @@ impl SchemaBuilder {
         }
     }
 
-    pub fn columns(&self) -> &[ColumnBuilder] {
+    pub fn columns(&self) -> &[Column] {
         &self.columns
     }
 
-    pub fn columns_mut(&mut self) -> &mut [ColumnBuilder] {
+    pub fn columns_mut(&mut self) -> &mut [Column] {
         &mut self.columns
     }
 
-    pub fn add_column<S>(&mut self, name: S, data_type: DataType) -> &mut ColumnBuilder
-    where S: Into<String> {
-        let column = ColumnBuilder::new(name.into(), data_type);
+    pub fn add_column(mut self, column: Column) -> SchemaBuilder {
+        self.add_column_by_ref(column);
+        self
+    }
+
+    pub fn add_column_by_ref(&mut self, column: Column) -> &mut SchemaBuilder {
         self.columns.push(column);
-        self.columns.last_mut().unwrap()
+        self
     }
 
     pub fn primary_key(&self) -> &[String] {
         &self.primary_key
     }
 
-    pub fn set_primary_key(&mut self, columns: Vec<String>) -> &mut SchemaBuilder {
-        self.primary_key = columns;
+    pub fn set_primary_key<S>(mut self, columns: Vec<S>) -> SchemaBuilder where S: Into<String> {
+        self.set_primary_key_by_ref(columns);
+        self
+    }
+
+    pub fn set_primary_key_by_ref<S>(&mut self, columns: Vec<S>) -> &mut SchemaBuilder where S: Into<String> {
+        self.primary_key = columns.into_iter().map(Into::into).collect();
         self
     }
 
@@ -364,7 +436,7 @@ impl SchemaBuilder {
         for column_name in &self.primary_key {
             let idx = self.columns.iter().position(|col| col.name() == column_name);
             if let Some(idx) = idx {
-                columns.push(self.columns.remove(idx).build());
+                columns.push(self.columns.remove(idx));
             } else {
                 return Err(Error::InvalidArgument(
                     format!("primary key column '{}' has no corresponding column builder",
@@ -372,94 +444,9 @@ impl SchemaBuilder {
             }
         }
 
-        columns.extend(self.columns.into_iter().map(ColumnBuilder::build));
+        columns.extend(self.columns.drain(..));
 
         Ok(Schema::new(columns, self.primary_key.len()))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ColumnBuilder {
-    name: String,
-    data_type: DataType,
-    is_nullable: bool,
-    compression: CompressionType,
-    encoding: EncodingType,
-    block_size: i32,
-}
-
-impl ColumnBuilder {
-
-    fn new(name: String, data_type: DataType) -> ColumnBuilder {
-        ColumnBuilder {
-            name: name,
-            data_type: data_type,
-            is_nullable: true,
-            compression: CompressionType::Default,
-            encoding: EncodingType::Auto,
-            block_size: 0,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn data_type(&self) -> DataType {
-        self.data_type
-    }
-
-    pub fn is_nullable(&self) -> bool {
-        self.is_nullable
-    }
-
-    pub fn set_nullable(&mut self) -> &mut ColumnBuilder {
-        self.is_nullable = true;
-        self
-    }
-
-    pub fn set_not_null(&mut self) -> &mut ColumnBuilder {
-        self.is_nullable = false;
-        self
-    }
-
-    pub fn encoding(&self) -> EncodingType {
-        self.encoding
-    }
-
-    pub fn set_encoding(&mut self, encoding: EncodingType) -> &mut ColumnBuilder {
-        self.encoding = encoding;
-        self
-    }
-
-    pub fn compression(&self) -> CompressionType {
-        self.compression
-    }
-
-    pub fn set_compression(&mut self, compression: CompressionType) -> &mut ColumnBuilder {
-        self.compression = compression;
-        self
-    }
-
-    pub fn block_size(&self) -> i32 {
-        self.block_size
-    }
-
-    pub fn set_block_size(&mut self, block_size: i32) -> &mut ColumnBuilder {
-        self.block_size = block_size;
-        self
-    }
-
-    fn build(self) -> Column {
-        let ColumnBuilder { name, data_type, is_nullable, compression, encoding, block_size } = self;
-        Column {
-            name: name,
-            data_type: data_type,
-            is_nullable: is_nullable,
-            compression: compression,
-            encoding: encoding,
-            block_size: block_size,
-        }
     }
 }
 
@@ -470,42 +457,40 @@ pub mod tests {
     use DataType;
 
     pub fn simple_schema() -> Schema {
-        let mut builder = SchemaBuilder::new();
-        builder.add_column("key", DataType::String).set_not_null();
-        builder.add_column("val", DataType::String).set_not_null();
-        builder.set_primary_key(vec!["key".to_string()]);
-        builder.build().unwrap()
+        SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::String).set_not_null())
+            .add_column(Column::builder("val", DataType::String).set_not_null())
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap()
     }
 
     pub fn all_types_schema() -> Schema {
-        let mut builder = SchemaBuilder::new();
-        builder.add_column("key", DataType::Int32).set_not_null();
-
-        builder.add_column("bool", DataType::Bool).set_not_null();
-        builder.add_column("i8", DataType::Int8).set_not_null();
-        builder.add_column("i16", DataType::Int16).set_not_null();
-        builder.add_column("i32", DataType::Int32).set_not_null();
-        builder.add_column("i64", DataType::Int64).set_not_null();
-        builder.add_column("timestamp", DataType::Timestamp).set_not_null();
-        builder.add_column("f32", DataType::Float).set_not_null();
-        builder.add_column("f64", DataType::Double).set_not_null();
-        builder.add_column("binary", DataType::Binary).set_not_null();
-        builder.add_column("string", DataType::String).set_not_null();
-
-        builder.add_column("nullable_bool", DataType::Bool).set_nullable();
-        builder.add_column("nullable_i8", DataType::Int8).set_nullable();
-        builder.add_column("nullable_i16", DataType::Int16).set_nullable();
-        builder.add_column("nullable_i32", DataType::Int32).set_nullable();
-        builder.add_column("nullable_i64", DataType::Int64).set_nullable();
-        builder.add_column("nullable_timestamp", DataType::Timestamp).set_nullable();
-        builder.add_column("nullable_f32", DataType::Float).set_nullable();
-        builder.add_column("nullable_f64", DataType::Double).set_nullable();
-        builder.add_column("nullable_binary", DataType::Binary).set_nullable();
-        builder.add_column("nullable_string", DataType::String).set_nullable();
-
-        builder.set_primary_key(vec!["key".to_string()]);
-
-        builder.build().unwrap()
+        SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::Int32).set_not_null())
+            .add_column(Column::builder("bool", DataType::Bool).set_not_null())
+            .add_column(Column::builder("i8", DataType::Int8).set_not_null())
+            .add_column(Column::builder("i16", DataType::Int16).set_not_null())
+            .add_column(Column::builder("i32", DataType::Int32).set_not_null())
+            .add_column(Column::builder("i64", DataType::Int64).set_not_null())
+            .add_column(Column::builder("timestamp", DataType::Timestamp).set_not_null())
+            .add_column(Column::builder("f32", DataType::Float).set_not_null())
+            .add_column(Column::builder("f64", DataType::Double).set_not_null())
+            .add_column(Column::builder("binary", DataType::Binary).set_not_null())
+            .add_column(Column::builder("string", DataType::String).set_not_null())
+            .add_column(Column::builder("nullable_bool", DataType::Bool).set_nullable())
+            .add_column(Column::builder("nullable_i8", DataType::Int8).set_nullable())
+            .add_column(Column::builder("nullable_i16", DataType::Int16).set_nullable())
+            .add_column(Column::builder("nullable_i32", DataType::Int32).set_nullable())
+            .add_column(Column::builder("nullable_i64", DataType::Int64).set_nullable())
+            .add_column(Column::builder("nullable_timestamp", DataType::Timestamp).set_nullable())
+            .add_column(Column::builder("nullable_f32", DataType::Float).set_nullable())
+            .add_column(Column::builder("nullable_f64", DataType::Double).set_nullable())
+            .add_column(Column::builder("nullable_binary", DataType::Binary).set_nullable())
+            .add_column(Column::builder("nullable_string", DataType::String).set_nullable())
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap()
     }
 
     #[test]
