@@ -270,7 +270,7 @@ impl MetaCache {
     }
 
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         self.entries.lock().clear()
     }
 }

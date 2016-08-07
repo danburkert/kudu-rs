@@ -157,27 +157,55 @@ impl Client {
         recv.recv().unwrap().map(|_| ())
     }
 
-    pub fn alter_table<S>(&self, table: S, alter: AlterTableBuilder, deadline: Instant) -> Result<()>
+    pub fn alter_table<S>(&self,
+                          table: S,
+                          alter: AlterTableBuilder,
+                          deadline: Instant)
+                          -> Result<TableId>
     where S: Into<String> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_name(table.into());
         self.do_alter_table(identifier, alter, deadline)
     }
 
-    pub fn alter_table_by_id(&self, id: &TableId, alter: AlterTableBuilder, deadline: Instant) -> Result<()> {
+    pub fn alter_table_by_id(&self,
+                             id: &TableId,
+                             alter: AlterTableBuilder,
+                             deadline: Instant)
+                             -> Result<()> {
         let mut identifier = TableIdentifierPB::new();
         identifier.set_table_id(id.to_string().into_bytes());
-        self.do_alter_table(identifier, alter, deadline)
+        self.do_alter_table(identifier, alter, deadline).map(|_| ())
     }
 
-    fn do_alter_table(&self, table: TableIdentifierPB, alter: AlterTableBuilder, deadline: Instant) -> Result<()> {
+    fn do_alter_table(&self,
+                      table: TableIdentifierPB,
+                      alter: AlterTableBuilder,
+                      deadline: Instant)
+                      -> Result<TableId> {
         let AlterTableBuilder { error, mut pb, .. } = alter;
         try!(error);
         pb.set_table(table);
 
         let (send, recv) = sync_channel(0);
         self.master.alter_table(deadline, pb, move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|_| ())
+        let table_id = recv.recv().unwrap().and_then(|resp| {
+            str::from_utf8(resp.get_table_id())
+                .map_err(|error| Error::Serialization(format!("{}", error)))
+                .and_then(TableId::parse)
+        });
+
+        // If the table partitioning was altered and there is an existing meta cache for the table,
+        // clear it.
+        if alter.schema.is_some() {
+            if let Ok(ref table_id) = table_id {
+                let meta_cache = self.meta_caches.lock().get(table_id).cloned();
+                if let Some(meta_cache) = meta_cache {
+                    meta_cache.clear();
+                }
+            }
+        }
+        table_id
     }
 
     /// Returns `true` if the table is fully altered.
