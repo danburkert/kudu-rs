@@ -450,7 +450,7 @@ impl SchemaBuilder {
                 columns.push(self.columns.remove(idx));
             } else {
                 return Err(Error::InvalidArgument(
-                    format!("primary key column '{}' has no corresponding column builder",
+                    format!("primary key column '{}' has no corresponding column",
                             column_name)))
             }
         }
