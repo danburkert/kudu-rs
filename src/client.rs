@@ -351,7 +351,7 @@ impl Client {
                                                                self.master.clone()))
                              .clone();
 
-        Ok(Table::new(name, id, schema, partition_schema, self.master.clone(), meta_cache))
+        Ok(Table::new(name, id, schema, partition_schema, resp.get_num_replicas() as u32, self.master.clone(), meta_cache))
     }
 
     #[doc(hidden)]

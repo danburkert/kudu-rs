@@ -29,6 +29,7 @@ pub struct Table {
     id: TableId,
     schema: Schema,
     partition_schema: PartitionSchema,
+    num_replicas: u32,
     master_proxy: MasterProxy,
     meta_cache: MetaCache,
 }
@@ -40,6 +41,7 @@ impl Table {
                id: TableId,
                schema: Schema,
                partition_schema: PartitionSchema,
+               num_replicas: u32,
                master_proxy: MasterProxy,
                meta_cache: MetaCache) -> Table {
         Table {
@@ -47,6 +49,7 @@ impl Table {
             id: id,
             schema: schema,
             partition_schema: partition_schema,
+            num_replicas: num_replicas,
             master_proxy: master_proxy,
             meta_cache: meta_cache,
         }
@@ -66,6 +69,10 @@ impl Table {
 
     pub fn partition_schema(&self) -> &PartitionSchema {
         &self.partition_schema
+    }
+
+    pub fn num_replicas(&self) -> u32 {
+        self.num_replicas
     }
 
     pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {
