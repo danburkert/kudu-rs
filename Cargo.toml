@@ -9,9 +9,11 @@ keywords = ["kudu", "database"]
 [dependencies]
 
 byteorder = "0.5"
-chrono = "0.2.22"
+chrono = "0.2"
 ieee754 = "0.2"
+ifaces = "0.0"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
+lazy_static = "0.1"
 log = "0.3"
 mio = "0.5"
 net2 = "0.2"

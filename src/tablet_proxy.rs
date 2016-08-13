@@ -20,7 +20,6 @@ const LEADER_REFRESH_TIMEOUT_SECS: u64 = 10;
 enum TargetReplica {
     Leader,
     Closest,
-    Exact(SocketAddr),
 }
 
 /// The `TabletProxy` tracks the replicas of a tablet, and proxies RPCs to them.
