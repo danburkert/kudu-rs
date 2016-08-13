@@ -1,9 +1,9 @@
 //! Utility functions for working with keys.
 
-use std::time::SystemTime;
-use std::{i8, i16, i32, i64};
+use std::{i8, i16, i32, i64, f32, f64};
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt, NativeEndian};
+use ieee754::Ieee754;
 
 use DataType;
 use Error;
@@ -11,7 +11,6 @@ use RangePartitionSchema;
 use Result;
 use Row;
 use Schema;
-use util::{time_to_us, us_to_time};
 
 /// Murmur2 hash implementation returning 64-bit hashes.
 pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
@@ -63,10 +62,8 @@ fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) {
         DataType::Int8 => buf.push((row.get::<i8>(idx).unwrap() ^ i8::MIN) as u8),
         DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx).unwrap() ^ i16::MIN).unwrap(),
         DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx).unwrap() ^ i32::MIN).unwrap(),
-        DataType::Int64 => buf.write_i64::<BigEndian>(row.get::<i64>(idx).unwrap() ^ i64::MIN).unwrap(),
-        DataType::Timestamp => buf.write_i64::<BigEndian>(time_to_us(&row.get::<SystemTime>(idx).unwrap()) ^ i64::MIN).unwrap(),
-        DataType::Binary => encode_binary(row.get(idx).unwrap(), is_last, buf),
-        DataType::String => encode_binary(row.get::<&str>(idx).unwrap().as_bytes(), is_last, buf),
+        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(row.get::<i64>(idx).unwrap() ^ i64::MIN).unwrap(),
+        DataType::Binary | DataType::String => encode_binary(row.get(idx).unwrap(), is_last, buf),
         DataType::Bool | DataType::Float | DataType::Double => {
             panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
         },
@@ -136,12 +133,8 @@ fn decode_column<'a>(row: &mut Row, idx: usize, is_last: bool, key: &'a [u8]) ->
                 row.set_unchecked(idx, BigEndian::read_i32(key) ^ i32::MIN);
                 Ok(&key[4..])
             },
-            DataType::Int64 =>  {
+            DataType::Int64 | DataType::Timestamp =>  {
                 row.set_unchecked(idx, BigEndian::read_i64(key) ^ i64::MIN);
-                Ok(&key[8..])
-            },
-            DataType::Timestamp => {
-                row.set_unchecked(idx, us_to_time(BigEndian::read_i64(key) ^ i64::MIN));
                 Ok(&key[8..])
             },
             DataType::Binary => {
@@ -194,6 +187,59 @@ fn decode_binary(mut key: &[u8], is_last: bool) -> Result<(&[u8], Vec<u8>)> {
 
         Ok((key, ret))
     }
+}
+
+/// Increments the value of a cell in a row.
+///
+/// Returns `true` if the increment succeeds, or `false` if the value is already the maximum
+/// or the value is unset or null.
+fn increment_cell(row: &mut Row, idx: usize) -> bool {
+    if !row.is_set(idx).unwrap() || row.is_null(idx).unwrap() {
+        return false;
+    }
+    match row.schema().columns()[idx].data_type() {
+        DataType::Bool => {
+            let val = row.get(idx).unwrap();
+            if val { return false };
+            row.set(idx, true).unwrap();
+        },
+        DataType::Int8 => {
+            let val = row.get::<i8>(idx).unwrap();
+            if val == i8::MAX { return false; }
+            row.set(idx, val + 1).unwrap();
+        },
+        DataType::Int16 => {
+            let val = row.get::<i16>(idx).unwrap();
+            if val == i16::MAX { return false; }
+            row.set(idx, val + 1).unwrap();
+        },
+        DataType::Int32 => {
+            let val = row.get::<i32>(idx).unwrap();
+            if val == i32::MAX { return false; }
+            row.set(idx, val + 1).unwrap();
+        },
+        DataType::Int64 | DataType::Timestamp =>  {
+            let val = row.get::<i64>(idx).unwrap();
+            if val == i64::MAX { return false; }
+            row.set(idx, val + 1).unwrap();
+        },
+        DataType::Binary | DataType::String => {
+            let mut val = row.get::<Vec<u8>>(idx).unwrap();
+            val.push(0u8);
+            row.set(idx, val).unwrap();
+        },
+        DataType::Float => {
+            let val = row.get::<f32>(idx).unwrap();
+            if val == f32::INFINITY || val.is_nan() { return false; }
+            row.set(idx, val.next()).unwrap();
+        },
+        DataType::Double => {
+            let val = row.get::<f64>(idx).unwrap();
+            if val == f64::INFINITY || val.is_nan() { return false; }
+            row.set(idx, val.next()).unwrap();
+        },
+    }
+    true
 }
 
 #[cfg(test)]

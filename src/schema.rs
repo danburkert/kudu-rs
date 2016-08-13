@@ -404,14 +404,6 @@ impl SchemaBuilder {
         }
     }
 
-    pub fn columns(&self) -> &[Column] {
-        &self.columns
-    }
-
-    pub fn columns_mut(&mut self) -> &mut [Column] {
-        &mut self.columns
-    }
-
     pub fn add_column(mut self, column: Column) -> SchemaBuilder {
         self.add_column_by_ref(column);
         self
@@ -420,10 +412,6 @@ impl SchemaBuilder {
     pub fn add_column_by_ref(&mut self, column: Column) -> &mut SchemaBuilder {
         self.columns.push(column);
         self
-    }
-
-    pub fn primary_key(&self) -> &[String] {
-        &self.primary_key
     }
 
     pub fn set_primary_key<S>(mut self, columns: Vec<S>) -> SchemaBuilder where S: Into<String> {

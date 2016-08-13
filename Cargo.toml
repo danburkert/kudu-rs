@@ -10,6 +10,7 @@ keywords = ["kudu", "database"]
 
 byteorder = "0.5"
 chrono = "0.2.22"
+ieee754 = "0.2"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 log = "0.3"
 mio = "0.5"

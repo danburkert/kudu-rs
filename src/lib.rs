@@ -2,6 +2,7 @@
 
 extern crate byteorder;
 extern crate chrono;
+extern crate ieee754;
 extern crate kudu_pb;
 extern crate mio;
 extern crate net2;

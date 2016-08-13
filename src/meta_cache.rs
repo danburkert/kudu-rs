@@ -283,11 +283,12 @@ mod tests {
 
     use env_logger;
 
-    use ClientConfig;
     use Client;
+    use ClientConfig;
+    use RangePartitionBound;
+    use TableBuilder;
     use mini_cluster::MiniCluster;
     use schema::tests::simple_schema;
-    use TableBuilder;
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
@@ -364,7 +365,7 @@ mod tests {
         let schema = simple_schema();
 
         let mut table_builder = TableBuilder::new("multi_tablet", schema.clone());
-        table_builder.add_hash_partition(vec!["key"], 12);
+        table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.
@@ -437,7 +438,7 @@ mod tests {
         let schema = simple_schema();
 
         let mut table_builder = TableBuilder::new("multi_tablet_concurrent", schema.clone());
-        table_builder.add_hash_partition(vec!["key"], 12);
+        table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.
@@ -481,25 +482,28 @@ mod tests {
         let schema = simple_schema();
 
         let mut table_builder = TableBuilder::new("non_covered_ranges", schema.clone());
+        table_builder.set_range_partition_columns(vec!["key"]);
 
         let mut lower_bound1 = schema.new_row();
         lower_bound1.set(0, "a").unwrap();
 
         let mut upper_bound1 = schema.new_row();
         upper_bound1.set(0, "m").unwrap();
-        table_builder.add_range_bound(lower_bound1, upper_bound1);
+        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound1),
+                                          RangePartitionBound::Exclusive(upper_bound1));
 
         let mut lower_bound2 = schema.new_row();
         lower_bound2.set(0, "p").unwrap();
 
         let mut upper_bound2 = schema.new_row();
         upper_bound2.set(0, "s").unwrap();
-        table_builder.add_range_bound(lower_bound2, upper_bound2);
+        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound2),
+                                          RangePartitionBound::Exclusive(upper_bound2));
         table_builder.set_num_replicas(1);
 
         let mut split = schema.new_row();
         split.set(0, "c").unwrap();
-        table_builder.add_range_split(split);
+        table_builder.add_range_partition_split(split);
 
         // The tablet server is real slow coming up.
         // TODO: add MiniCluster::wait_for_startup() or equivalent.

@@ -405,6 +405,7 @@ mod tests {
     use AlterTableBuilder;
     use Column;
     use DataType;
+    use RangePartitionBound;
     use SchemaBuilder;
     use TableBuilder;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
@@ -432,7 +433,7 @@ mod tests {
             .unwrap();
 
         let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
-        table_builder.add_hash_partition(vec!["key"], 4);
+        table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
         // The tablet server is real slow coming up.
@@ -514,10 +515,11 @@ mod tests {
         let schema = client.open_table("t", deadline()).unwrap().schema().clone();
         assert_eq!(3, schema.columns().len());
 
-        client.alter_table_by_id(&table_id,
-                                 AlterTableBuilder::new().drop_range_partition(&schema.new_row(),
-                                                                               &schema.new_row()),
-                                 deadline()).unwrap();
+        let alter = AlterTableBuilder::new().drop_range_partition(
+            &RangePartitionBound::Inclusive(schema.new_row()),
+            &RangePartitionBound::Exclusive(schema.new_row()));
+
+        client.alter_table_by_id(&table_id, alter, deadline()).unwrap();
         client.wait_for_table_alteration("t", deadline()).unwrap();
 
         let mut lower_bound = schema.new_row();
@@ -526,12 +528,13 @@ mod tests {
         lower_bound.set_by_name("key", "a").unwrap();
         upper_bound.set_by_name("key", "z").unwrap();
 
-        client.alter_table_by_id(&table_id,
-                                 AlterTableBuilder::new().add_range_partition(&lower_bound,
-                                                                              &upper_bound)
-                                                         .rename_table("u")
-                                                         .drop_column("c0"),
-                                 deadline()).unwrap();
+        let alter = AlterTableBuilder::new()
+            .add_range_partition(&RangePartitionBound::Inclusive(lower_bound),
+                                 &RangePartitionBound::Exclusive(upper_bound))
+            .rename_table("u")
+            .drop_column("c0");
+
+        client.alter_table_by_id(&table_id, alter, deadline()).unwrap();
         client.wait_for_table_alteration("u", deadline()).unwrap();
         let schema = client.open_table("u", deadline()).unwrap().schema().clone();
         assert_eq!(2, schema.columns().len());

@@ -13,15 +13,15 @@ use kudu_pb::common::{
 
 use Column;
 use Error;
-use master::MasterProxy;
-use meta_cache::{Entry, MetaCache};
-use partition::PartitionSchema;
 use Result;
-use row::OperationEncoder;
-use row::Row;
 use Schema;
 use TableId;
 use Tablet;
+use master::MasterProxy;
+use meta_cache::{Entry, MetaCache};
+use partition::PartitionSchema;
+use row::OperationEncoder;
+use row::Row;
 
 #[derive(Clone)]
 pub struct Table {
@@ -106,122 +106,135 @@ impl Table {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangePartitionBound {
+    Inclusive(Row),
+    Exclusive(Row),
+}
+
+impl RangePartitionBound {
+    fn row(&self) -> &Row {
+        match *self {
+            RangePartitionBound::Inclusive(ref row) => row,
+            RangePartitionBound::Exclusive(ref row) => row,
+        }
+    }
+}
+
 pub struct TableBuilder {
     name: String,
     schema: Schema,
+    hash_partitions: Vec<(Vec<String>, u32, Option<u32>)>,
     range_partition_columns: Vec<String>,
-    range_splits: Vec<Row>,
-    range_bounds: Vec<(Row, Row)>,
-    hash_partitions: Vec<(Vec<String>, i32, Option<u32>)>,
-    num_replicas: Option<i32>,
+    range_partitions: Vec<(RangePartitionBound, RangePartitionBound)>,
+    range_partition_splits: Vec<Row>,
+    num_replicas: Option<u32>,
 }
 
 impl TableBuilder {
 
+    /// Creates a new table builder with the provided table name and schema.
     pub fn new<S>(name: S, schema: Schema) -> TableBuilder where S: Into<String> {
         TableBuilder {
             name: name.into(),
             schema: schema,
-            range_partition_columns: Vec::new(),
-            range_splits: Vec::new(),
-            range_bounds: Vec::new(),
             hash_partitions: Vec::new(),
+            range_partition_columns: Vec::new(),
+            range_partitions: Vec::new(),
+            range_partition_splits: Vec::new(),
             num_replicas: None,
         }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
     }
 
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
 
+    /// Hash partitions the table by the specfied columns.
+    pub fn add_hash_partitions<S>(&mut self,
+                                  columns: Vec<S>,
+                                  num_partitions: u32) -> &mut TableBuilder
+    where S: Into<String> {
+        self.add_hash_partition_with_seed(columns, num_partitions, 0)
+    }
+
+    pub fn add_hash_partition_with_seed<S>(&mut self,
+                                           columns: Vec<S>,
+                                           num_partitions: u32,
+                                           seed: u32)
+                                           -> &mut TableBuilder
+    where S: Into<String> {
+        let columns = columns.into_iter().map(Into::into).collect();
+        self.hash_partitions.push((columns, num_partitions, Some(seed)));
+        self
+    }
+
+    /// Range partitions the table by the specified columns.
+    ///
+    /// Range partitioned tables must have at least one partition added with
+    /// `TableBuilder::add_range_partition`.
     pub fn set_range_partition_columns<S>(&mut self, columns: Vec<S>) -> &mut TableBuilder
     where S: Into<String> {
         self.range_partition_columns = columns.into_iter().map(Into::into).collect();
         self
     }
 
-    pub fn clear_range_partition_columns(&mut self) -> &mut TableBuilder {
-        self.range_partition_columns.clear();
+    /// Adds a range partition to the table with the specified bounds.
+    pub fn add_range_partition(&mut self,
+                               lower_bound: RangePartitionBound,
+                               upper_bound: RangePartitionBound)
+                               -> &mut TableBuilder {
+        self.range_partitions.push((lower_bound, upper_bound));
         self
     }
 
-    pub fn add_range_split(&mut self, split_row: Row) -> &mut TableBuilder {
-        self.range_splits.push(split_row);
+    pub fn add_range_partition_split(&mut self, split: Row) -> &mut TableBuilder {
+        self.range_partition_splits.push(split);
         self
     }
 
-    pub fn add_range_bound(&mut self, lower_bound: Row, upper_bound: Row) -> &mut TableBuilder {
-        self.range_bounds.push((lower_bound, upper_bound));
-        self
-    }
-
-    pub fn clear_range_splits(&mut self) -> &mut TableBuilder {
-        self.range_splits.clear();
-        self
-    }
-
-    pub fn clear_range_bounds(&mut self) -> &mut TableBuilder {
-        self.range_bounds.clear();
-        self
-    }
-
-    pub fn add_hash_partition<S>(&mut self, columns: Vec<S>, num_buckets: i32) -> &mut TableBuilder
-    where S: Into<String> {
-        self.add_hash_partition_with_seed(columns, num_buckets, 0)
-    }
-
-    pub fn add_hash_partition_with_seed<S>(&mut self,
-                                           columns: Vec<S>,
-                                           num_buckets: i32,
-                                           seed: u32)
-                                           -> &mut TableBuilder
-    where S: Into<String> {
-        let columns = columns.into_iter().map(Into::into).collect();
-        self.hash_partitions.push((columns, num_buckets, Some(seed)));
-        self
-    }
-
-    pub fn clear_hash_partitions(&mut self) -> &mut TableBuilder {
-        self.hash_partitions.clear();
-        self
-    }
-
-    pub fn set_num_replicas(&mut self, num_replicas: i32) {
+    pub fn set_num_replicas(&mut self, num_replicas: u32) {
         self.num_replicas = Some(num_replicas);
     }
 
     #[doc(hidden)]
     pub fn into_pb(self) -> Result<CreateTableRequestPB> {
-        let TableBuilder { name, schema, range_partition_columns, range_splits,
-                           range_bounds, hash_partitions, num_replicas } = self;
+        let TableBuilder { name, schema, range_partition_columns, range_partitions,
+                           range_partition_splits, hash_partitions, num_replicas } = self;
 
         let mut range_encoder = OperationEncoder::new();
 
-        for split in range_splits {
-            if !split.schema().ref_eq(&schema) {
-                return Err(Error::InvalidArgument(
-                        format!("schema of range split row {:?} does not match the table schema {:?}",
-                                split, schema)));
-            }
-            range_encoder.encode_range_split(&split);
+        if range_partition_columns.is_empty() && !range_partitions.is_empty() {
+            return Err(Error::InvalidArgument(
+                    "range partitions specified without range partitioning columns".to_string()));
+        } else if range_partition_columns.is_empty() && !range_partition_splits.is_empty() {
+            return Err(Error::InvalidArgument(
+                    "range partition splits specified without range partitioning columns".to_string()));
         }
 
-        for (lower, upper) in range_bounds {
-            if !lower.schema().ref_eq(&schema) {
-                return Err(Error::InvalidArgument(
-                        format!("schema of range lower bound row {:?} does not match the table schema {:?}",
-                                lower, schema)));
+        let mut range_partition_idxs = Vec::new();
+        for column in &range_partition_columns {
+            match schema.column_index(column) {
+                Some(idx) => range_partition_idxs.push(idx),
+                None => return Err(Error::InvalidArgument(
+                        format!("range partition column '{}' not found in schema", column))),
             }
-            if !upper.schema().ref_eq(&schema) {
+        }
+
+        for (lower, upper) in range_partitions {
+            if &schema != lower.row().schema() || &schema != upper.row().schema() {
                 return Err(Error::InvalidArgument(
-                        format!("schema of range upper bound row {:?} does not match the table schema {:?}",
-                                upper, schema)));
+                        "range partition bound schema does not match the table schema".to_string()));
             }
-            range_encoder.encode_range_bound(&lower, &upper);
+            range_encoder.encode_range_partition(&lower, &upper);
+        }
+
+        for split in range_partition_splits {
+            if &schema != split.schema() {
+                return Err(Error::InvalidArgument(
+                        "range partition split schema does not match the table schema".to_string()));
+            }
+            range_encoder.encode_range_partition_split(&split);
         }
 
         let mut pb = CreateTableRequestPB::new();
@@ -238,19 +251,19 @@ impl TableBuilder {
             pb.mut_partition_schema().mut_range_schema().mut_columns().push(column_pb);
         }
 
-        for (columns, num_buckets, seed) in hash_partitions {
+        for (columns, num_partitions, seed) in hash_partitions {
             let mut hash_pb = HashBucketSchemaPB::new();
             for column in columns {
                 let mut column_pb = ColumnIdentifierPB::new();
                 column_pb.set_name(column);
                 hash_pb.mut_columns().push(column_pb);
             }
-            hash_pb.set_num_buckets(num_buckets);
+            hash_pb.set_num_buckets(num_partitions as i32);
             if let Some(seed) = seed { hash_pb.set_seed(seed); }
             pb.mut_partition_schema().mut_hash_bucket_schemas().push(hash_pb);
         }
 
-        if let Some(num_replicas) = num_replicas { pb.set_num_replicas(num_replicas); }
+        if let Some(num_replicas) = num_replicas { pb.set_num_replicas(num_replicas as i32); }
         Ok(pb)
     }
 }
@@ -331,84 +344,68 @@ impl AlterTableBuilder {
         self
     }
 
-    pub fn add_range_partition(mut self, lower_bound: &Row, upper_bound: &Row) -> AlterTableBuilder {
+    fn check_and_set_schema(&mut self, new_schema: &Schema) {
+        if self.error.is_err() { return; }
+
+        if let Some(ref schema) = self.schema {
+            if schema != new_schema {
+                self.error = Err(Error::InvalidArgument(
+                        "schemas of range partition bounds must match".to_string()));
+            }
+            return;
+        }
+
+        self.pb.set_schema(new_schema.as_pb());
+        self.schema = Some(new_schema.clone());
+    }
+
+    pub fn add_range_partition(mut self,
+                               lower_bound: &RangePartitionBound,
+                               upper_bound: &RangePartitionBound) -> AlterTableBuilder {
         self.add_range_partition_by_ref(lower_bound, upper_bound);
         self
     }
 
-    pub fn add_range_partition_by_ref(&mut self, lower_bound: &Row, upper_bound: &Row) -> &mut AlterTableBuilder {
-        fn inner(schema: &mut Option<Schema>, pb: &mut AlterTableRequestPB, lower_bound: &Row, upper_bound: &Row) -> Result<()> {
-            let schema_error =
-                || Error::InvalidArgument("schemas of range partition bounds must match".to_string());
-
-            if let Some(ref schema) = *schema {
-                if schema != lower_bound.schema() || schema != upper_bound.schema() {
-                    return Err(schema_error());
-                }
-            } else if lower_bound.schema() != upper_bound.schema() {
-                return Err(schema_error());
-            } else {
-                pb.set_schema(lower_bound.schema().as_pb());
-                *schema = Some(lower_bound.schema().clone());
-            }
-
-            let mut step = pb.mut_alter_schema_steps().push_default();
+    pub fn add_range_partition_by_ref(&mut self,
+                                      lower_bound: &RangePartitionBound,
+                                      upper_bound: &RangePartitionBound) -> &mut AlterTableBuilder {
+        self.check_and_set_schema(lower_bound.row().schema());
+        self.check_and_set_schema(upper_bound.row().schema());
+        if self.error.is_ok() {
+            let mut step = self.pb.mut_alter_schema_steps().push_default();
             step.set_field_type(StepType::ADD_RANGE_PARTITION);
 
             let mut encoder = OperationEncoder::new();
-            encoder.encode_range_bound(lower_bound, upper_bound);
+            encoder.encode_range_partition(lower_bound, upper_bound);
             let (data, indirect_data) = encoder.unwrap();
             step.mut_add_range_partition().mut_range_bounds().set_rows(data);
             step.mut_add_range_partition().mut_range_bounds().set_indirect_data(indirect_data);
-            Ok(())
-        }
-
-        {
-            let AlterTableBuilder { ref mut error, ref mut schema, ref mut pb } = *self;
-            if error.is_ok() {
-                *error = inner(schema, pb, lower_bound, upper_bound);
-            }
         }
         self
     }
 
-    pub fn drop_range_partition(mut self, lower_bound: &Row, upper_bound: &Row) -> AlterTableBuilder {
+    pub fn drop_range_partition(mut self,
+                                lower_bound: &RangePartitionBound,
+                                upper_bound: &RangePartitionBound) -> AlterTableBuilder {
         self.drop_range_partition_by_ref(lower_bound, upper_bound);
         self
     }
 
-    pub fn drop_range_partition_by_ref(&mut self, lower_bound: &Row, upper_bound: &Row) -> &mut AlterTableBuilder {
-        fn inner(schema: &mut Option<Schema>, pb: &mut AlterTableRequestPB, lower_bound: &Row, upper_bound: &Row) -> Result<()> {
-            let schema_error =
-                || Error::InvalidArgument("schemas of range partition bounds must match".to_string());
-
-            if let Some(ref schema) = *schema {
-                if schema != lower_bound.schema() || schema != upper_bound.schema() {
-                    return Err(schema_error());
-                }
-            } else if lower_bound.schema() != upper_bound.schema() {
-                return Err(schema_error());
-            } else {
-                pb.set_schema(lower_bound.schema().as_pb());
-                *schema = Some(lower_bound.schema().clone());
-            }
-
-            let mut step = pb.mut_alter_schema_steps().push_default();
+    pub fn drop_range_partition_by_ref(&mut self,
+                                       lower_bound: &RangePartitionBound,
+                                       upper_bound: &RangePartitionBound)
+                                       -> &mut AlterTableBuilder {
+        self.check_and_set_schema(lower_bound.row().schema());
+        self.check_and_set_schema(upper_bound.row().schema());
+        if self.error.is_ok() {
+            let mut step = self.pb.mut_alter_schema_steps().push_default();
             step.set_field_type(StepType::DROP_RANGE_PARTITION);
 
             let mut encoder = OperationEncoder::new();
-            encoder.encode_range_bound(lower_bound, upper_bound);
+            encoder.encode_range_partition(lower_bound, upper_bound);
             let (data, indirect_data) = encoder.unwrap();
             step.mut_drop_range_partition().mut_range_bounds().set_rows(data);
             step.mut_drop_range_partition().mut_range_bounds().set_indirect_data(indirect_data);
-            Ok(())
-        }
-
-        {
-            let AlterTableBuilder { ref mut error, ref mut schema, ref mut pb } = *self;
-            if error.is_ok() {
-                *error = inner(schema, pb, lower_bound, upper_bound);
-            }
         }
         self
     }
@@ -443,7 +440,7 @@ mod tests {
         let mut split_row = table_builder.schema().new_row();
         split_row.set_by_name("key", "foo").unwrap();
 
-        table_builder.add_range_split(split_row);
+        table_builder.add_range_partition_split(split_row);
     }
 
     #[test]
@@ -466,20 +463,23 @@ mod tests {
             .unwrap();
 
         let mut table_builder = TableBuilder::new("list_tablets", schema.clone());
-        table_builder.add_hash_partition(vec!["key"], 4);
+        table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(3);
 
+        table_builder.set_range_partition_columns(vec!["key"]);
         let mut lower_bound = schema.new_row();
         let mut upper_bound = schema.new_row();
         lower_bound.set(0, 0i32).unwrap();
         upper_bound.set(0, 100i32).unwrap();
-        table_builder.add_range_bound(lower_bound, upper_bound);
+        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound),
+                                          RangePartitionBound::Exclusive(upper_bound));
 
         let mut lower_bound = schema.new_row();
         let mut upper_bound = schema.new_row();
         lower_bound.set(0, 200i32).unwrap();
         upper_bound.set(0, 300i32).unwrap();
-        table_builder.add_range_bound(lower_bound, upper_bound);
+        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound),
+                                          RangePartitionBound::Exclusive(upper_bound));
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline() + Duration::from_secs(10)).unwrap();

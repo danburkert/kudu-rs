@@ -11,10 +11,11 @@ use vec_map::VecMap;
 
 use DataType;
 use Error;
+use RangePartitionBound;
 use Result;
 use Schema;
+use Value;
 use util;
-use value::Value;
 
 #[derive(Clone)]
 pub struct Row {
@@ -44,7 +45,7 @@ impl Row {
     }
 
     pub fn set<'a, V>(&mut self, idx: usize, value: V) -> Result<&mut Row> where V: Value<'a> {
-        try!(self.check_column::<V>(idx));
+        try!(self.check_column_for_write::<V>(idx));
         unsafe {
             Ok(self.set_unchecked(idx, value))
         }
@@ -62,7 +63,7 @@ impl Row {
                                        idx: usize,
                                        value: V)
                                        -> &mut Row where V: Value<'a> {
-        debug_assert_eq!(Ok(()), self.check_column::<V>(idx));
+        debug_assert_eq!(Ok(()), self.check_column_for_write::<V>(idx));
         self.set_columns.insert(idx);
         if value.is_null() {
             self.null_columns.insert(idx);
@@ -79,7 +80,7 @@ impl Row {
     }
 
     pub fn get<'a, V>(&'a self, idx: usize) -> Result<V> where V: Value<'a> {
-        try!(self.check_column::<V>(idx));
+        try!(self.check_column_for_read::<V>(idx));
         if !self.set_columns.get(idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
                                                self.schema.columns()[idx].name(), idx)))
@@ -147,13 +148,32 @@ impl Row {
     }
 
     /// Checks that the column with the specified index has the expected type.
-    fn check_column<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
+    fn check_column_for_write<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
         if idx >= self.schema.columns().len() {
             return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                       idx, self.schema)));
         }
         let column = &self.schema.columns()[idx];
-        if V::data_type() != column.data_type() {
+        if !V::can_write_to(column.data_type()) {
+            return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
+                                                      V::data_type(),
+                                                      column)));
+        }
+        if V::is_nullable() && !column.is_nullable() {
+            return Err(Error::InvalidArgument(format!("nullable type is invalid for column {:?}",
+                                                      column)));
+        }
+        Ok(())
+    }
+
+    /// Checks that the column with the specified index has the expected type.
+    fn check_column_for_read<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
+        if idx >= self.schema.columns().len() {
+            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                                      idx, self.schema)));
+        }
+        let column = &self.schema.columns()[idx];
+        if !V::can_read_from(column.data_type()) {
             return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
                                                       V::data_type(),
                                                       column)));
@@ -178,7 +198,7 @@ impl Row {
                     DataType::Int16 => row.set_unchecked(idx, i16::arbitrary(g)),
                     DataType::Int32 => row.set_unchecked(idx, i32::arbitrary(g)),
                     DataType::Int64 => row.set_unchecked(idx, i64::arbitrary(g)),
-                    DataType::Timestamp => row.set_unchecked(idx, util::us_to_time(i64::arbitrary(g))),
+                    DataType::Timestamp => row.set_unchecked(idx, i64::arbitrary(g)),
                     DataType::Float => row.set_unchecked(idx, f32::arbitrary(g)),
                     DataType::Double => row.set_unchecked(idx, f64::arbitrary(g)),
                     DataType::Binary => row.set_unchecked(idx, Vec::arbitrary(g)),
@@ -288,9 +308,21 @@ impl OperationEncoder {
     pub fn encode_range_split(&mut self, row: &Row) {
         self.encode(OperationType::SPLIT_ROW, row);
     }
-    pub fn encode_range_bound(&mut self, lower: &Row, upper: &Row) {
-        self.encode(OperationType::RANGE_LOWER_BOUND, lower);
-        self.encode(OperationType::RANGE_UPPER_BOUND, upper);
+    pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
+        let (lower_bound, lower_bound_type) = match *lower {
+            RangePartitionBound::Inclusive(ref row) => (row, OperationType::RANGE_LOWER_BOUND),
+            RangePartitionBound::Exclusive(ref row) => (row, OperationType::EXCLUSIVE_RANGE_LOWER_BOUND),
+        };
+        let (upper_bound, upper_bound_type) = match *upper {
+            RangePartitionBound::Inclusive(ref row) => (row, OperationType::INCLUSIVE_RANGE_UPPER_BOUND),
+            RangePartitionBound::Exclusive(ref row) => (row, OperationType::RANGE_UPPER_BOUND),
+        };
+
+        self.encode(lower_bound_type, &lower_bound);
+        self.encode(upper_bound_type, &upper_bound);
+    }
+    pub fn encode_range_partition_split(&mut self, split: &Row) {
+        self.encode(OperationType::SPLIT_ROW, split);
     }
 
     fn encode(&mut self, op_type: OperationType, row: &Row) {

@@ -11,6 +11,12 @@ use util::{time_to_us, us_to_time};
 pub trait Value<'a>: Sized {
     #[doc(hidden)]
     fn data_type() -> DataType;
+    /// Returns `true` if the value type can be read from a column of the provided data type.
+    #[doc(hidden)]
+    fn can_read_from(data_type: DataType) -> bool;
+    /// Returns `true` if the value type can be written to a column of the provided data type.
+    #[doc(hidden)]
+    fn can_write_to(data_type: DataType) -> bool;
     #[doc(hidden)]
     fn size() -> usize;
     #[doc(hidden)]
@@ -30,6 +36,8 @@ pub trait Value<'a>: Sized {
 }
 
 impl <'a> Value<'a> for bool {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Bool }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Bool }
     fn data_type() -> DataType { DataType::Bool }
     fn size() -> usize { 1 }
     fn copy_data(&self, dest: &mut [u8]) { dest[0] = if *self { 1 } else { 0 } }
@@ -37,6 +45,8 @@ impl <'a> Value<'a> for bool {
 }
 
 impl <'a> Value<'a> for i8 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Int8 }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Int8 }
     fn data_type() -> DataType { DataType::Int8 }
     fn size() -> usize { 1 }
     fn copy_data(&self, dest: &mut [u8]) { dest[0] = *self as u8}
@@ -44,6 +54,8 @@ impl <'a> Value<'a> for i8 {
 }
 
 impl <'a> Value<'a> for i16 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Int16 }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Int16 }
     fn data_type() -> DataType { DataType::Int16 }
     fn size() -> usize { 2 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i16(dest, *self) }
@@ -51,6 +63,8 @@ impl <'a> Value<'a> for i16 {
 }
 
 impl <'a> Value<'a> for i32 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Int32 }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Int32 }
     fn data_type() -> DataType { DataType::Int32 }
     fn size() -> usize { 4 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i32(dest, *self) }
@@ -58,6 +72,8 @@ impl <'a> Value<'a> for i32 {
 }
 
 impl <'a> Value<'a> for i64 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Int64 || data_type == DataType::Timestamp}
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Int64 || data_type == DataType::Timestamp }
     fn data_type() -> DataType { DataType::Int64 }
     fn size() -> usize { 8 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, *self) }
@@ -65,6 +81,8 @@ impl <'a> Value<'a> for i64 {
 }
 
 impl <'a> Value<'a> for SystemTime {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Timestamp || data_type == DataType::Int64 }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Timestamp || data_type == DataType::Int64 }
     fn data_type() -> DataType { DataType::Timestamp }
     fn size() -> usize { 8 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, time_to_us(self)) }
@@ -72,6 +90,8 @@ impl <'a> Value<'a> for SystemTime {
 }
 
 impl <'a> Value<'a> for f32 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Float }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Float }
     fn data_type() -> DataType { DataType::Float }
     fn size() -> usize { 4 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_f32(dest, *self) }
@@ -79,6 +99,8 @@ impl <'a> Value<'a> for f32 {
 }
 
 impl <'a> Value<'a> for f64 {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Double }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Double }
     fn data_type() -> DataType { DataType::Double }
     fn size() -> usize { 8 }
     fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_f64(dest, *self) }
@@ -86,6 +108,9 @@ impl <'a> Value<'a> for f64 {
 }
 
 impl <'a> Value<'a> for &'a [u8] {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Binary ||
+                                                    data_type == DataType::String }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Binary }
     fn data_type() -> DataType { DataType::Binary }
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
@@ -94,6 +119,9 @@ impl <'a> Value<'a> for &'a [u8] {
 }
 
 impl <'a> Value<'a> for Vec<u8> {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Binary ||
+                                                    data_type == DataType::String }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Binary }
     fn data_type() -> DataType { DataType::Binary }
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
@@ -102,6 +130,9 @@ impl <'a> Value<'a> for Vec<u8> {
 }
 
 impl <'a> Value<'a> for &'a str {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::String }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::String ||
+                                                   data_type == DataType::Binary }
     fn data_type() -> DataType { DataType::String }
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
@@ -110,6 +141,9 @@ impl <'a> Value<'a> for &'a str {
 }
 
 impl <'a> Value<'a> for String {
+    fn can_read_from(data_type: DataType) -> bool { data_type == DataType::String }
+    fn can_write_to(data_type: DataType) -> bool { data_type == DataType::String ||
+                                                   data_type == DataType::Binary }
     fn data_type() -> DataType { DataType::String }
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
@@ -119,6 +153,8 @@ impl <'a> Value<'a> for String {
 
 impl <'a, V> Value<'a> for Option<V> where V: Value<'a> {
     fn data_type() -> DataType { V::data_type() }
+    fn can_read_from(data_type: DataType) -> bool { V::can_read_from(data_type) }
+    fn can_write_to(data_type: DataType) -> bool { V::can_write_to(data_type) }
     fn size() -> usize { V::size() }
     fn is_var_len() -> bool { V::is_var_len() }
     fn is_nullable() -> bool { true }
