@@ -29,8 +29,7 @@ pub type Loop = EventLoop<MessengerHandler>;
 pub enum Command {
     Shutdown,
     Send(Rpc),
-    DelayedSend((Duration, Rpc)),
-    Timer((Duration, Box<FnMut() + Send>)),
+    Timer((Duration, Box<TimerCallback>)),
 }
 
 impl fmt::Debug for Command {
@@ -38,31 +37,35 @@ impl fmt::Debug for Command {
         match *self {
             Command::Shutdown => write!(f, "Command::Shutdown"),
             Command::Send(ref rpc) => write!(f, "Command::Send({:?})", rpc),
-            Command::DelayedSend((ref delay, ref rpc)) => write!(f, "Command::DelayedSend({:?}, {:?})", delay, rpc),
             Command::Timer((ref duration, _)) => write!(f, "Command::Timer({:?})", duration),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Essentially FnBox...
+pub trait TimerCallback: Send {
+    fn callback(self: Box<Self>);
+}
+
+impl <F> TimerCallback for F where F: FnOnce() + Send {
+    fn callback(self: Box<F>) {
+        (*self)()
+    }
+}
+
 pub enum TimeoutKind {
 
     /// Active while a connection is reset. After expiration, the connection creates a new socket
     /// and attempts negotiation.
-    ConnectionReset,
+    ConnectionReset(Token),
 
     /// An RPC timeout.
     ///
     /// This timeout tracks an RPC timeout deadline. When it expires, the RPC should be timed out.
-    Rpc(usize),
-
-    /// A delayed RPC send.
-    ///
-    /// This timeout tracks the send delay of an RPC. When it expires, the RPC should be sent.
-    DelayedRpc(usize),
+    Rpc(Token, usize),
 
     /// A general timer timeout.
-    Timer,
+    Timer(Box<TimerCallback>),
 }
 
 struct Inner {
@@ -94,14 +97,6 @@ impl Messenger {
         })
     }
 
-    pub fn delayed_send(&self, delay: Duration, mut rpc: Rpc) {
-        if Instant::now() + delay > rpc.deadline {
-            rpc.fail(Error::TimedOut);
-        } else {
-            rpc.response.clear();
-            self.inner.channel.send(Command::DelayedSend((delay, rpc))).unwrap();
-        }
-    }
 
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
     pub fn send(&self, mut rpc: Rpc) {
@@ -109,6 +104,18 @@ impl Messenger {
         debug_assert!(rpc.callback.is_some());
         rpc.response.clear();
         self.inner.channel.send(Command::Send(rpc)).unwrap();
+    }
+
+    pub fn delayed_send(&self, delay: Duration, rpc: Rpc) {
+        let deadline = rpc.deadline.clone();
+        if Instant::now() + delay > deadline {
+            rpc.fail(Error::TimedOut);
+            return;
+        }
+
+        let messenger = self.clone();
+        let rpc: Rpc = rpc;
+        self.timer(delay, Box::new(move || { messenger.send(rpc) }));
     }
 
     pub fn send_sync(&self, mut rpc: Rpc) -> (Result<()>, Rpc) {
@@ -119,14 +126,13 @@ impl Messenger {
         recv.recv().unwrap()
     }
 
-    pub fn timer(&self, duration: Duration, callback: Box<FnMut() + Send>) {
+    pub fn timer(&self, duration: Duration, callback: Box<TimerCallback>) {
         self.inner.channel.send(Command::Timer((duration, callback))).unwrap();
     }
 }
 
 pub struct MessengerHandler {
     connection_slab: Slab<Connection, Token>,
-    timer_slab: Slab<Box<FnMut()>, Token>,
     index: HashMap<SocketAddr, Token>,
     cxn_options: Rc<ConnectionOptions>,
 }
@@ -135,7 +141,6 @@ impl MessengerHandler {
     fn new() -> MessengerHandler {
         MessengerHandler {
             connection_slab: Slab::new(128),
-            timer_slab: Slab::new(128),
             index: HashMap::new(),
             cxn_options: Rc::new(ConnectionOptions::default()),
         }
@@ -144,15 +149,13 @@ impl MessengerHandler {
 
 impl fmt::Debug for MessengerHandler {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MessengerHandler {{ connections: {}, timers: {} }}",
-               self.connection_slab.count(),
-               self.timer_slab.count())
+        write!(f, "MessengerHandler {{ connections: {} }}", self.connection_slab.count())
     }
 }
 
 impl Handler for MessengerHandler {
 
-    type Timeout = (Token, TimeoutKind);
+    type Timeout = TimeoutKind;
     type Message = Command;
 
     fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
@@ -181,58 +184,39 @@ impl Handler for MessengerHandler {
                 });
                 self.connection_slab[token].send_rpc(event_loop, token, rpc);
             },
-            Command::DelayedSend((delay, rpc)) => {
-                let token = self.index.get(&rpc.addr).cloned().unwrap_or_else(|| {
-                    // No open connection for the socket address; create a new one.
-                    if !self.connection_slab.has_remaining() {
-                        let count = self.connection_slab.count();
-                        self.connection_slab.grow(count / 2);
-                    }
-                    let cxn_options = self.cxn_options.clone();
-                    let token = self.connection_slab
-                                    .insert_with(|token| Connection::new(event_loop,
-                                                                         token,
-                                                                         rpc.addr,
-                                                                         cxn_options))
-                                    .unwrap();
-                    self.index.insert(rpc.addr, token);
-                    token
-                });
-                self.connection_slab[token].send_delayed_rpc(event_loop, token, rpc, delay);
-            },
             Command::Timer((duration, callback)) => {
-                if !self.timer_slab.has_remaining() {
-                    let count = self.timer_slab.count();
-                    self.timer_slab.grow(count / 2);
-                }
-                let token = match self.timer_slab.insert(callback) {
-                    Ok(token) => token,
-                    Err(_) => unreachable!()
-                };
-                event_loop.timeout_ms((token, TimeoutKind::Timer), duration_to_ms(&duration)).unwrap();
+                event_loop.timeout_ms(TimeoutKind::Timer(callback),
+                                      duration_to_ms(&duration)).unwrap();
             }
         }
     }
 
-    fn timeout(&mut self, event_loop: &mut Loop, (token, timeout): (Token, TimeoutKind)) {
+    fn timeout(&mut self, event_loop: &mut Loop, timeout: TimeoutKind) {
+
         match timeout {
-            TimeoutKind::Timer => self.timer_slab.remove(token).unwrap()(),
-            _ => {
-                // Connection timeout. A note on the unwrap calls below: the connection carefully
-                // cancels all outstanding timers before asking to be torn down in
-                // Connection#timeout, so if a connection timer fires, the connection must still
-                // exist.
+            TimeoutKind::ConnectionReset(token) => {
                 let drop_cxn = self.connection_slab
                                    .get_mut(token)
                                    .unwrap()
-                                   .timeout(event_loop, token, timeout);
+                                   .reset_timeout(event_loop, token);
                 if drop_cxn {
                     let cxn = self.connection_slab.remove(token).unwrap();
                     let removed_token = self.index.remove(cxn.addr()).unwrap();
                     assert!(removed_token == token);
                     debug!("{:?}: closing", cxn);
                 }
-            }
+            },
+            TimeoutKind::Rpc(token, call_id) => {
+                // Connection RPC timeout. A note on the unwrap calls below: the connection
+                // carefully cancels all outstanding timers before asking to be torn down in
+                // Connection#timeout, so if a connection timer fires, the connection must still
+                // exist.
+                self.connection_slab
+                    .get_mut(token)
+                    .unwrap()
+                    .rpc_timeout(call_id);
+            },
+            TimeoutKind::Timer(callback) => callback.callback(),
         }
     }
 }

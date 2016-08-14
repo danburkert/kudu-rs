@@ -17,6 +17,14 @@ impl <T> QueueMap<T> {
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> QueueMap<T> {
+        QueueMap {
+            queue: VecDeque::with_capacity(capacity),
+            next_key: 0,
+            len: 0,
+        }
+    }
+
     pub fn push(&mut self, value: T) -> usize {
         self.queue.push_back(Some(value));
         let key = self.next_key;

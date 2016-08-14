@@ -1,4 +1,3 @@
-use std::cmp;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::mem;
@@ -10,6 +9,7 @@ use std::time::{Duration, Instant};
 use protobuf::Message;
 use backoff::Backoff;
 use dns::resolve_hosts_async;
+use queue_map::QueueMap;
 use rpc::{
     Callback,
     Messenger,
@@ -87,8 +87,7 @@ impl MasterProxy {
 
         let proxy = MasterProxy {
             inner: Arc::new(Inner {
-                leader: Mutex::new(Leader::Unknown{ queue: Vec::with_capacity(QUEUE_LEN),
-                                                    deadline: None }),
+                leader: Mutex::new(Leader::Unknown(QueueMap::with_capacity(QUEUE_LEN))),
                 masters: Mutex::new(addrs),
                 messenger: messenger,
             }),
@@ -112,7 +111,7 @@ impl MasterProxy {
     pub fn leader(&self) -> Option<SocketAddr> {
         match *self.inner.leader.lock() {
             Leader::Known(leader) => Some(leader),
-            Leader::Unknown{ .. } => None,
+            Leader::Unknown(_) => None,
         }
     }
 
@@ -131,38 +130,56 @@ impl MasterProxy {
 
     /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
     /// leader is discovered.
-    fn send_to_leader(&self, mut rpc: Rpc) {
+    fn send_to_leader(&self, rpc: Rpc) {
+        /// Returns the queue index if the RPC is queued.
+        fn inner(master_proxy: &MasterProxy, mut rpc: Rpc) -> Option<usize> {
+            // Keep critical section short by performing the send outside the lock.
+            let leader_addr = match *master_proxy.inner.leader.lock() {
+                Leader::Known(addr) => Some(addr),
+                Leader::Unknown(ref mut queue) => {
+                    if queue.len() < QUEUE_LEN {
+                        return Some(queue.push(rpc));
+                    }
+                    None
+                },
+            };
+            if let Some(leader_addr) = leader_addr {
+                rpc.addr = leader_addr;
+                master_proxy.inner.messenger.send(rpc);
+            } else {
+                rpc.fail(Error::Backoff);
+            }
+            None
+        }
+
+        // This control flow is a bit funky to keep the critical section short and still apease the
+        // borrow checker.
+
         let now = Instant::now();
         // Make sure that the duration_since call below doesn't panic.
         if rpc.timed_out(now) {
             rpc.fail(Error::TimedOut);
             return;
         }
+        let duration = rpc.deadline.duration_since(now);
 
-        let mut timer_deadline = None;
-        match *self.inner.leader.lock() {
-            Leader::Known(addr) => {
-                rpc.addr = addr;
-                self.inner.messenger.send(rpc);
-            },
-            Leader::Unknown{ ref mut queue, ref mut deadline } => {
-                trace!("queueing rpc: {:?}", rpc);
-                *deadline = match *deadline {
-                    Some(existing) if existing < rpc.deadline => Some(existing),
-                    _ => {
-                        timer_deadline = Some(rpc.deadline);
-                        Some(rpc.deadline)
-                    }
-                };
-                queue.push(rpc);
-            },
-        }
-
-        if let Some(deadline) = timer_deadline {
-            let master = self.clone();
-            self.inner.messenger.timer(deadline.duration_since(now), Box::new(move || {
-                master.timeout_queued_rpcs();
+        if let Some(queue_idx) = inner(self, rpc) {
+            let master_proxy = self.clone();
+            self.inner.messenger.timer(duration, Box::new(move || {
+                master_proxy.timeout_queued_rpc(queue_idx)
             }));
+        }
+    }
+
+    /// Times out the queued RPC with the given index.
+    fn timeout_queued_rpc(&self, queue_idx: usize) {
+        // Keep the critical section short.
+        let mut rpc = None;
+        if let Leader::Unknown(ref mut queue) = *self.inner.leader.lock() {
+            rpc = queue.remove(queue_idx);
+        }
+        if let Some(rpc) = rpc {
+            rpc.fail(Error::TimedOut);
         }
     }
 
@@ -173,12 +190,12 @@ impl MasterProxy {
             let mut master = self.inner.leader.lock();
             match *master {
                 // Do nothing if the cached leader has already been refreshed.
-                Leader::Unknown{ .. } => return,
+                Leader::Unknown(_) => return,
                 Leader::Known(leader) if leader != stale_leader => return,
                 // Otherwise fall through to cache eviction and refresh.
                 _ => (),
             }
-            *master = Leader::Unknown { queue: Vec::new(), deadline: None };
+            *master = Leader::Unknown(QueueMap::with_capacity(QUEUE_LEN));
         }
         self.refresh_leader_cache();
     }
@@ -221,6 +238,9 @@ impl MasterProxy {
 
         let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
         rpc.cancel = Some(cancel);
+        // This RPC can't be retried at another replica, so the RPC layer should retry it
+        // automatically.
+        rpc.fail_fast = false;
         let proxy = self.clone();
         rpc.callback = Some(Box::new(move |result, rpc: Rpc| {
             proxy.handle_list_masters_response(result, rpc, backoff);
@@ -336,7 +356,6 @@ impl MasterProxy {
             let mut leader = self.inner.leader.lock();
             if cancel.compare_and_swap(false, true, Ordering::Relaxed) {
                 // Another replica has already claimed to be the leader.
-                debug!("another replica already claimed it!");
                 return;
             }
 
@@ -351,8 +370,8 @@ impl MasterProxy {
         }
 
         match leader {
-            Leader::Unknown { queue, .. } => {
-                for mut rpc in queue {
+            Leader::Unknown(mut queue) => {
+                while let Some((_, mut rpc)) = queue.pop() {
                     rpc.addr = addr;
                     self.inner.messenger.send(rpc);
                 }
@@ -364,64 +383,20 @@ impl MasterProxy {
                                                      prev_addr, &addr),
         }
     }
-
-    /// Times out all queued rpcs.
-    fn timeout_queued_rpcs(&self) {
-        let now = Instant::now();
-        let mut next_deadline = None;
-
-        let mut retained_rpcs = Vec::with_capacity(QUEUE_LEN);
-        let mut failed_rpcs = Vec::new();
-
-        match *self.inner.leader.lock() {
-            Leader::Unknown { ref mut queue, ref mut deadline } => {
-                for rpc in queue.drain(..) {
-                    if rpc.cancelled() || rpc.timed_out(now) {
-                        failed_rpcs.push(rpc);
-                    } else {
-                        next_deadline = Some(next_deadline.map_or(rpc.deadline, |t| cmp::min(t, rpc.deadline)));
-                        retained_rpcs.push(rpc);
-                    }
-                }
-                *queue = retained_rpcs;
-                *deadline = next_deadline;
-            },
-            Leader::Known(_) => (),
-        }
-
-        for rpc in failed_rpcs {
-            if rpc.cancelled() {
-                rpc.fail(Error::Cancelled);
-            } else {
-                rpc.fail(Error::TimedOut);
-            }
-        }
-
-        if let Some(deadline) = next_deadline {
-            let master = self.clone();
-            self.inner.messenger.timer(deadline.duration_since(now), Box::new(move || {
-                master.timeout_queued_rpcs();
-            }));
-        }
-    }
 }
 
 enum Leader {
     /// The known leader.
     Known(SocketAddr),
     /// The leader is unknown, RPCs must be queued until the leader is discovered.
-    /// holds the queue of RPCs, and the next registered timeout deadline.
-    Unknown {
-        queue: Vec<Rpc>,
-        deadline: Option<Instant>,
-    }
+    Unknown(QueueMap<Rpc>),
 }
 
 impl Leader {
     fn is_known(&self) -> bool {
         match *self {
             Leader::Known(_) => true,
-            Leader::Unknown { .. } => false,
+            Leader::Unknown(_) => false,
         }
     }
 }

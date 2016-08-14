@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
@@ -5,7 +6,7 @@ use std::i32;
 use std::io::{self, ErrorKind, Write};
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use Error;
 use Result;
@@ -108,18 +109,37 @@ struct DelayedRpc {
     delay: Instant,
 }
 
-/// `Connection` is a state machine that manages connections to a Kudu server.
+/// `Connection` is a state machine that manages a TCP socket connection to a remote Kudu server.
 ///
-/// A connection internally manages a single TCP connection to the server, and keeps track of
-/// in-flight RPCs.
+/// The [Kudu RPC protocol](https://github.com/cloudera/kudu/blob/master/docs/design-docs/rpc.md)
+/// allows multiple RPCs to be in-flight on a single connection at once, and allows responses to be
+/// returned out of order. The `Connection` handles queuing, serializing, sending, receiving,
+/// deserializing, and completing RPCs.
 ///
-/// If an error occurs that requires reseting the socket connection to the server (e.g. a
-/// [de]serialization failure, or a fatal error response), the connection will automatically
-/// attempt to reconnect after waiting for a backoff period. Consecutive retries will be delayed
-/// with an exponentially increasing backoff with jitter. In-flight RPCs will be failed when the
-/// connection is reset.
+/// # Connection Errors
 ///
-/// If the connection is reset and has no queued RPCs, then it will automatically be shut down.
+/// If an error occurs that requires reseting the socket connection to the server (e.g. a socket
+/// error, a [de]serialization failure, or a fatal error response), the connection will
+/// automatically attempt to reconnect after waiting for a backoff period. Consecutive retries
+/// without a succesful RPC will be delayed with an exponentially increasing backoff with jitter.
+/// See `Connection::reset()` for details.
+///
+/// When the connection is reset, all fail-fast RPCs will be failed with the error which caused the
+/// reset. During the reconnection backoff period, new fail-fast RPCs will be failed immediately
+/// instead of being queued.
+///
+/// # Back Pressure & Flow Control
+///
+/// Internally, the connection holds a queue of pending and in-flight `Rpc`s. The queue size is
+/// limited by the `ConnectionOptions::rpc_queue_len` option. If the queue is full, then subsequent
+/// attempts to send an `Rpc` will fail with `Error::Backoff`.
+///
+/// The Kudu Tablet Server has a special error type, `Throttled`, to indicate that the server is
+/// under memory pressure and is currently unable to handle RPCs. When an RPC fails due to
+/// throttling, the `Connection` has a mechanism to artificially limit the in-flight queue, thus
+/// reducing load to the server. This backoff mechanism is a cooperative effort between the RPC
+/// sender and the `Connection`, since the error message is not part of the RPC header, and
+/// therefore is not detectable by `Connection`. See `Connection::throttle()` for details.
 pub struct Connection {
     /// The connection options.
     options: Rc<ConnectionOptions>,
@@ -134,8 +154,6 @@ pub struct Connection {
     send_queue: QueueMap<QueuedRpc>,
     /// RPCs which have been sent and are awaiting response.
     recv_queue: HashMap<u32, QueuedRpc>,
-    /// Queue of RPCs to send after a delay.
-    delay_queue: QueueMap<DelayedRpc>,
 
     /// RPC request header, kept internally to reduce memory allocations.
     request_header: rpc_header::RequestHeader,
@@ -148,14 +166,19 @@ pub struct Connection {
     send_buf: Buf,
 
     /// Backoff tracker.
-    backoff: Backoff,
+    reset_backoff: Backoff,
+
+    /// Maximum size of recv_queue. The throttle is halved every time `Connection::throttle` is
+    /// called (which should be in response to a tablet server `Throttled` error), increased by
+    /// one for every successful RPC, and bounded by `ConnectionOptions::rpc_queue_len`.
+    throttle: u32,
 }
 
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Connection {{ state: {:?}, addr: {}, queue (tx/rx/d): {}/{}/{}, buf (tx/rx): {}/{} }}",
+        write!(f, "Connection {{ state: {:?}, addr: {}, queue (tx/rx): {}/{}, buf (tx/rx): {}/{} }}",
                self.state, self.addr, self.send_queue.len(), self.recv_queue.len(),
-               self.delay_queue.len(), self.send_buf.len(), self.recv_buf.len())
+               self.send_buf.len(), self.recv_buf.len())
     }
 }
 
@@ -169,7 +192,8 @@ impl Connection {
                addr: SocketAddr,
                options: Rc<ConnectionOptions>)
                -> Connection {
-        let backoff = Backoff::with_duration_range(options.backoff_initial, options.backoff_max);
+        let reset_backoff = Backoff::with_duration_range(options.backoff_initial, options.backoff_max);
+        let throttle = options.rpc_queue_len;
         let mut connection = Connection {
             options: options,
             state: ConnectionState::Initiating,
@@ -177,12 +201,12 @@ impl Connection {
             addr: addr,
             send_queue: QueueMap::new(),
             recv_queue: HashMap::new(),
-            delay_queue: QueueMap::new(),
             request_header: rpc_header::RequestHeader::new(),
             response_header: rpc_header::ResponseHeader::new(),
             recv_buf: Buf::new(),
             send_buf: Buf::new(),
-            backoff: backoff,
+            reset_backoff: reset_backoff,
+            throttle: throttle,
         };
         connection.connect(event_loop, token);
         connection
@@ -240,12 +264,13 @@ impl Connection {
             return rpc.fail(Error::Cancelled);
         } else if rpc.timed_out(now) {
             return rpc.fail(Error::TimedOut);
-        } else if self.queue_len() > self.options.rpc_queue_len as usize {
+        } else if self.queue_len() > self.options.rpc_queue_len as usize ||
+                  self.queue_len() > self.throttle as usize {
             return rpc.fail(Error::Backoff);
         }
 
         self.send_queue.push_with(|call_id| {
-            let timer = event_loop.timeout_ms((token, TimeoutKind::Rpc(call_id)),
+            let timer = event_loop.timeout_ms(TimeoutKind::Rpc(token, call_id),
                                               duration_to_ms(&rpc.deadline.duration_since(now)));
             QueuedRpc { rpc: rpc, timer: timer.unwrap() }
         });
@@ -263,72 +288,33 @@ impl Connection {
         }
     }
 
-    /// Send an RPC to the Kudu server after waiting for a delay period.
-    pub fn send_delayed_rpc(&mut self,
-                            event_loop: &mut Loop,
-                            token: Token,
-                            rpc: Rpc,
-                            delay: Duration) {
-        trace!("{:?}: queueing delayed rpc: {:?}, delay: {:?}", self, rpc, delay);
-        let now = Instant::now();
-        if rpc.cancelled() {
-            return rpc.fail(Error::Cancelled);
-        } else if rpc.timed_out(now + delay) {
-            return rpc.fail(Error::TimedOut);
-        } else if self.queue_len() > self.options.rpc_queue_len as usize {
-            return rpc.fail(Error::Backoff);
-        }
-
-        self.delay_queue.push_with(|id| {
-            let timer = event_loop.timeout_ms((token, TimeoutKind::DelayedRpc(id)),
-                                              duration_to_ms(&delay))
-                                  .unwrap();
-            DelayedRpc {
-                rpc: rpc,
-                timer: timer,
-                delay: now + delay,
-            }
-        });
+    pub fn rpc_timeout(&mut self, call_id: usize) {
+        // No need to cancel the timeout here, since it fired.
+        self.send_queue
+            .remove(call_id)
+            .or_else(|| self.recv_queue.remove(&(call_id as u32)))
+            .expect("timed out RPC not found in send or recv queue")
+            .rpc
+            .fail(Error::TimedOut);
     }
 
-    /// Notifies the connection that the timeout has fired. Returns `true` if the connection should
-    /// be closed, or `false` if it should continue.
-    pub fn timeout(&mut self, event_loop: &mut Loop, token: Token, kind: TimeoutKind) -> bool {
-        trace!("{:?}: {:?} timeout", self, kind);
-
-        match kind {
-            TimeoutKind::ConnectionReset => {
-                assert!(self.state == ConnectionState::Reset, "{:?}: illegal {:?}", self, kind);
-                if self.queue_len() == 0 {
-                    // If the queue is empty then tear down the connection. This prevents a
-                    // connection to a permanently partitioned tablet server from attempting to
-                    // reconnect indefinitely. Eventually all RPCs will timeout and the retries
-                    // will cease.
-                    return true;
-                }
-                self.connect(event_loop, token);
-            },
-            TimeoutKind::Rpc(call_id) => {
-                // No need to cancel the timeout here, since it fired.
-                self.send_queue
-                    .remove(call_id)
-                    .or_else(|| self.recv_queue.remove(&(call_id as u32)))
-                    .expect("timed out RPC not found in send or recv queue")
-                    .rpc
-                    .fail(Error::TimedOut);
-            },
-            TimeoutKind::DelayedRpc(id) => {
-                // No need to cancel the timeout here, since it fired.
-                let rpc = self.delay_queue
-                              .remove(id)
-                              .expect("delayed RPC not found in delay queue")
-                              .rpc;
-                self.send_rpc(event_loop, token, rpc);
-            },
-            TimeoutKind::Timer => unreachable!(),
+    pub fn reset_timeout(&mut self, event_loop: &mut Loop, token: Token) -> bool {
+        assert!(self.state == ConnectionState::Reset, "{:?}: illegal reset timeout", self);
+        if self.queue_len() == 0 {
+            // If the queue is empty then tear down the connection. This prevents a
+            // connection to a permanently partitioned tablet server from attempting to
+            // reconnect indefinitely. Eventually all RPCs will timeout and the retries
+            // will cease.
+            //
+            // TODO: does this need to cancel all outstanding timers?
+            return true;
         }
-
+        self.connect(event_loop, token);
         false
+    }
+
+    pub fn throttle(&mut self) {
+        self.throttle = cmp::min(self.throttle, self.options.rpc_queue_len) / 2;
     }
 
     /// Connects an inactive connection to the server.
@@ -346,6 +332,18 @@ impl Connection {
             // Required on Windows for a future `connect_overlapped` operation to be
             // executed successfully.
             if cfg!(windows) {
+                /// Copied from mio.
+                fn inaddr_any(other: &SocketAddr) -> SocketAddr {
+                    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+                    match *other {
+                        SocketAddr::V4(..) => {
+                            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
+                        }
+                        SocketAddr::V6(..) => {
+                            SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 0)
+                        }
+                    }
+                }
                 try!(stream_builder.bind(&inaddr_any(&cxn.addr)));
             }
             let stream = try!(stream_builder.to_tcp_stream());
@@ -391,7 +389,7 @@ impl Connection {
 
     /// Resets the connection following an error.
     fn reset(&mut self, event_loop: &mut Loop, token: Token, error: Error) {
-        let backoff_ms = self.backoff.next_backoff_ms();
+        let backoff_ms = self.reset_backoff.next_backoff_ms();
         warn!("{:?}: reset, error: {}, backoff: {}ms", self, error, backoff_ms);
         self.state = ConnectionState::Reset;
         self.stream.take();
@@ -419,12 +417,7 @@ impl Connection {
             fail(rpc);
         }
 
-        while let Some((_, DelayedRpc { rpc, timer, .. })) = self.delay_queue.pop() {
-            event_loop.clear_timeout(timer);
-            fail(rpc);
-        }
-
-        event_loop.timeout_ms((token, TimeoutKind::ConnectionReset), backoff_ms).unwrap();
+        event_loop.timeout_ms(TimeoutKind::ConnectionReset(token), backoff_ms).unwrap();
     }
 
     /// Writes the message to the send buffer with a request header.
@@ -518,7 +511,7 @@ impl Connection {
             SaslState::SUCCESS => {
                 try!(self.buffer_connection_context());
                 self.state = ConnectionState::Connected;
-                self.backoff.reset();
+                self.reset_backoff.reset();
 
                 // Optimistically flush the connection context and send any queued messages. The
                 // connection has not necessarily received a writeable event at this point, but it
@@ -632,6 +625,7 @@ impl Connection {
                         let QueuedRpc { rpc, timer } = entry.remove();
                         event_loop.clear_timeout(timer);
                         rpc.complete();
+                        self.throttle += 1;
                     }
                 },
                 _ => unreachable!("{:?}: recv"),
@@ -642,6 +636,11 @@ impl Connection {
         Ok(())
     }
 
+    /// Returns true if there are messages to send, and the connection is not throttled.
+    fn can_send(&self) -> bool {
+        !self.send_queue.is_empty() && self.recv_queue.len() < self.throttle as usize
+    }
+
     /// Send messages until either there are no more messages to send, or the socket can not accept
     /// any more writes. If an error is returned, the connection should be torn down.
     fn send(&mut self, event_loop: &mut Loop) -> Result<()> {
@@ -649,8 +648,8 @@ impl Connection {
         assert_eq!(self.state, ConnectionState::Connected);
 
         let now = Instant::now();
-        while !self.send_buf.is_empty() || !self.send_queue.is_empty() {
-            while self.send_buf.len() < 4096 && !self.send_queue.is_empty() {
+        while !self.send_buf.is_empty() || self.can_send() {
+            while self.send_buf.len() < 4096 && self.can_send() {
                 let (call_id, QueuedRpc { rpc, timer }) = self.send_queue.pop().unwrap();
 
                 if rpc.cancelled() {
@@ -721,7 +720,7 @@ impl Connection {
 
     /// Returns the number of queued RPCs.
     fn queue_len(&self) -> usize {
-        self.send_queue.len() + self.recv_queue.len() + self.delay_queue.len()
+        self.send_queue.len() + self.recv_queue.len()
     }
 
     fn poll_opt(&self) -> PollOpt {
@@ -736,27 +735,10 @@ impl Connection {
             if !self.send_buf.is_empty() {
                 event_set = event_set | EventSet::writable();
             }
-        } else if !self.send_buf.is_empty() || !self.send_queue.is_empty() {
+        } else if !self.send_buf.is_empty() || self.can_send() {
             event_set = event_set | EventSet::writable();
         }
 
         event_set
-    }
-}
-
-/// Copied from mio.
-fn inaddr_any(other: &SocketAddr) -> SocketAddr {
-    use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
-    match *other {
-        SocketAddr::V4(..) => {
-            let any = Ipv4Addr::new(0, 0, 0, 0);
-            let addr = SocketAddrV4::new(any, 0);
-            SocketAddr::V4(addr)
-        }
-        SocketAddr::V6(..) => {
-            let any = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0);
-            let addr = SocketAddrV6::new(any, 0, 0, 0);
-            SocketAddr::V6(addr)
-        }
     }
 }

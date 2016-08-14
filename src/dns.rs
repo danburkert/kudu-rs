@@ -73,7 +73,6 @@ mod tests {
 
     use std::net::ToSocketAddrs;
     use super::*;
-    use super::LOCAL_ADDRS;
 
     #[test]
     fn test_is_local_addr() {

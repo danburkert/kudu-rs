@@ -36,6 +36,7 @@ macro_rules! rpc {
                 sidecars: Vec::new(),
                 callback: None,
                 cancel: None,
+                fail_fast: true,
             }
         }
     };
