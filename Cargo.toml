@@ -12,21 +12,22 @@ byteorder = "0.5"
 chrono = "0.2"
 ieee754 = "0.2"
 ifaces = "0.0"
+itertools = "0.4"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
-lazy_static = "0.1"
+lazy_static = "0.2"
 log = "0.3"
 mio = "0.5"
 net2 = "0.2"
 netbuf = "0.3"
 parking_lot = "0.2"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
-quickcheck = { version = "0.2", optional = true }
+quickcheck = { version = "0.3", optional = true }
 rand = "0.3.14"
 slab = "0.1"
-uuid = "0.2"
+uuid = "0.3"
 vec_map = "0.6"
 
 [dev-dependencies]
 tempdir = "0.3"
 env_logger = "*"
-quickcheck = "0.2"
+quickcheck = "0.3"

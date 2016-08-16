@@ -4,11 +4,13 @@ use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
-use protobuf::Message;
+use dns;
 use backoff::Backoff;
-use dns::resolve_hosts_async;
+use itertools::Itertools;
+use protobuf::Message;
 use queue_map::QueueMap;
 use rpc::{
     Callback,
@@ -25,7 +27,6 @@ use Result;
 use Status;
 
 use parking_lot::Mutex;
-use kudu_pb::common::HostPortPB;
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 use kudu_pb::master::{
     AlterTableRequestPB, AlterTableResponsePB,
@@ -49,15 +50,7 @@ const QUEUE_LEN: usize = 256;
 
 /// The leader refresh ListMaster RPCs should have a long enough timeout that non-failed masters
 /// can respond, but short enough that the RPCs don't stay queued forever.
-const LEADER_REFRESH_TIMEOUT_SECS: u64 = 10;
-
-/// The `MasterProxy` tracks the current leader master, and proxies RPCs to it. If any RPC fails
-/// with `MasterErrorCode::NotTheLeader`, the cached leader is flushed (if it has not happened
-/// already), and the RPC is retried after discovering the new leader.
-#[derive(Clone)]
-pub struct MasterProxy {
-    inner: Arc<Inner>,
-}
+const LEADER_REFRESH_TIMEOUT_SECS: u64 = 60;
 
 macro_rules! impl_master_rpc {
     ($fn_name:ident, $request_type:ident, $response_type:ident) => {
@@ -67,49 +60,60 @@ macro_rules! impl_master_rpc {
                 let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
                 let mut rpc = master::$fn_name(addr, deadline, request);
                 rpc.callback = Some(Box::new(CB(self.clone(), cb,
-                                                Backoff::with_duration_range(8, 4096),
+                                                Backoff::with_duration_range(8, 30_000),
                                                 PhantomData::<$response_type>)));
                 self.send_to_leader(rpc);
             }
     };
 }
 
+/// The `MasterProxy` tracks the current leader master, and proxies RPCs to it. If any RPC fails
+/// with `MasterErrorCode::NotTheLeader`, the cached leader is flushed (if it has not happened
+/// already), and the RPC is retried after discovering the new leader.
+#[derive(Clone)]
+pub struct MasterProxy {
+    inner: Arc<Mutex<Inner>>,
+    messenger: Messenger,
+}
+
+/// Container for master metadata.
+struct Inner {
+    leader: Leader,
+    replicas: HashSet<SocketAddr>,
+}
+
 impl MasterProxy {
 
     /// Creates a new `MasterProxy` with an initial seed of master addresses, and a `Messenger`
     /// instance to handle sending RPCs.
-    pub fn new(masters: &[SocketAddr], messenger: Messenger) -> MasterProxy {
-        assert!(masters.len() > 0);
-
-        // Give it a bit more capacity since modifications are done under a mutex.
-        let mut addrs = HashSet::with_capacity(masters.len() * 2);
-        addrs.extend(masters.iter().cloned());
-
+    pub fn new(replicas: &[SocketAddr], messenger: Messenger) -> MasterProxy {
+        assert!(replicas.len() > 0);
+        let replicas = replicas.iter().cloned().collect();
         let proxy = MasterProxy {
-            inner: Arc::new(Inner {
-                leader: Mutex::new(Leader::Unknown(QueueMap::with_capacity(QUEUE_LEN))),
-                masters: Mutex::new(addrs),
-                messenger: messenger,
-            }),
+            inner: Arc::new(Mutex::new(Inner {
+                leader: Leader::Unknown(QueueMap::with_capacity(QUEUE_LEN)),
+                replicas: replicas,
+            })),
+            messenger: messenger,
         };
         proxy.refresh_leader_cache();
         proxy
     }
 
     pub fn messenger(&self) -> &Messenger {
-        &self.inner.messenger
+        &self.messenger
     }
 
     /// Returns the masters which this `MasterProxy` has discovered.
     pub fn masters(&self) -> Vec<SocketAddr> {
         let mut masters = Vec::with_capacity(5);
-        masters.extend(self.inner.masters.lock().iter().cloned());
+        masters.extend(self.inner.lock().replicas.iter().cloned());
         masters
     }
 
     /// Returns the leader master, if it is known.
     pub fn leader(&self) -> Option<SocketAddr> {
-        match *self.inner.leader.lock() {
+        match self.inner.lock().leader {
             Leader::Known(leader) => Some(leader),
             Leader::Unknown(_) => None,
         }
@@ -134,25 +138,28 @@ impl MasterProxy {
         /// Returns the queue index if the RPC is queued.
         fn inner(master_proxy: &MasterProxy, mut rpc: Rpc) -> Option<usize> {
             // Keep critical section short by performing the send outside the lock.
-            let leader_addr = match *master_proxy.inner.leader.lock() {
-                Leader::Known(addr) => Some(addr),
-                Leader::Unknown(ref mut queue) => {
-                    if queue.len() < QUEUE_LEN {
-                        return Some(queue.push(rpc));
-                    }
-                    None
-                },
+            let leader_addr = {
+                let mut inner = master_proxy.inner.lock();
+                match inner.leader {
+                    Leader::Known(addr) => Some(addr),
+                    Leader::Unknown(ref mut queue) => {
+                        if queue.len() < QUEUE_LEN {
+                            return Some(queue.push(rpc));
+                        }
+                        None
+                    },
+                }
             };
             if let Some(leader_addr) = leader_addr {
                 rpc.addr = leader_addr;
-                master_proxy.inner.messenger.send(rpc);
+                master_proxy.messenger.send(rpc);
             } else {
                 rpc.fail(Error::Backoff);
             }
             None
         }
 
-        // This control flow is a bit funky to keep the critical section short and still apease the
+        // This control flow is a bit funky to keep the critical section short and still appease the
         // borrow checker.
 
         let now = Instant::now();
@@ -165,7 +172,7 @@ impl MasterProxy {
 
         if let Some(queue_idx) = inner(self, rpc) {
             let master_proxy = self.clone();
-            self.inner.messenger.timer(duration, Box::new(move || {
+            self.messenger.timer(duration, Box::new(move || {
                 master_proxy.timeout_queued_rpc(queue_idx)
             }));
         }
@@ -175,27 +182,38 @@ impl MasterProxy {
     fn timeout_queued_rpc(&self, queue_idx: usize) {
         // Keep the critical section short.
         let mut rpc = None;
-        if let Leader::Unknown(ref mut queue) = *self.inner.leader.lock() {
+        if let Leader::Unknown(ref mut queue) = self.inner.lock().leader {
             rpc = queue.remove(queue_idx);
         }
         if let Some(rpc) = rpc {
-            rpc.fail(Error::TimedOut);
+            // Warning: extreme hack. We can get 'false positive' timeout callbacks when we
+            // transition from Unknown -> Known -> Unknown, because the queue resets the idx
+            // counter back to 0, so we may get the callback from a previous Unkown era. To
+            // properly fix this we either need to keep the timeout handle with the queued RPCs,
+            // like in Connection, or keep a transition counter or something. Easier than all that
+            // is to just check if the RPC is actually timed out.
+            if rpc.timed_out(Instant::now()) {
+                rpc.fail(Error::TimedOut);
+            } else {
+                self.send_to_leader(rpc);
+            }
         }
     }
 
     /// Clears the leader cache if the currently cached leader matches the provided address.
     /// If the cache is cleared, a refresh is initiated.
     fn reset_leader_cache(&self, stale_leader: SocketAddr) {
+        let queue = QueueMap::with_capacity(QUEUE_LEN);
         {
-            let mut master = self.inner.leader.lock();
-            match *master {
+            let leader = &mut self.inner.lock().leader;
+            match *leader {
                 // Do nothing if the cached leader has already been refreshed.
                 Leader::Unknown(_) => return,
                 Leader::Known(leader) if leader != stale_leader => return,
                 // Otherwise fall through to cache eviction and refresh.
                 _ => (),
             }
-            *master = Leader::Unknown(QueueMap::with_capacity(QUEUE_LEN));
+            *leader = Leader::Unknown(queue);
         }
         self.refresh_leader_cache();
     }
@@ -209,22 +227,19 @@ impl MasterProxy {
     /// shares a single cancellation token, so each RPC can be notified of cancellation, and each
     /// can trigger a cancellation of all others.
     ///
-    /// For each `ListMasters` response, extract the set of master addresses and the subset of
-    /// leader addresses. For each master address, determine if we know about the master already.
-    /// If not, add it to the list of known masters, and send a new `ListMasters` RPC to it. If a
-    /// leader address is discovered, check if the leader is still unknown. If it is, then reset
-    /// the cached leader master to the discovered leader, send all queued RPCs to the discovered
-    /// leader, and cancel all other `ListMasters` RPCs.
-    ///
-    /// If the `ListMasters` RPC fails or if it does not discover a leader, then it is retried
-    /// after a backoff period.
+    /// For each `ListMasters` response, extract the set of replica addresses and the set of leader
+    /// addresses. If a leader address is discovered, update the cached leader address, cancel all
+    /// outstanding `ListMaster` RPCs, and dispatch all queued RPCs. Otherwise dispatch a new
+    /// `ListMasters` RPC for each newly discovered replica, and retry the original RPC after a
+    /// backoff.
     fn refresh_leader_cache(&self) {
-        debug_assert!(!self.inner.leader.lock().is_known());
+        debug_assert!(!self.inner.lock().leader.is_known());
         let cancel = Arc::new(AtomicBool::new(false));
-        let masters = self.inner.masters.lock().iter().cloned().collect::<Vec<_>>();
+        let replicas = self.inner.lock().replicas.iter().cloned().collect::<Vec<_>>();
+        debug!("refreshing leader master from known replicas: {:?}", replicas);
 
         let deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
-        for addr in masters {
+        for addr in replicas {
             self.send_list_masters(addr, deadline, cancel.clone());
         }
     }
@@ -232,6 +247,7 @@ impl MasterProxy {
     /// Sends a `ListMasters` RPC to a master with the provided deadline and cancellation token.
     /// The completion handler is set to `handle_list_masters_response`.
     fn send_list_masters(&self, addr: SocketAddr, deadline: Instant, cancel: Arc<AtomicBool>) {
+        trace!("sending ListMasters RPC to {}", addr);
 
         // Backoff that manages backoffs between retries.
         let backoff = Backoff::with_duration_range(128, 8192);
@@ -243,137 +259,149 @@ impl MasterProxy {
         rpc.fail_fast = false;
         let proxy = self.clone();
         rpc.callback = Some(Box::new(move |result, rpc: Rpc| {
-            proxy.handle_list_masters_response(result, rpc, backoff);
+            thread::spawn(move || proxy.handle_list_masters_response(result, rpc, backoff));
         }));
-        self.inner.messenger.send(rpc);
+        self.messenger.send(rpc);
     }
 
     /// Retries a `ListMasters` RPC after a backoff period.
     fn retry_list_masters(self, mut rpc: Rpc, mut backoff: Backoff) {
-        let delay = Duration::from_millis(backoff.next_backoff_ms());
+        // Short circuit if the leader has already been found.
+        if rpc.cancelled() { return; }
+        let delay_ms = backoff.next_backoff_ms();
+        let delay = Duration::from_millis(delay_ms);
         let proxy = self.clone();
         rpc.callback = Some(Box::new(move |result, rpc: Rpc| {
-            proxy.handle_list_masters_response(result, rpc, backoff);
+            thread::spawn(move || proxy.handle_list_masters_response(result, rpc, backoff));
         }));
-        rpc.deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
-        trace!("retrying ListMasters RPC to {} after delay of {:?}", &rpc.addr, &delay);
-        self.inner.messenger.delayed_send(delay, rpc);
+        rpc.deadline = Instant::now() +
+                       Duration::from_millis(delay_ms) +
+                       Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
+        trace!("retrying ListMasters RPC to {} after delay of {}ms", rpc.addr, delay_ms);
+        self.messenger.delayed_send(delay, rpc);
     }
 
     /// Handles the response to a `ListMasters` RPC.
+    /// This should *not* be called on the Event Loop thread.
     fn handle_list_masters_response(self, result: Result<()>, mut rpc: Rpc, backoff: Backoff) {
         // Short circuit if the master has already been found.
         if rpc.cancelled() { return; }
         let addr = rpc.addr;
+
+        // Holds the resolved addresses for all replicas listed by the master response.
+        let mut replicas: HashSet<SocketAddr> = HashSet::new();
+
+        // Holds the resolved addresses for the leader master.
+        let mut leader: HashSet<SocketAddr> = HashSet::new();
+
         if let Err(error) = result {
-            info!("ListMasters RPC to master {} failed: {}", &addr, error);
+            info!("ListMasters RPC to master {} failed: {}", addr, error);
             // Fall through to retry.
         } else {
-            let cancel = rpc.cancel.as_ref().unwrap().clone();
             let response = rpc.mut_response::<ListMastersResponsePB>();
             if response.has_error() {
                 // This can happen when the master is not yet initialized, e.g.:
                 // code: CATALOG_MANAGER_NOT_INITIALIZED
                 // status {code: SERVICE_UNAVAILABLE message: "catalog manager has not been initialized"}
-                info!("ListMasters RPC to master {} failed: {:?}", &addr, response.get_error());
+                info!("ListMasters RPC to master {} failed: {:?}", addr, response.get_error());
                 // Fall through to retry.
             } else {
-                debug!("ListMasters RPC to master {} response: {:?}", &addr, response);
-                let mut masters: Vec<HostPortPB> = Vec::new();
-                let mut leaders: Vec<HostPortPB> = Vec::new();
+                debug!("ListMasters RPC to master {} response: {:?}", addr, response);
 
                 for server_entry in response.mut_masters().iter_mut() {
                     if server_entry.has_error()  { continue; }
+                    let addrs = dns::resolve_hosts(server_entry.get_registration()
+                                                               .get_rpc_addresses());
+                    replicas.extend(addrs.iter().cloned());
+
                     if server_entry.get_role() == Role::LEADER {
-                        leaders.extend(server_entry.get_registration()
-                                                   .get_rpc_addresses()
-                                                   .iter()
-                                                   .cloned());
+                        // Check that an individual ListMasters response contains at most a single
+                        // leader node.
+                        assert!(leader.is_empty());
+                        leader = addrs;
                     }
-                    masters.extend(server_entry.mut_registration()
-                                               .take_rpc_addresses()
-                                               .into_iter());
                 }
-
-                if !masters.is_empty() {
-                    let proxy = self.clone();
-                    let cancel = cancel.clone();
-                    resolve_hosts_async(masters, move |addrs| {
-                        proxy.handle_discovered_masters(addrs, cancel)
-                    });
-                }
-
-                if !leaders.is_empty() {
-                    let proxy = self.clone();
-                    resolve_hosts_async(leaders, move |addrs| {
-                        proxy.handle_discovered_leaders(addrs, cancel)
-                    });
-                }
-
-                // Fall through to retry. We retry even if a leader registration is found because
-                // the DNS resolution can fail.
             }
         }
 
-        self.retry_list_masters(rpc, backoff);
+        // Short circuit if the master has already been found.
+        if rpc.cancelled() { return; }
+        let cancel = rpc.cancel.as_ref().unwrap().clone();
+        if replicas.is_empty() {
+            // The ListMasters call either completely failed, or we weren't able to resolve any
+            // master addresses.
+            self.retry_list_masters(rpc, backoff);
+        } else if leader.is_empty() {
+            // We found some replicas, but no leader addresses.
+            self.handle_discovered_replicas(replicas, cancel);
+            self.retry_list_masters(rpc, backoff);
+        } else {
+            self.handle_discovered_leaders(leader, replicas, cancel);
+        }
     }
 
     /// Handler executed when a set of master addresses is returned from a `ListMasters` RPC.
-    fn handle_discovered_masters(self, addrs: HashSet<SocketAddr>, cancel: Arc<AtomicBool>) {
-        if addrs.is_empty() { return; }
-
-        let mut discovered_masters = Vec::with_capacity(addrs.len());
+    fn handle_discovered_replicas(&self, addrs: HashSet<SocketAddr>, cancel: Arc<AtomicBool>) {
+        let mut discovered_replicas = Vec::with_capacity(addrs.len());
         {
-            let mut masters = self.inner.masters.lock();
+            // Take the master lock, then check the cancellation token to make sure we haven't
+            // been cancelled. The check must be done under the lock to close a race with a
+            // concurrent handle_discovered_leaders call.
+            let mut inner = self.inner.lock();
+            if cancel.load(Ordering::Relaxed) { return; }
             for addr in addrs {
-                if masters.insert(addr) { discovered_masters.push(addr); }
+                if inner.replicas.insert(addr) { discovered_replicas.push(addr); }
             }
         }
 
-        if !discovered_masters.is_empty() {
-            info!("discovered masters: [{}]",
-                  discovered_masters.iter().map(ToString::to_string).collect::<Vec<_>>().join(","));
-            if cancel.load(Ordering::Relaxed) { return; }
+        if !discovered_replicas.is_empty() {
+            info!("discovered replicas: [{}]", discovered_replicas.iter().format_default(", "));
             let deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
-            for addr in discovered_masters {
+            for addr in discovered_replicas {
                 self.send_list_masters(addr, deadline, cancel.clone());
             }
         }
     }
 
     /// Handler executed when a set of master leader addresses is returned from a `ListMasters` RPC.
-    fn handle_discovered_leaders(self, addrs: HashSet<SocketAddr>, cancel: Arc<AtomicBool>) {
-        // Short circuit if the leader has already been found.
-        if addrs.is_empty() || cancel.load(Ordering::Relaxed) { return; }
+    fn handle_discovered_leaders(&self,
+                                 leader: HashSet<SocketAddr>,
+                                 replicas: HashSet<SocketAddr>,
+                                 cancel: Arc<AtomicBool>) {
+        let addr = match leader.iter().next() {
+            Some(&addr) => addr,
+            None => return,
+        };
 
-        let addr = *addrs.iter().next().unwrap();
-
-        let leader = {
+        let inner = {
             // Swap out the Unknown leader queue with the new Known leader. We also attempt to
             // cancel all other RPCs while holding the lock, so that the cancellation happens
-            // atomically with changing the leader state. This prevents a TOCTOU race between the
-            // cancellation check at the start of this function and now.
-            let mut leader = self.inner.leader.lock();
+            // atomically with changing the leader state. This prevents a race with a concurrent
+            // handle_discovered_replicas call.
+            let mut inner = self.inner.lock();
             if cancel.compare_and_swap(false, true, Ordering::Relaxed) {
                 // Another replica has already claimed to be the leader.
                 return;
             }
 
-            mem::replace(&mut *leader, Leader::Known(addr))
+            // We replace the entire replica set instead of adding to it so that we retain only the
+            // replicas that the current leader knows about. This serves to filter out old master
+            // replicas after they are no longer around.
+            mem::replace(&mut *inner, Inner { leader: Leader::Known(addr), replicas: replicas })
         };
 
-        if addrs.len() > 1 {
-            info!("discovered leader master {}, chosen randomly from possibilities [{}]",
-                  addr, addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "));
+        if leader.len() > 1 {
+            info!("discovered leader master {}, chosen from resolved addresses [{}]",
+                  addr, leader.iter().format_default(", "));
         } else {
             info!("discovered leader master {}", addr);
         }
 
-        match leader {
+        match inner.leader {
             Leader::Unknown(mut queue) => {
                 while let Some((_, mut rpc)) = queue.pop() {
                     rpc.addr = addr;
-                    self.inner.messenger.send(rpc);
+                    self.messenger.send(rpc);
                 }
             },
             // This can't happen, since `refresh_leader_cache` is only executed once per leader
@@ -399,13 +427,6 @@ impl Leader {
             Leader::Unknown(_) => false,
         }
     }
-}
-
-/// Container for master metadata.
-struct Inner {
-    leader: Mutex<Leader>,
-    masters: Mutex<HashSet<SocketAddr>>,
-    messenger: Messenger,
 }
 
 trait MasterResponse: Message {
@@ -460,10 +481,13 @@ where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static {
                 },
                 Some(ref error) if error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
                     // This is a transient error which occurs when the master is starting up.
-                    let delay = Duration::from_millis(self.2.next_backoff_ms());
-                    info!("{:?}: Catalog manager not initialized, retrying after delay of {:?}",
-                            rpc, delay);
-                    let messenger = self.0.inner.messenger.clone();
+                    // TODO: this is essentially acting as an unbounded queue, should we tighten
+                    // this up?
+                    let delay_ms = self.2.next_backoff_ms();
+                    let delay = Duration::from_millis(delay_ms);
+                    info!("{:?}: Catalog manager not initialized, retrying after delay of {}ms",
+                            rpc, delay_ms);
+                    let messenger = self.0.messenger.clone();
                     rpc.callback = Some(self);
                     messenger.delayed_send(delay, rpc);
                 },
@@ -673,20 +697,26 @@ mod tests {
 
         let proxy = MasterProxy::new(&cluster.master_addrs()[0..1], Messenger::new().unwrap());
 
-        let (send, recv) = sync_channel(0);
+        let (send, recv) = sync_channel(1);
         let send_copy = send.clone();
         proxy.list_tables(Instant::now() + Duration::from_secs(5),
                           ListTablesRequestPB::new(), move |resp| send_copy.send(resp).unwrap());
 
         let result = recv.recv().unwrap();
         check_list_tables_response(result);
+        // TODO: this check occasionally causes tests failures when only two of three masters comes
+        // up before the initial election is decided, and we filter the master address of the
+        // not-yet available replica.
         assert_eq!(3, proxy.masters().len());
 
         info!("Stopping leader {}", proxy.leader().unwrap());
         cluster.stop_node(proxy.leader().unwrap());
 
+        // Reelection can take a disapointingly long time...
         proxy.list_tables(Instant::now() + Duration::from_secs(10),
-                          ListTablesRequestPB::new(), move |resp| send.send(resp).unwrap());
+                          ListTablesRequestPB::new(), move |resp| {
+                              send.send(resp).unwrap()
+                          });
 
         let result = recv.recv().unwrap();
         check_list_tables_response(result);

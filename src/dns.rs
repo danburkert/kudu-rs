@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::thread;
-use std::str::FromStr;
 
 use ifaces;
 use kudu_pb::common::HostPortPB;
@@ -32,13 +31,6 @@ lazy_static! {
 pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
     let mut addrs = HashSet::new();
     for hostport in hostports {
-        // If the host is just a IP address, we may be able to parse it directly.
-        if let Ok(addr) = IpAddr::from_str(hostport.get_host()) {
-            // TODO: check for overflow on cast
-            addrs.insert(SocketAddr::new(addr, hostport.get_port() as u16));
-            continue;
-        }
-        // Otherwise fall back to a DNS lookup.
         match (hostport.get_host(), hostport.get_port() as u16).to_socket_addrs() {
             Ok(resolved_addrs) => {
                 addrs.extend(resolved_addrs);

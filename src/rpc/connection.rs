@@ -99,14 +99,10 @@ struct QueuedRpc {
     rpc: Rpc,
     timer: Timeout,
 }
-
-/// Wraps an `Rpc`, a delay timer and the delay time.
-///
-/// If the RPC completes before the timer fires, the timeout should be cleared.
-struct DelayedRpc {
-    rpc: Rpc,
-    timer: Timeout,
-    delay: Instant,
+impl fmt::Debug for QueuedRpc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Queued{:?}", self.rpc)
+    }
 }
 
 /// `Connection` is a state machine that manages a TCP socket connection to a remote Kudu server.
@@ -153,7 +149,7 @@ pub struct Connection {
     /// Queue of RPCs to send.
     send_queue: QueueMap<QueuedRpc>,
     /// RPCs which have been sent and are awaiting response.
-    recv_queue: HashMap<u32, QueuedRpc>,
+    recv_queue: HashMap<usize, QueuedRpc>,
 
     /// RPC request header, kept internally to reduce memory allocations.
     request_header: rpc_header::RequestHeader,
@@ -257,17 +253,21 @@ impl Connection {
 
     /// Send an RPC to the Kudu server.
     pub fn send_rpc(&mut self, event_loop: &mut Loop, token: Token, rpc: Rpc) {
-        trace!("{:?}: queueing rpc: {:?}", self, rpc);
 
         let now = Instant::now();
         if rpc.cancelled() {
+            warn!("{:?}: rpc cancelled before queue: {:?}", self, rpc);
             return rpc.fail(Error::Cancelled);
         } else if rpc.timed_out(now) {
+            warn!("{:?}: rpc timed out before queue: {:?}", self, rpc);
             return rpc.fail(Error::TimedOut);
         } else if self.queue_len() > self.options.rpc_queue_len as usize ||
                   self.queue_len() > self.throttle as usize {
+            warn!("{:?}: rpc failed due to backoff: {:?}", self, rpc);
             return rpc.fail(Error::Backoff);
         }
+
+        trace!("{:?}: queueing rpc: {:?}", self, rpc);
 
         self.send_queue.push_with(|call_id| {
             let timer = event_loop.timeout_ms(TimeoutKind::Rpc(token, call_id),
@@ -289,10 +289,11 @@ impl Connection {
     }
 
     pub fn rpc_timeout(&mut self, call_id: usize) {
+        trace!("{:?}: rpc_timeout for call_id: {}", self, call_id);
         // No need to cancel the timeout here, since it fired.
         self.send_queue
             .remove(call_id)
-            .or_else(|| self.recv_queue.remove(&(call_id as u32)))
+            .or_else(|| self.recv_queue.remove(&call_id))
             .expect("timed out RPC not found in send or recv queue")
             .rpc
             .fail(Error::TimedOut);
@@ -300,11 +301,12 @@ impl Connection {
 
     pub fn reset_timeout(&mut self, event_loop: &mut Loop, token: Token) -> bool {
         assert!(self.state == ConnectionState::Reset, "{:?}: illegal reset timeout", self);
-        if self.queue_len() == 0 {
-            // If the queue is empty then tear down the connection. This prevents a
-            // connection to a permanently partitioned tablet server from attempting to
-            // reconnect indefinitely. Eventually all RPCs will timeout and the retries
-            // will cease.
+        assert!(self.recv_queue.is_empty());
+        trace!("{:?}: reset_timeout", self);
+        if self.send_queue.is_empty() {
+            // If the send queue is empty then tear down the connection. This prevents a connection
+            // to a permanently partitioned server from attempting to reconnect indefinitely.
+            // Eventually all queued RPCs will timeout and the retries will cease.
             //
             // TODO: does this need to cancel all outstanding timers?
             return true;
@@ -399,23 +401,26 @@ impl Connection {
         self.send_buf.consume(send_buf_len);
 
         let now = Instant::now();
-
-        let fail = |rpc: Rpc| {
-            let error = if rpc.cancelled() { Error::Cancelled }
-                        else if rpc.timed_out(now) { Error::TimedOut }
-                        else { error.clone() };
-            rpc.fail(error);
-        };
-
-        for (_, QueuedRpc { rpc, timer }) in self.recv_queue.drain() {
-            event_loop.clear_timeout(timer);
-            fail(rpc);
+        let mut retries = Vec::new();
+        for (call_id, QueuedRpc { rpc, timer }) in self.recv_queue.drain().chain(self.send_queue.drain()) {
+            if rpc.cancelled() {
+                event_loop.clear_timeout(timer);
+                rpc.fail(Error::Cancelled);
+            } else if rpc.timed_out(now) {
+                event_loop.clear_timeout(timer);
+                rpc.fail(Error::Cancelled);
+            } else if rpc.fail_fast() {
+                event_loop.clear_timeout(timer);
+                rpc.fail(error.clone());
+            } else {
+                retries.push((call_id, QueuedRpc { rpc: rpc, timer: timer }));
+            }
         }
 
-        while let Some((_, QueuedRpc { rpc, timer })) = self.send_queue.pop() {
-            event_loop.clear_timeout(timer);
-            fail(rpc);
+        for (call_id, queued_rpc) in retries {
+            self.send_queue.insert(call_id, queued_rpc);
         }
+        trace!("{:?}: retrying rpcs: {:?}", self, self.send_queue);
 
         event_loop.timeout_ms(TimeoutKind::ConnectionReset(token), backoff_ms).unwrap();
     }
@@ -426,7 +431,6 @@ impl Connection {
     ///
     /// If an error is returned, the connection should be torn down.
     fn buffer_message(&mut self, msg: &Message) -> Result<()> {
-        trace!("{:?}: send message: {:?}", self, msg);
         let header_len = self.request_header.compute_size();
         let msg_len = msg.compute_size();
         let len = header_len + header_len.len_varint() + msg_len + msg_len.len_varint();
@@ -599,7 +603,7 @@ impl Connection {
                                     &mut CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len]))));
                         // Remove the RPC from the recv queue, and fail it. The message may not be
                         // in the recv queue if it has already timed out.
-                        if let Some(QueuedRpc { rpc, timer }) = self.recv_queue.remove(&(self.response_header.get_call_id() as u32)) {
+                        if let Some(QueuedRpc { rpc, timer }) = self.recv_queue.remove(&(self.response_header.get_call_id() as usize)) {
                             event_loop.clear_timeout(timer);
                             rpc.fail(Error::Rpc(error.clone()));
                         }
@@ -608,7 +612,7 @@ impl Connection {
                         if error.is_fatal() {
                             return Err(Error::Rpc(error.clone()))
                         }
-                    } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(self.response_header.get_call_id() as u32) {
+                    } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(self.response_header.get_call_id() as usize) {
                         // Use the entry API so that the RPC is not removed from the recv queue
                         // if the protobuf decode step fails. Since it isn't removed, it has the
                         // opportunity to be retried when the error is bubbled up and the
@@ -676,9 +680,9 @@ impl Connection {
                 self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
                 self.request_header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
 
-                trace!("{:?}: sending rpc to server; call ID: {}", self, call_id);
+                trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
                 try!(self.buffer_message(&*rpc.request));
-                self.recv_queue.insert(call_id as u32, QueuedRpc { rpc: rpc, timer: timer });
+                self.recv_queue.insert(call_id, QueuedRpc { rpc: rpc, timer: timer });
             }
 
             if try!(self.flush()) == 0 {

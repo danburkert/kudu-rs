@@ -4,6 +4,7 @@ extern crate byteorder;
 extern crate chrono;
 extern crate ieee754;
 extern crate ifaces;
+extern crate itertools;
 extern crate kudu_pb;
 extern crate mio;
 extern crate net2;
@@ -18,7 +19,8 @@ extern crate vec_map;
 #[cfg(test)] extern crate env_logger;
 #[cfg(test)] extern crate tempdir;
 
-#[cfg(any(feature="quickcheck", test))] extern crate quickcheck;
+#[cfg(any(feature="quickcheck", test))]
+#[macro_use] extern crate quickcheck;
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
