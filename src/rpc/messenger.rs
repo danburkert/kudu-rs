@@ -341,7 +341,7 @@ mod tests {
         let elapsed = Instant::now().duration_since(now);
 
         // If this gets flaky, figure out how to get tighter times out of mio.
-        assert!(elapsed > Duration::from_millis(100), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed > Duration::from_millis(90), "expected: 100ms, elapsed: {:?}", elapsed);
         assert!(elapsed < Duration::from_millis(150), "expected: 100ms, elapsed: {:?}", elapsed);
     }
 
