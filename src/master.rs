@@ -59,9 +59,7 @@ macro_rules! impl_master_rpc {
                 // The real leader address will be filled in by `send_to_leader`.
                 let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
                 let mut rpc = master::$fn_name(addr, deadline, request);
-                rpc.callback = Some(Box::new(CB(self.clone(), cb,
-                                                Backoff::with_duration_range(8, 30_000),
-                                                PhantomData::<$response_type>)));
+                rpc.callback = Some(Box::new(CB(self.clone(), cb, PhantomData::<$response_type>)));
                 self.send_to_leader(rpc);
             }
     };
@@ -466,36 +464,25 @@ impl MasterResponse for ListMastersResponsePB {
     }
 }
 
-struct CB<Resp, F>(MasterProxy, F, Backoff, PhantomData<Resp>)
+struct CB<Resp, F>(MasterProxy, F, PhantomData<Resp>)
 where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static;
 impl <Resp, F> Callback for CB<Resp, F>
 where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static {
-    fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+    fn callback(self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
         match result {
             Ok(_) => match rpc.mut_response::<Resp>().error() {
-                Some(ref error) if error.code() == MasterErrorCode::NotTheLeader => {
+                Some(ref error) if error.code() == MasterErrorCode::NotTheLeader ||
+                                   error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
                     self.0.reset_leader_cache(rpc.addr);
                     let proxy: MasterProxy = self.0.clone();
                     rpc.callback = Some(self);
                     proxy.send_to_leader(rpc);
                 },
-                Some(ref error) if error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
-                    // This is a transient error which occurs when the master is starting up.
-                    // TODO: this is essentially acting as an unbounded queue, should we tighten
-                    // this up?
-                    let delay_ms = self.2.next_backoff_ms();
-                    let delay = Duration::from_millis(delay_ms);
-                    info!("{:?}: Catalog manager not initialized, retrying after delay of {}ms",
-                            rpc, delay_ms);
-                    let messenger = self.0.messenger.clone();
-                    rpc.callback = Some(self);
-                    messenger.delayed_send(delay, rpc);
-                },
                 Some(error) => self.1(Err(Error::from(MasterError::from(error)))),
                 None => self.1(Ok(rpc.take_response::<Resp>())),
             },
             Err(ref error) if error.is_network_error() => {
-                // On connection error, reset the master cache and resend.
+                // On connection error, reset the leader cache and resend.
                 self.0.reset_leader_cache(rpc.addr);
                 let proxy: MasterProxy = self.0.clone();
                 rpc.callback = Some(self);
