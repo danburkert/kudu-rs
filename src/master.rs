@@ -132,7 +132,7 @@ impl MasterProxy {
 
     /// Sends the RPC if the leader master is known, otherwise queues the RPC to be sent when the
     /// leader is discovered.
-    fn send_to_leader(&self, rpc: Rpc) {
+    pub fn send_to_leader(&self, rpc: Rpc) {
         /// Returns the queue index if the RPC is queued.
         fn inner(master_proxy: &MasterProxy, mut rpc: Rpc) -> Option<usize> {
             // Keep critical section short by performing the send outside the lock.
@@ -203,15 +203,15 @@ impl MasterProxy {
     fn reset_leader_cache(&self, stale_leader: SocketAddr) {
         let queue = QueueMap::with_capacity(QUEUE_LEN);
         {
-            let leader = &mut self.inner.lock().leader;
-            match *leader {
+            let mut inner = self.inner.lock();
+            match inner.leader {
                 // Do nothing if the cached leader has already been refreshed.
                 Leader::Unknown(_) => return,
                 Leader::Known(leader) if leader != stale_leader => return,
                 // Otherwise fall through to cache eviction and refresh.
                 _ => (),
             }
-            *leader = Leader::Unknown(queue);
+            inner.leader = Leader::Unknown(queue);
         }
         self.refresh_leader_cache();
     }
@@ -248,7 +248,7 @@ impl MasterProxy {
         trace!("sending ListMasters RPC to {}", addr);
 
         // Backoff that manages backoffs between retries.
-        let backoff = Backoff::with_duration_range(128, 8192);
+        let backoff = Backoff::with_duration_range(10, 30_000);
 
         let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
         rpc.cancel = Some(cancel);

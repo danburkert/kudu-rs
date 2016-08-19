@@ -246,8 +246,8 @@ impl MetaCache {
         let mut last_upper_bound = tablets[0].get_partition().get_partition_key_start().to_owned();
 
         if partition_key < &last_upper_bound {
-            // If the first tablet is past the requested partition key, then the partition key fell in
-            // an initial non-covered range.
+            // If the first tablet is past the requested partition key, then the partition key fell
+            // in an initial non-covered range.
             entries.push_back(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
         }
 

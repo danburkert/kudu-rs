@@ -256,14 +256,14 @@ impl Connection {
 
         let now = Instant::now();
         if rpc.cancelled() {
-            warn!("{:?}: rpc cancelled before queue: {:?}", self, rpc);
+            trace!("{:?}: rpc cancelled before queue: {:?}", self, rpc);
             return rpc.fail(Error::Cancelled);
         } else if rpc.timed_out(now) {
-            warn!("{:?}: rpc timed out before queue: {:?}", self, rpc);
+            trace!("{:?}: rpc timed out before queue: {:?}", self, rpc);
             return rpc.fail(Error::TimedOut);
         } else if self.queue_len() > self.options.rpc_queue_len as usize ||
                   self.queue_len() > self.throttle as usize {
-            warn!("{:?}: rpc failed due to backoff: {:?}", self, rpc);
+            trace!("{:?}: rpc failed due to backoff: {:?}", self, rpc);
             return rpc.fail(Error::Backoff);
         }
 
