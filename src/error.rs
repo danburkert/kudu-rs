@@ -380,6 +380,20 @@ pub struct Status {
     posix_code: Option<i32>,
 }
 
+impl Status {
+    pub fn code(&self) -> StatusCode {
+        self.code
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_ref().map(String::as_str)
+    }
+
+    pub fn posix_code(&self) -> Option<i32> {
+        self.posix_code
+    }
+}
+
 impl fmt::Debug for Status {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         try!(write!(f, "{:?}", self.code));

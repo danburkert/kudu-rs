@@ -54,7 +54,7 @@ where F: FnOnce(HashSet<SocketAddr>) + Send + 'static {
 /// Returns `true` if socket addr is for a local interface.
 pub fn is_local_addr(addr: &IpAddr) -> bool {
     LOCAL_ADDRS.contains(addr) || match *addr {
-        // TODO: unwrapping will be unecessary once 1.12 lands in stable.
+        // TODO: unwrapping will be unnecessary once 1.12 lands in stable.
         IpAddr::V4(ref addr) => addr.is_loopback(),
         IpAddr::V6(ref addr) => addr.is_loopback(),
     }

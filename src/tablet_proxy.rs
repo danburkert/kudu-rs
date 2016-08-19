@@ -1,8 +1,6 @@
-use std::collections::HashSet;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,14 +9,18 @@ use kudu_pb::master::{
     GetTabletLocationsRequestPB, GetTabletLocationsResponsePB,
 };
 
-use backoff::Backoff;
 use Error;
-use master::MasterProxy;
-use queue_map::QueueMap;
+use Partition;
+use Replica;
 use Result;
-use rpc::{master, Messenger, Rpc};
+use Status;
+use StatusCode;
 use Tablet;
 use TabletId;
+use backoff::Backoff;
+use master::MasterProxy;
+use queue_map::QueueMap;
+use rpc::{Messenger, Rpc};
 
 /// Maximum number of RPCs to queue in the tablet server proxy during leader discovery. When the
 /// queue is full, additional attempts to send RPCs will immediately fail with `RpcError::Backoff`.
@@ -58,13 +60,13 @@ impl Leader {
 #[derive(Clone)]
 pub struct TabletProxy {
     id: TabletId,
+    partition: Partition,
     inner: Arc<Mutex<Inner>>,
     messenger: Messenger,
     master_proxy: MasterProxy,
 }
 
 struct Inner {
-    tablet: Tablet,
     leader: Leader,
     replicas: Vec<SocketAddr>,
     refresh_in_progress: bool,
@@ -164,46 +166,63 @@ impl TabletProxy {
     /// Asynchronously refreshes the cached tablet locations.
     fn refresh_tablet_locations(&self) {
         debug_assert!(self.inner.lock().refresh_in_progress);
-        let cancel = Arc::new(AtomicBool::new(false));
-        debug!("refreshing locations for tablet {:?}", self.id);
+        debug!("{:?}: refreshing tablet locations", self);
 
-        // The real leader address will be filled in by `send_to_leader`.
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
         let deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
+
         let mut request = GetTabletLocationsRequestPB::new();
-        request.mut_tablet_ids().push(self.id.as_bytes().as_ref().to_owned());
-        let mut rpc = master::get_tablet_locations(addr, deadline, request);
+        request.mut_tablet_ids().push(self.id.to_string().into_bytes());
+
         let proxy = self.clone();
 
-        // Backoff that manages backoffs between retries.
+        // Backoff that manages retries.
         let backoff = Backoff::with_duration_range(10, 30_000);
 
-        rpc.callback = Some(Box::new(move |result, rpc| {
-            thread::spawn(move || proxy.handle_get_tablet_locations_response(result, rpc, backoff));
-        }));
-
-        self.master_proxy.send_to_leader(rpc);
+        self.master_proxy.get_tablet_locations(deadline, request, move |resp| {
+            thread::spawn(|| proxy.handle_get_tablet_locations_response(resp, backoff));
+        });
     }
 
     fn handle_get_tablet_locations_response(self,
-                                            result: Result<()>,
-                                            mut rpc: Rpc,
+                                            result: Result<GetTabletLocationsResponsePB>,
                                             backoff: Backoff) {
+        // Unpack the result into a vector of replicas.
+        let mut replicas = Vec::new();
+        match result {
+            Ok(mut response) => {
+                debug_assert_eq!(1, response.get_tablet_locations().len() +
+                                    response.get_errors().len());
+                if let Some(mut locations) = response.mut_tablet_locations().pop() {
+                    debug_assert_eq!(self.id,
+                                     TabletId::parse_bytes(locations.get_tablet_id()).unwrap());
 
-        let mut replicas: HashSet<SocketAddr> = HashSet::new();
-
-        let mut leader: HashSet<SocketAddr> = HashSet::new();
-
-        if let Err(error) = result {
-            info!("{:?}: GetTabletLocations RPC failed: {}", self, error);
-            // Fall through to retry.
-        } else {
-            let response = rpc.mut_response::<GetTabletLocationsResponsePB>();
-            if response.has_error() {
-
-            } else {
+                    for replica in locations.take_replicas().into_iter() {
+                        replicas.push(Replica::from_pb(replica).unwrap());
+                    }
+                } else {
+                    let status = Status::from(response.take_errors().pop().unwrap().take_status());
+                    match status.code() {
+                        StatusCode::NotFound => {
+                            // The tablet has been deleted, or perhaps never existed.
+                            // TODO: clear the meta cache.
+                        },
+                        _ => warn!("{:?}: error while locating tablet: {:?}", self, status),
+                    }
+                    // Fall through to retry.
+                }
+            },
+            Err(error) => {
+                info!("{:?}: GetTabletLocations RPC failed: {}", self, error);
+                // Fall through to retry.
             }
         }
+
+        let mut leader_addrs: Vec<SocketAddr> = Vec::new();
+        let mut replica_addrs: Vec<SocketAddr> = Vec::new();
+
+        for replica in &replicas {
+        }
+
 
     }
 }
