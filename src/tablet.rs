@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use kudu_pb::master::{TabletLocationsPB, TabletLocationsPB_ReplicaPB as ReplicaPB};
 
 use Partition;
@@ -7,6 +9,7 @@ use Result;
 use Schema;
 use TabletId;
 use TabletServerId;
+use dns;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tablet {
@@ -55,7 +58,9 @@ impl Tablet {
 pub struct Replica {
     id: TabletServerId,
     rpc_addrs: Vec<(String, u16)>,
+    resolved_rpc_addrs: Vec<SocketAddr>,
     role: RaftRole,
+    is_local: bool,
 }
 
 impl Replica {
@@ -75,6 +80,11 @@ impl Replica {
         self.role
     }
 
+    /// The resolved RPC addresses.
+    pub fn resolved_rpc_addrs(&self) -> &[SocketAddr] {
+        &self.resolved_rpc_addrs
+    }
+
     /// Creates a new `Replica` from a replica protobuf message.
     #[doc(hidden)]
     pub fn from_pb(mut pb: ReplicaPB) -> Result<Replica> {
@@ -84,11 +94,15 @@ impl Replica {
             let port = host_port.get_port() as u16;
             rpc_addrs.push((host_port.take_host(), port));
         }
+        let resolved_rpc_addrs = dns::resolve_hostports(&rpc_addrs);
         let role = RaftRole::from_pb(pb.get_role());
+        let is_local = resolved_rpc_addrs.iter().any(|addr| dns::is_local_addr(&addr.ip()));
         Ok(Replica {
             id: id,
             rpc_addrs: rpc_addrs,
+            resolved_rpc_addrs: resolved_rpc_addrs,
             role: role,
+            is_local: is_local,
         })
     }
 }

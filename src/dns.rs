@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::thread;
@@ -32,9 +33,7 @@ pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
     let mut addrs = HashSet::new();
     for hostport in hostports {
         match (hostport.get_host(), hostport.get_port() as u16).to_socket_addrs() {
-            Ok(resolved_addrs) => {
-                addrs.extend(resolved_addrs);
-            },
+            Ok(resolved_addrs) => addrs.extend(resolved_addrs),
             Err(error) => warn!("unable to resolve host '{}': {}",
                                 hostport.get_host(), error),
         }
@@ -42,13 +41,26 @@ pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
     addrs
 }
 
-/// Asynchronously resolves a sequence of hostnames into a set of socket addresses. If the hostname
-/// DNS lookup fails, it is filtered from the result. The results are passed to the provided
-/// callback upon completion.
-pub fn resolve_hosts_async<F>(registrations: Vec<HostPortPB>, f: F)
-where F: FnOnce(HashSet<SocketAddr>) + Send + 'static {
-    // TODO: is this done frequently enough to warrant a threadpool?
-    thread::spawn(move || f(resolve_hosts(&registrations)));
+pub fn resolve_hostports(hostports: &[(String, u16)]) -> Vec<SocketAddr> {
+    let mut addrs = Vec::new();
+    for &(ref host, port) in hostports {
+        match (host.as_str(), port).to_socket_addrs() {
+            Ok(resolved_addrs) => addrs.extend(resolved_addrs),
+            Err(error) => warn!("unable to resolve hostname '{:?}': {}", host, error),
+        }
+    }
+    addrs.sort_by(cmp_socket_addrs);
+    addrs.dedup();
+    addrs
+}
+
+fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
+    match (a, b) {
+        (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
+        (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
+        (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
+        (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
+    }
 }
 
 /// Returns `true` if socket addr is for a local interface.

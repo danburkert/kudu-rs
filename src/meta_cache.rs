@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::thread;
 use std::time::Instant;
 
 use kudu_pb::master::{GetTableLocationsRequestPB, TabletLocationsPB};
@@ -107,11 +108,16 @@ impl Entry {
 
 #[derive(Clone)]
 pub struct MetaCache {
+    inner: Arc<Inner>,
+}
+
+pub struct Inner {
     table: TableId,
     primary_key_schema: Schema,
     partition_schema: PartitionSchema,
-    entries: Arc<Mutex<Vec<Entry>>>,
+    entries: Mutex<Vec<Entry>>,
     master: MasterProxy,
+
 }
 
 impl MetaCache {
@@ -122,11 +128,13 @@ impl MetaCache {
                master: MasterProxy)
                -> MetaCache {
         MetaCache {
-            table: table,
-            primary_key_schema: primary_key_schema,
-            partition_schema: partition_schema,
-            entries: Arc::new(Mutex::new(Vec::new())),
-            master: master,
+            inner: Arc::new(Inner {
+                table: table,
+                primary_key_schema: primary_key_schema,
+                partition_schema: partition_schema,
+                entries: Mutex::new(Vec::new()),
+                master: master,
+            })
         }
     }
 
@@ -140,13 +148,13 @@ impl MetaCache {
         }
 
         let mut request = GetTableLocationsRequestPB::new();
-        request.mut_table().set_table_id(self.table.to_string().into_bytes());
+        request.mut_table().set_table_id(self.inner.table.to_string().into_bytes());
         request.set_partition_key_start(partition_key.to_owned());
         request.set_max_returned_locations(MAX_RETURNED_TABLE_LOCATIONS);
 
         let partition_key = partition_key.to_owned();
         let meta_cache = self.clone();
-        self.master.get_table_locations(deadline, request, move |resp| {
+        self.inner.master.get_table_locations(deadline, request, move |resp| {
             match resp {
                 Ok(mut resp) => {
                     meta_cache.add_tablet_locations(partition_key,
@@ -162,17 +170,20 @@ impl MetaCache {
                                partition_key: Vec<u8>,
                                tablets: Vec<TabletLocationsPB>,
                                cb: F) where F: FnOnce(Result<Entry>) + Send + 'static {
-        match self.tablet_locations_to_entries(&partition_key, tablets) {
-            Ok(entries) => {
-                self.splice_entries(entries);
-                cb(Ok(self.get_cached(&partition_key).unwrap()));
-            },
-            Err(error) => cb(Err(error)),
-        }
+        let meta_cache = self.clone();
+        thread::spawn(move || {
+            match meta_cache.tablet_locations_to_entries(&partition_key, tablets) {
+                Ok(entries) => {
+                    meta_cache.splice_entries(entries);
+                    cb(Ok(meta_cache.get_cached(&partition_key).unwrap()));
+                },
+                Err(error) => cb(Err(error)),
+            }
+        });
     }
 
     fn get_cached(&self, partition_key: &[u8]) -> Option<Entry> {
-        let entries = self.entries.lock();
+        let entries = self.inner.entries.lock();
         match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
             Ok(index) => Some(entries[index].clone()),
             Err(_) => None,
@@ -180,7 +191,7 @@ impl MetaCache {
     }
 
     fn splice_entries(&self, mut new_entries: VecDeque<Entry>) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.inner.entries.lock();
         let splice_point = match entries.binary_search_by(|entry| entry.cmp_entry(&new_entries[0])) {
             Ok(idx) | Err(idx) => idx,
         };
@@ -252,7 +263,9 @@ impl MetaCache {
         }
 
         for tablet in tablets {
-            let tablet = try!(Tablet::from_pb(&self.primary_key_schema, &self.partition_schema, tablet));
+            let tablet = try!(Tablet::from_pb(&self.inner.primary_key_schema,
+                                              &self.inner.partition_schema,
+                                              tablet));
             if tablet.partition().lower_bound_encoded() > &last_upper_bound {
                 entries.push_back(Entry::non_covered_range(last_upper_bound,
                                                            tablet.partition().lower_bound_encoded().to_owned()));
@@ -269,9 +282,8 @@ impl MetaCache {
         Ok(entries)
     }
 
-
     pub fn clear(&self) {
-        self.entries.lock().clear()
+        self.inner.entries.lock().clear()
     }
 }
 
@@ -320,7 +332,7 @@ mod tests {
         let (send, recv) = sync_channel(0);
 
         {
-            let entries = cache.entries.lock().clone();
+            let entries = cache.inner.entries.lock().clone();
             assert!(entries.is_empty());
         }
 
@@ -335,7 +347,7 @@ mod tests {
             assert_eq!(b"", entry.partition_lower_bound());
             assert_eq!(b"", entry.partition_upper_bound());
 
-            let entries = cache.entries.lock().clone();
+            let entries = cache.inner.entries.lock().clone();
             assert!(entry.equiv(&entries[0]));
 
             assert!(entry.equiv(&cache.get_cached(b"").unwrap()));
@@ -390,7 +402,7 @@ mod tests {
         assert_eq!(b"", first.partition_lower_bound());
         assert_eq!(vec![0, 0, 0, 1], first.partition_upper_bound());
 
-        let entries = cache.entries.lock().clone();
+        let entries = cache.inner.entries.lock().clone();
         assert_eq!(10, entries.len());
         assert!(first.equiv(&entries[0]));
 
@@ -404,7 +416,7 @@ mod tests {
         });
         let last = recv.recv().unwrap().unwrap();
 
-        let entries = cache.entries.lock().clone();
+        let entries = cache.inner.entries.lock().clone();
         assert_eq!(11, entries.len());
         assert!(entries[10].equiv(&last));
 
@@ -418,14 +430,14 @@ mod tests {
             result.unwrap();
         });
         let _ = recv.recv().unwrap().unwrap();
-        assert_eq!(11, cache.entries.lock().len());
+        assert_eq!(11, cache.inner.entries.lock().len());
 
         let s = send.clone();
         cache.get(&vec![0, 0, 0, 10], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let _ = recv.recv().unwrap().unwrap();
-        assert_eq!(12, cache.entries.lock().len());
+        assert_eq!(12, cache.inner.entries.lock().len());
     }
 
     #[test]
@@ -466,7 +478,7 @@ mod tests {
         recv.recv().unwrap().unwrap();
         recv.recv().unwrap().unwrap();
 
-        let entries = cache.entries.lock().clone();
+        let entries = cache.inner.entries.lock().clone();
         // Technically this could be 10 if the first request comes back before the second is
         // initiated, but in practice this doesn't really happen.
         assert!(entries.len() == 12);
@@ -521,7 +533,7 @@ mod tests {
             s.send(entry).unwrap();
         });
         recv.recv().unwrap().unwrap();
-        let entries = cache.entries.lock().clone();
+        let entries = cache.inner.entries.lock().clone();
         assert_eq!(6, entries.len());
 
         let expected: Vec<(&[u8], &[u8], bool)> = vec![ (b"",  b"a", false),
@@ -551,8 +563,8 @@ mod tests {
                 s.send(entry).unwrap();
             });
             recv.recv().unwrap().unwrap();
-            assert_eq!(&entries[6 - expected_entries..], &cache.entries.lock().clone()[..],
-                       "key: {:?}, expected entries: {}, entries: {:?}", key, expected_entries, &cache.entries.lock().clone()[..]);
+            assert_eq!(&entries[6 - expected_entries..], &cache.inner.entries.lock().clone()[..],
+                       "key: {:?}, expected entries: {}, entries: {:?}", key, expected_entries, &cache.inner.entries.lock().clone()[..]);
         }
     }
 }

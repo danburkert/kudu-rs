@@ -222,8 +222,6 @@ impl TabletProxy {
 
         for replica in &replicas {
         }
-
-
     }
 }
 
