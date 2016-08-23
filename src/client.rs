@@ -358,6 +358,12 @@ impl Client {
     pub fn master_proxy(&self) -> &MasterProxy {
         &self.master
     }
+
+    /// This should only be called when the table has been guaranteed to have been opened.
+    #[doc(hidden)]
+    pub fn meta_cache(&self, table: &TableId) -> MetaCache {
+        self.meta_caches.lock()[table].clone()
+    }
 }
 
 impl fmt::Debug for Client {

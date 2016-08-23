@@ -33,11 +33,13 @@ mod error;
 mod key;
 mod master;
 mod meta_cache;
+mod operation;
 mod partition;
 mod queue_map;
 mod row;
 mod rpc;
 mod schema;
+mod session;
 mod table;
 mod tablet;
 mod tablet_proxy;
@@ -58,6 +60,7 @@ pub use table::*;
 pub use tablet::*;
 pub use tablet_server::TabletServer;
 pub use value::Value;
+pub use operation::{Operation, OperationError, OperationResult};
 
 use std::fmt;
 use std::str;
@@ -296,7 +299,7 @@ impl RaftRole {
 
 macro_rules! id {
     ($id:ident) => {
-        #[derive(Clone, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, PartialEq, Eq, Hash)]
         pub struct $id {
             id: Uuid,
         }
