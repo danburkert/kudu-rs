@@ -26,6 +26,7 @@ before_script:
 script:
     # Run tests one at a time so that logging output is not jumbled.
   - env RUST_TEST_THREADS=1 env RUST_LOG=kudu=trace env RUST_BACKTRACE=1 cargo test --no-fail-fast
+  - cargo doc
 
 after_success:
   - travis-cargo --only nightly doc-upload
