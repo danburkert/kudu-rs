@@ -1,8 +1,8 @@
-use std::fmt;
-
-use Error;
+use Result;
 use Row;
 use TableId;
+use key;
+use meta_cache::MetaCache;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OperationKind {
@@ -12,20 +12,20 @@ pub enum OperationKind {
     Delete,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Operation {
-    table: TableId,
+    meta_cache: MetaCache,
     row: Row,
     kind: OperationKind,
 }
 
 impl Operation {
+
     pub fn kind(&self) -> OperationKind {
         self.kind
     }
 
     pub fn table(&self) -> TableId {
-        self.table
+        self.meta_cache.table()
     }
 
     pub fn row(&self) -> &Row {
@@ -35,28 +35,14 @@ impl Operation {
     pub fn mut_row(&mut self) -> &mut Row {
         &mut self.row
     }
-}
 
-pub type OperationResult = Result<(), OperationError>;
-
-#[derive(Debug)]
-pub struct OperationError {
-    pub row: Row,
-    pub error: Error,
-}
-
-impl ::std::error::Error for OperationError {
-    fn description(&self) -> &str {
-        self.error.description()
+    pub fn partition_key(&self) -> Result<Vec<u8>> {
+        let mut key = Vec::new();
+        try!(key::encode_partition_key(&self.meta_cache.partition_schema(), &self.row, &mut key));
+        Ok(key)
     }
 
-    fn cause(&self) -> Option<&::std::error::Error> {
-        self.error.cause()
-    }
-}
-
-impl fmt::Display for OperationError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+    pub fn meta_cache(&self) -> &MetaCache {
+        &self.meta_cache
     }
 }

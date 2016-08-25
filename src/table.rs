@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
@@ -82,8 +83,8 @@ impl Table {
 
         loop {
             let send = send.clone();
-            self.meta_cache.get(&last_partition_key, deadline,
-                                move |entry| send.send(entry).unwrap());
+            self.meta_cache.get(mem::replace(&mut last_partition_key, Vec::new()),
+                                deadline, move |entry| send.send(entry).unwrap());
 
             match try!(recv.recv().unwrap()) {
                 Entry::Tablet(tablet) => {

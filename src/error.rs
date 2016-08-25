@@ -63,6 +63,9 @@ pub enum Error {
     ConnectionError,
 
     NegotiationError(&'static str),
+
+    /// An operation failed because the range partition did not exist.
+    NoRangePartition,
 }
 
 impl Error {
@@ -93,6 +96,7 @@ impl Clone for Error {
             Error::Cancelled => Error::Cancelled,
             Error::ConnectionError => Error::ConnectionError,
             Error::NegotiationError(error) => Error::NegotiationError(error),
+            Error::NoRangePartition => Error::NoRangePartition,
         }
     }
 }
@@ -112,6 +116,7 @@ impl PartialEq for Error {
             (&Error::Cancelled, &Error::Cancelled) => true,
             (&Error::ConnectionError, &Error::ConnectionError) => true,
             (&Error::NegotiationError(ref a), &Error::NegotiationError(ref b)) => a == b,
+            (&Error::NoRangePartition, &Error::NoRangePartition) => true,
             _ => false,
         }
     }
@@ -132,6 +137,7 @@ impl error::Error for Error {
             Error::Cancelled => "operation cancelled",
             Error::ConnectionError => "connection error",
             Error::NegotiationError(error) => error,
+            Error::NoRangePartition => "no range partition",
         }
     }
 
@@ -149,6 +155,7 @@ impl error::Error for Error {
             Error::Cancelled => None,
             Error::ConnectionError => None,
             Error::NegotiationError(_) => None,
+            Error::NoRangePartition => None,
         }
     }
 }

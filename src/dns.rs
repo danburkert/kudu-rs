@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::thread;
 
 use ifaces;
 use kudu_pb::common::HostPortPB;

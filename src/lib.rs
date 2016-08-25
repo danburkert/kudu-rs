@@ -42,7 +42,7 @@ mod schema;
 mod session;
 mod table;
 mod tablet;
-mod tablet_proxy;
+//mod tablet_proxy;
 mod tablet_server;
 mod util;
 mod value;
@@ -60,7 +60,7 @@ pub use table::*;
 pub use tablet::*;
 pub use tablet_server::TabletServer;
 pub use value::Value;
-pub use operation::{Operation, OperationError, OperationResult};
+pub use operation::Operation;
 
 use std::fmt;
 use std::str;

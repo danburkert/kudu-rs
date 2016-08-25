@@ -139,20 +139,19 @@ impl MetaCache {
     }
 
     pub fn get<F>(&self,
-                  partition_key: &[u8],
+                  partition_key: Vec<u8>,
                   deadline: Instant,
                   cb: F) where F: FnOnce(Result<Entry>) + Send + 'static {
-        if let Some(entry) = self.get_cached(partition_key) {
+        if let Some(entry) = self.get_cached(&*partition_key) {
             cb(Ok(entry));
             return;
         }
 
         let mut request = GetTableLocationsRequestPB::new();
         request.mut_table().set_table_id(self.inner.table.to_string().into_bytes());
-        request.set_partition_key_start(partition_key.to_owned());
+        request.set_partition_key_start(partition_key.clone());
         request.set_max_returned_locations(MAX_RETURNED_TABLE_LOCATIONS);
 
-        let partition_key = partition_key.to_owned();
         let meta_cache = self.clone();
         self.inner.master.get_table_locations(deadline, request, move |resp| {
             match resp {
@@ -164,6 +163,18 @@ impl MetaCache {
                 Err(error) => cb(Err(error)),
             }
         });
+    }
+
+    pub fn table(&self) -> TableId {
+        self.inner.table
+    }
+
+    pub fn primary_key_schema(&self) -> &Schema {
+        &self.inner.primary_key_schema
+    }
+
+    pub fn partition_schema(&self) -> &PartitionSchema {
+        &self.inner.partition_schema
     }
 
     fn add_tablet_locations<F>(&self,
@@ -338,7 +349,7 @@ mod tests {
 
         {
             let send = send.clone();
-            cache.get(b"", deadline(), move |entry| {
+            cache.get(vec![], deadline(), move |entry| {
                 send.send(entry).unwrap();
             });
             let entry = recv.recv().unwrap().unwrap();
@@ -356,7 +367,7 @@ mod tests {
         cache.clear();
         {
             let send = send.clone();
-            cache.get(b"some-key", deadline(), move |entry| {
+            cache.get(b"some-key".as_ref().to_owned(), deadline(), move |entry| {
                 send.send(entry).unwrap();
             });
             let entry = recv.recv().unwrap().unwrap();
@@ -393,7 +404,7 @@ mod tests {
         let (send, recv) = sync_channel(1);
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 0, 1], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 0, 1], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let first = recv.recv().unwrap().unwrap();
@@ -411,7 +422,7 @@ mod tests {
         assert!(cache.get_cached(&vec![0, 0, 0, 10]).is_none());
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 11], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 11], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let last = recv.recv().unwrap().unwrap();
@@ -425,7 +436,7 @@ mod tests {
         assert!(cache.get_cached(&vec![0, 0, 0, 10, 5]).is_none());
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 9], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 9], deadline(), move |entry| {
             let result = s.send(entry);
             result.unwrap();
         });
@@ -433,7 +444,7 @@ mod tests {
         assert_eq!(11, cache.inner.entries.lock().len());
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 10], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 10], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let _ = recv.recv().unwrap().unwrap();
@@ -466,12 +477,12 @@ mod tests {
         let (send, recv) = sync_channel(2);
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 0], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 0], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
 
         let s = send.clone();
-        cache.get(&vec![0, 0, 0, 8], deadline(), move |entry| {
+        cache.get(vec![0, 0, 0, 8], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
 
@@ -529,7 +540,7 @@ mod tests {
         let (send, recv) = sync_channel(10);
 
         let s = send.clone();
-        cache.get(b"\0", deadline(), move |entry| {
+        cache.get(b"\0".as_ref().to_owned(), deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         recv.recv().unwrap().unwrap();
@@ -559,7 +570,7 @@ mod tests {
         for (key, expected_entries) in cases {
             cache.clear();
             let s = send.clone();
-            cache.get(key, deadline(), move |entry| {
+            cache.get(key.to_owned(), deadline(), move |entry| {
                 s.send(entry).unwrap();
             });
             recv.recv().unwrap().unwrap();

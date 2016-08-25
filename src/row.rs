@@ -15,6 +15,7 @@ use RangePartitionBound;
 use Result;
 use Schema;
 use Value;
+use operation::{Operation, OperationKind};
 use util;
 
 #[derive(Clone)]
@@ -293,21 +294,21 @@ impl OperationEncoder {
         }
     }
 
-    pub fn encode_insert(&mut self, row: &Row) {
-        self.encode(OperationType::INSERT, row);
+    pub fn encode(&mut self, operation: &Operation) {
+        let op_type = match operation.kind() {
+            OperationKind::Insert => OperationType::INSERT,
+            OperationKind::Update => OperationType::UPDATE,
+            OperationKind::Upsert => OperationType::UPSERT,
+            OperationKind::Delete => OperationType::DELETE,
+        };
+
+        self.encode_row(op_type, operation.row());
     }
-    pub fn encode_update(&mut self, row: &Row) {
-        self.encode(OperationType::UPDATE, row);
-    }
-    pub fn encode_delete(&mut self, row: &Row) {
-        self.encode(OperationType::DELETE, row);
-    }
-    pub fn encode_upsert(&mut self, row: &Row) {
-        self.encode(OperationType::UPSERT, row);
-    }
+
     pub fn encode_range_split(&mut self, row: &Row) {
-        self.encode(OperationType::SPLIT_ROW, row);
+        self.encode_row(OperationType::SPLIT_ROW, row);
     }
+
     pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
         let (lower_bound, lower_bound_type) = match *lower {
             RangePartitionBound::Inclusive(ref row) => (row, OperationType::RANGE_LOWER_BOUND),
@@ -318,14 +319,14 @@ impl OperationEncoder {
             RangePartitionBound::Exclusive(ref row) => (row, OperationType::RANGE_UPPER_BOUND),
         };
 
-        self.encode(lower_bound_type, &lower_bound);
-        self.encode(upper_bound_type, &upper_bound);
+        self.encode_row(lower_bound_type, &lower_bound);
+        self.encode_row(upper_bound_type, &upper_bound);
     }
     pub fn encode_range_partition_split(&mut self, split: &Row) {
-        self.encode(OperationType::SPLIT_ROW, split);
+        self.encode_row(OperationType::SPLIT_ROW, split);
     }
 
-    fn encode(&mut self, op_type: OperationType, row: &Row) {
+    fn encode_row(&mut self, op_type: OperationType, row: &Row) {
         let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *row;
 
         self.data.push(op_type as u8);
@@ -352,6 +353,19 @@ impl OperationEncoder {
             offset += size;
         }
         self.data.truncate(offset);
+    }
+
+    pub fn encoded_len(operation: &Operation) -> usize {
+        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *operation.row();
+
+        let mut len = 1; // op type
+
+        len += set_columns.data().len();
+        len += null_columns.data().len();
+        len += schema.row_size();
+        len += indirect_data.values().map(|data| data.len()).sum();
+
+        len
     }
 
     pub fn clear(&mut self) {

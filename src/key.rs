@@ -7,6 +7,8 @@ use ieee754::Ieee754;
 
 use DataType;
 use Error;
+use HashPartitionSchema;
+use PartitionSchema;
 use RangePartitionSchema;
 use Result;
 use Row;
@@ -47,27 +49,59 @@ pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
     h
 }
 
-pub fn encode_primary_key(row: &Row) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let num_primary_key_columns = row.schema().num_primary_key_columns();
-
-    for idx in 0..num_primary_key_columns {
-        encode_column(row, idx, idx + 1 == num_primary_key_columns, &mut buf);
-    }
-    buf
+pub fn encode_primary_key(row: &Row, buf: &mut Vec<u8>) -> Result<()> {
+    encode_columns(row, 0..row.schema().num_primary_key_columns(), buf)
 }
 
-fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) {
+pub fn encode_partition_key(partition_schema: &PartitionSchema,
+                            row: &Row,
+                            buf: &mut Vec<u8>) -> Result<()> {
+    for hash_schema in partition_schema.hash_partition_schemas() {
+        try!(encode_hash_partition_key(&hash_schema, row, buf));
+    }
+    encode_range_partition_key(partition_schema.range_partition_schema(), row, buf)
+}
+
+pub fn encode_range_partition_key(range_schema: &RangePartitionSchema,
+                                  row: &Row,
+                                  buf: &mut Vec<u8>) -> Result<()> {
+    encode_columns(row, range_schema.columns().iter().cloned(), buf)
+}
+
+pub fn encode_hash_partition_key(hash_schema: &HashPartitionSchema,
+                                 row: &Row,
+                                 buf: &mut Vec<u8>) -> Result<()> {
+    let len = buf.len();
+    try!(encode_columns(row, hash_schema.columns().iter().cloned(), buf));
+    let bucket = murmur2_64(&buf[len..], hash_schema.seed() as u64) % hash_schema.num_buckets() as u64;
+    buf.truncate(len);
+    buf.write_u32::<BigEndian>(bucket as u32).unwrap();
+    Ok(())
+}
+
+fn encode_columns<I>(row: &Row, idxs: I, buf: &mut Vec<u8>) -> Result<()>
+where I: Iterator<Item=usize> + ExactSizeIterator {
+    let columns = idxs.len();
+    let mut column = 1;
+    for idx in idxs {
+        try!(encode_column(row, idx, column == columns, buf));
+        column += 1;
+    }
+    Ok(())
+}
+
+fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) -> Result<()> {
     match row.schema().columns()[idx].data_type() {
-        DataType::Int8 => buf.push((row.get::<i8>(idx).unwrap() ^ i8::MIN) as u8),
-        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx).unwrap() ^ i16::MIN).unwrap(),
-        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx).unwrap() ^ i32::MIN).unwrap(),
-        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(row.get::<i64>(idx).unwrap() ^ i64::MIN).unwrap(),
-        DataType::Binary | DataType::String => encode_binary(row.get(idx).unwrap(), is_last, buf),
+        DataType::Int8 => buf.push((try!(row.get::<i8>(idx)) ^ i8::MIN) as u8),
+        DataType::Int16 => buf.write_i16::<BigEndian>(try!(row.get::<i16>(idx)) ^ i16::MIN).unwrap(),
+        DataType::Int32 => buf.write_i32::<BigEndian>(try!(row.get::<i32>(idx)) ^ i32::MIN).unwrap(),
+        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(try!(row.get::<i64>(idx)) ^ i64::MIN).unwrap(),
+        DataType::Binary | DataType::String => encode_binary(try!(row.get(idx)), is_last, buf),
         DataType::Bool | DataType::Float | DataType::Double => {
             panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
         },
     }
+    Ok(())
 }
 
 fn encode_binary(value: &[u8], is_last: bool, buf: &mut Vec<u8>) {
@@ -274,7 +308,8 @@ mod test {
             row.set(0, "fuzz\0\0\0\0buster").unwrap();
             row.set(1, 99).unwrap();
             row.set(2, "calibri\0\0\0").unwrap();
-            let key = encode_primary_key(&row);
+            let mut key = Vec::new();
+            encode_primary_key(&row, &mut key).unwrap();
 
             let decoded_row = decode_primary_key(&schema, &key).unwrap();
             assert_eq!(row, decoded_row);
