@@ -14,6 +14,8 @@ use kudu_pb::common::{
 
 use Column;
 use Error;
+use Operation;
+use OperationKind;
 use Result;
 use Schema;
 use TableId;
@@ -76,6 +78,10 @@ impl Table {
         self.num_replicas
     }
 
+    pub fn insert(&self) -> Operation {
+        Operation::new(self.meta_cache.clone(), OperationKind::Insert, self.schema.new_row())
+    }
+
     pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {
         let mut tablets = Vec::new();
         let (send, recv) = sync_channel(1);
@@ -83,8 +89,9 @@ impl Table {
 
         loop {
             let send = send.clone();
-            self.meta_cache.get(mem::replace(&mut last_partition_key, Vec::new()),
-                                deadline, move |entry| send.send(entry).unwrap());
+            self.meta_cache.entry(mem::replace(&mut last_partition_key, Vec::new()),
+                                  deadline,
+                                  move |entry| send.send(entry).unwrap());
 
             match try!(recv.recv().unwrap()) {
                 Entry::Tablet(tablet) => {

@@ -56,11 +56,12 @@ pub use master::Master;
 pub use partition::*;
 pub use row::Row;
 pub use schema::*;
+pub use session::Session;
 pub use table::*;
 pub use tablet::*;
 pub use tablet_server::TabletServer;
 pub use value::Value;
-pub use operation::Operation;
+pub use operation::{Operation, OperationKind};
 
 use std::fmt;
 use std::str;

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::mem;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::mem;
 
 use parking_lot::Mutex;
 use kudu_pb::tserver;
@@ -10,11 +11,16 @@ use Client;
 use Error;
 use Operation;
 use Result;
-use Tablet;
 use TabletId;
-use meta_cache;
+use backoff::Backoff;
 use queue_map::QueueMap;
 use row::OperationEncoder;
+use rpc::{
+    Callback,
+    Rpc,
+    tablet_server,
+};
+use util;
 
 #[derive(Clone)]
 pub struct SessionConfig {
@@ -77,7 +83,6 @@ impl Default for SessionConfig {
 pub struct Session<E> {
     client: Client,
     inner: Arc<Mutex<Inner<E>>>,
-    stats: Arc<FlushStats>,
     config: SessionConfig,
 }
 
@@ -120,6 +125,23 @@ struct Inner<E> {
 }
 
 impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
+
+    pub fn new(client: Client) -> Session<E> {
+        Session::with_config(client, SessionConfig::default())
+    }
+
+    pub fn with_config(client: Client, config: SessionConfig) -> Session<E> {
+        Session {
+            client: client,
+            inner: Arc::new(Mutex::new(Inner {
+                operations_in_lookup: QueueMap::new(),
+                batches: HashMap::new(),
+                flushes: QueueMap::new(),
+                buffered_data: 0,
+            })),
+            config: config,
+        }
+    }
 
     pub fn apply(&self, operation: Operation, error_cb: E) {
         let partition_key = match operation.partition_key() {
@@ -167,7 +189,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
         };
 
         let session = self.clone();
-        meta_cache.get(partition_key, Instant::now() + self.config.flush_timeout, move |result| {
+        meta_cache.tablet_id(partition_key, Instant::now() + self.config.flush_timeout, move |result| {
             if let Some((operation, error_cb, error)) =
                 session.operation_location_lookup_complete(idx, result) {
                 error_cb(operation, error);
@@ -199,7 +221,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
     /// error callback, and the associated error. The caller should complete the error callback.
     fn operation_location_lookup_complete(&self,
                                           idx: usize,
-                                          result: Result<meta_cache::Entry>)
+                                          result: Result<Option<TabletId>>)
                                           -> Option<(Operation, E, Error)> {
         let mut inner = self.inner.lock();
 
@@ -216,14 +238,14 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
         inner.buffered_data -= encoded_len;
 
         match result {
-            Ok(meta_cache::Entry::Tablet(tablet)) => {
+            Ok(Some(tablet_id)) => {
                 let Inner { ref mut batches, ref mut flushes, ref mut buffered_data, .. } = *inner;
-                let (ref mut batch, ref mut outstanding) = *batches.entry(tablet.id())
+                let (ref mut batch, ref mut outstanding) = *batches.entry(tablet_id)
                                                                    .or_insert_with(|| (None, 0));
                 match *batch {
                     None => {
                         // Case [1].
-                        *batch = Some(Batch::new(tablet, self.clone(), flush_epoch));
+                        *batch = Some(Batch::new(tablet_id, self.clone(), flush_epoch));
                         *outstanding += 1;
                     },
                     Some(ref mut batch) if batch.buffered_data.saturating_add(encoded_len) >
@@ -233,7 +255,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
                             return Some((operation, error_cb, Error::Backoff));
                         }
                         // Case [2].
-                        mem::replace(batch, Batch::new(tablet, self.clone(), flush_epoch)).send();
+                        mem::replace(batch, Batch::new(tablet_id, self.clone(), flush_epoch)).send();
                         *outstanding += 1;
                     }
                     _ => (),
@@ -269,7 +291,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
                 }
                 None
             },
-            Ok(meta_cache::Entry::NonCoveredRange { .. }) => Some((operation, error_cb, Error::NoRangePartition)),
+            Ok(None) => Some((operation, error_cb, Error::NoRangePartition)),
             Err(error) => Some((operation, error_cb, error)),
         }
     }
@@ -289,7 +311,6 @@ impl <E> Clone for Session<E> {
         Session {
             client: self.client.clone(),
             inner: self.inner.clone(),
-            stats: self.stats.clone(),
             config: self.config.clone(),
         }
     }
@@ -297,20 +318,26 @@ impl <E> Clone for Session<E> {
 
 #[must_use]
 struct Batch<E> {
-    tablet: Tablet,
+    tablet: TabletId,
+    leader_addrs: Vec<SocketAddr>,
     operations: Vec<(usize, Operation, E)>,
     session: Session<E>,
+    backoff: Backoff,
     buffered_data: usize,
     flush_epoch: usize,
 }
 
-impl <E> Batch<E> {
+impl <E> Batch<E> where E: Send + 'static {
+
     /// Creates a new `Batch`.
-    pub fn new(tablet: Tablet, session: Session<E>, flush_epoch: usize) -> Batch<E> {
+    pub fn new(tablet: TabletId, session: Session<E>, flush_epoch: usize) -> Batch<E> {
+        let backoff = Backoff::with_duration_range(10, util::duration_to_ms(&session.config.flush_timeout) as u32 / 2);
         Batch {
             tablet: tablet,
+            leader_addrs: Vec::new(),
             operations: Vec::new(),
             session: session,
+            backoff: backoff,
             buffered_data: 0,
             flush_epoch: flush_epoch,
         }
@@ -339,6 +366,76 @@ impl <E> Batch<E> {
         message.mut_row_operations().set_indirect_data(indirect_data);
         message.set_schema(self.operations[0].1.row().schema().as_pb());
         message.set_propagated_timestamp(self.session.client.latest_observed_timestamp());
+
+
+        let rpc = tablet_server::write(util::dummy_addr(),
+                                       Instant::now() + self.session.config.flush_timeout,
+                                       message);
+
+        self.lookup_locations(rpc);
+    }
+
+    fn handle_result(mut self: Box<Self>, result: Result<()>, rpc: Rpc) {
+        unimplemented!()
+    }
+
+    fn lookup_locations(mut self, rpc: Rpc) {
+        let partition_key = self.operations[0].1.partition_key().unwrap();
+
+        self.operations[0].1.meta_cache().clone().tablet_leader(partition_key, rpc.deadline, move |tablet| {
+            match tablet {
+                Ok(Some((tablet_id, mut leader_addrs))) => {
+                    // Check if the tablet matches.
+                    if tablet_id != self.tablet {
+                        return self.reapply();
+                    }
+
+                    // Reverse the leader addrs to use it like a stack.
+                    leader_addrs.reverse();
+                    self.leader_addrs = leader_addrs;
+
+                    self.dispatch_next(rpc);
+                },
+                Ok(None) => self.reapply(),
+                Err(error) => {
+                    warn!("unable to look up leader address for tablet {}", self.tablet);
+                    self.retry(rpc);
+                }
+            }
+        });
+    }
+
+    /// Sends the batch to the next leader address.
+    fn dispatch_next(mut self, mut rpc: Rpc) {
+        match self.leader_addrs.pop() {
+            Some(addr) => {
+                rpc.addr = addr;
+                let messenger = self.session.client.messenger().clone();
+                rpc.callback = Some(Box::new(self));
+                messenger.send(rpc);
+            },
+            None => {
+                self.retry(rpc);
+            }
+        }
+    }
+
+    fn retry(mut self, rpc: Rpc) {
+        let duration = Duration::from_millis(self.backoff.next_backoff_ms());
+        self.session.client.messenger().clone().timer(duration, Box::new(move || {
+            self.lookup_locations(rpc);
+        }));
+    }
+
+    /// Reapply each operation in the batch to the session with the same epoch.
+    fn reapply(self) {
+        unimplemented!()
+    }
+}
+
+impl <E> Callback for Batch<E> where E: Send + 'static {
+    fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+        self.handle_result(result, rpc);
     }
 }
 
@@ -397,4 +494,69 @@ struct FlushState {
     lookups_outstanding: usize,
     batches_outstanding: usize,
     callback: Option<Box<FnOnce(FlushStats) + Send + 'static>>,
+}
+
+#[cfg(test)]
+mod test {
+
+    use std::time::{Duration, Instant};
+    use std::sync::mpsc::sync_channel;
+
+    use AlterTableBuilder;
+    use ClientConfig;
+    use Client;
+    use Column;
+    use DataType;
+    use RangePartitionBound;
+    use SchemaBuilder;
+    use TableBuilder;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use schema::tests::simple_schema;
+    use super::*;
+
+    use env_logger;
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    #[test]
+    fn insert() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(&MiniClusterConfig::default());
+
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+
+        let schema = SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::Int32).set_not_null())
+            .add_column(Column::builder("val", DataType::Int32))
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap();
+
+        let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
+        table_builder.add_hash_partitions(vec!["key"], 4);
+        table_builder.set_num_replicas(1);
+
+        // The tablet server is real slow coming up.
+        // TODO: add MiniCluster::wait_for_startup() or equivalent.
+        ::std::thread::sleep_ms(2000);
+
+        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+
+        let session = client.new_session();
+        let (send, recv) = sync_channel(2);
+
+        {
+            let mut insert = table.insert();
+            insert.mut_row().set_by_name("key", 123i32);
+            insert.mut_row().set_by_name("val", 123i32);
+            let send = send.clone();
+
+            session.apply(insert, |operation, error| send.send((operation, error)).unwrap());
+        }
+    }
 }

@@ -20,6 +20,15 @@ pub struct Operation {
 
 impl Operation {
 
+    #[doc(hidden)]
+    pub fn new(meta_cache: MetaCache, kind: OperationKind, row: Row) -> Operation {
+        Operation {
+            meta_cache: meta_cache,
+            row: row,
+            kind: kind,
+        }
+    }
+
     pub fn kind(&self) -> OperationKind {
         self.kind
     }
@@ -46,3 +55,8 @@ impl Operation {
         &self.meta_cache
     }
 }
+
+fn sync_send<T>(thing: T) where T: Send + Sync { }
+
+fn foo(op: Operation) { sync_send(op) }
+fn foo1(op: ::error::Error) { sync_send(op) }

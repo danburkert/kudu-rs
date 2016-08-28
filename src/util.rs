@@ -1,6 +1,7 @@
 use std::fmt;
 use std::time::Duration;
 use std::time::{UNIX_EPOCH, SystemTime};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use chrono;
 
@@ -56,6 +57,10 @@ pub fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Resu
     };
 
     write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
+}
+
+pub fn dummy_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
 }
 
 #[cfg(test)]

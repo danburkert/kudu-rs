@@ -3,6 +3,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
+use std::net::SocketAddr;
+use RaftRole;
 
 use kudu_pb::master::{GetTableLocationsRequestPB, TabletLocationsPB};
 use parking_lot::Mutex;
@@ -11,6 +13,7 @@ use PartitionSchema;
 use Result;
 use Schema;
 use TableId;
+use TabletId;
 use master::MasterProxy;
 use tablet::Tablet;
 
@@ -138,14 +141,67 @@ impl MetaCache {
         }
     }
 
-    pub fn get<F>(&self,
-                  partition_key: Vec<u8>,
-                  deadline: Instant,
-                  cb: F) where F: FnOnce(Result<Entry>) + Send + 'static {
-        if let Some(entry) = self.get_cached(&*partition_key) {
-            cb(Ok(entry));
-            return;
+    pub fn entry<F>(&self,
+                    partition_key: Vec<u8>,
+                    deadline: Instant,
+                    cb: F)
+    where F: FnOnce(Result<Entry>) + Send + 'static {
+        self.extract(partition_key, deadline, |entry| entry.clone(), cb);
+    }
+
+    fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
+        match self.extract_cached(partition_key, |entry| entry.clone()) {
+            ExtractCachedResult::Value(value) => Some(value),
+            ExtractCachedResult::Extractor(_) => None,
         }
+    }
+
+    pub fn tablet_id<F>(&self,
+                        partition_key: Vec<u8>,
+                        deadline: Instant,
+                        cb: F)
+    where F: FnOnce(Result<Option<TabletId>>) + Send + 'static {
+        let extractor = |entry: &Entry| {
+            if let Entry::Tablet(ref tablet) = *entry {
+                Some(tablet.id())
+            } else {
+                None
+            }
+        };
+        self.extract(partition_key, deadline, extractor, cb);
+    }
+
+    pub fn tablet_leader<F>(&self,
+                            partition_key: Vec<u8>,
+                            deadline: Instant,
+                            cb: F)
+    where F: FnOnce(Result<Option<(TabletId, Vec<SocketAddr>)>>) + Send + 'static {
+        let mut addrs = Vec::with_capacity(1);
+        let extractor = move |entry: &Entry| {
+            if let Entry::Tablet(ref tablet) = *entry {
+                if tablet.replicas()[0].role() == RaftRole::Leader {
+                    addrs.extend_from_slice(&tablet.replicas()[0].resolved_rpc_addrs());
+                }
+                Some((tablet.id(), addrs))
+            } else {
+                None
+            }
+        };
+        self.extract(partition_key, deadline, extractor, cb);
+    }
+
+    fn extract<Extractor, T, F>(&self,
+                                partition_key: Vec<u8>,
+                                deadline: Instant,
+                                extractor: Extractor,
+                                cb: F)
+    where Extractor: FnOnce(&Entry) -> T + Send + 'static,
+          F: FnOnce(Result<T>) + Send + 'static {
+
+        let extractor = match self.extract_cached(&*partition_key, extractor) {
+            ExtractCachedResult::Extractor(extractor) => extractor,
+            ExtractCachedResult::Value(value) => return cb(Ok(value)),
+        };
 
         let mut request = GetTableLocationsRequestPB::new();
         request.mut_table().set_table_id(self.inner.table.to_string().into_bytes());
@@ -158,6 +214,7 @@ impl MetaCache {
                 Ok(mut resp) => {
                     meta_cache.add_tablet_locations(partition_key,
                                                     resp.take_tablet_locations().into_vec(),
+                                                    extractor,
                                                     cb);
                 },
                 Err(error) => cb(Err(error)),
@@ -177,27 +234,37 @@ impl MetaCache {
         &self.inner.partition_schema
     }
 
-    fn add_tablet_locations<F>(&self,
-                               partition_key: Vec<u8>,
-                               tablets: Vec<TabletLocationsPB>,
-                               cb: F) where F: FnOnce(Result<Entry>) + Send + 'static {
+    fn add_tablet_locations<F, Extractor, T>(&self,
+                                             partition_key: Vec<u8>,
+                                             tablets: Vec<TabletLocationsPB>,
+                                             extractor: Extractor,
+                                             cb: F)
+    where Extractor: FnOnce(&Entry) -> T + Send + 'static,
+          F: FnOnce(Result<T>) + Send + 'static {
         let meta_cache = self.clone();
         thread::spawn(move || {
             match meta_cache.tablet_locations_to_entries(&partition_key, tablets) {
                 Ok(entries) => {
                     meta_cache.splice_entries(entries);
-                    cb(Ok(meta_cache.get_cached(&partition_key).unwrap()));
+                    match meta_cache.extract_cached(&partition_key, extractor) {
+                        ExtractCachedResult::Extractor(_) => unreachable!(),
+                        ExtractCachedResult::Value(value) => cb(Ok(value)),
+                    }
                 },
                 Err(error) => cb(Err(error)),
             }
         });
     }
 
-    fn get_cached(&self, partition_key: &[u8]) -> Option<Entry> {
+    fn extract_cached<Extractor, T>(&self,
+                                    partition_key: &[u8],
+                                    extractor: Extractor)
+                                    -> ExtractCachedResult<Extractor, T>
+    where Extractor: FnOnce(&Entry) -> T {
         let entries = self.inner.entries.lock();
         match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
-            Ok(index) => Some(entries[index].clone()),
-            Err(_) => None,
+            Ok(index) => ExtractCachedResult::Value(extractor(&entries[index])),
+            Err(_) => ExtractCachedResult::Extractor(extractor),
         }
     }
 
@@ -298,6 +365,12 @@ impl MetaCache {
     }
 }
 
+/// Unfortunate brwck hack.
+enum ExtractCachedResult<Extractor, T> {
+    Extractor(Extractor),
+    Value(T),
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -349,7 +422,7 @@ mod tests {
 
         {
             let send = send.clone();
-            cache.get(vec![], deadline(), move |entry| {
+            cache.entry(vec![], deadline(), move |entry| {
                 send.send(entry).unwrap();
             });
             let entry = recv.recv().unwrap().unwrap();
@@ -361,13 +434,13 @@ mod tests {
             let entries = cache.inner.entries.lock().clone();
             assert!(entry.equiv(&entries[0]));
 
-            assert!(entry.equiv(&cache.get_cached(b"").unwrap()));
-            assert!(entry.equiv(&cache.get_cached(b"foo").unwrap()));
+            assert!(entry.equiv(&cache.cached_entry(b"").unwrap()));
+            assert!(entry.equiv(&cache.cached_entry(b"foo").unwrap()));
         }
         cache.clear();
         {
             let send = send.clone();
-            cache.get(b"some-key".as_ref().to_owned(), deadline(), move |entry| {
+            cache.entry(b"some-key".as_ref().to_owned(), deadline(), move |entry| {
                 send.send(entry).unwrap();
             });
             let entry = recv.recv().unwrap().unwrap();
@@ -404,7 +477,7 @@ mod tests {
         let (send, recv) = sync_channel(1);
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 0, 1], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 0, 1], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let first = recv.recv().unwrap().unwrap();
@@ -417,12 +490,12 @@ mod tests {
         assert_eq!(10, entries.len());
         assert!(first.equiv(&entries[0]));
 
-        assert!(first.equiv(&cache.get_cached(b"").unwrap()));
-        assert!(cache.get_cached(b"foo").is_none());
-        assert!(cache.get_cached(&vec![0, 0, 0, 10]).is_none());
+        assert!(first.equiv(&cache.cached_entry(b"").unwrap()));
+        assert!(cache.cached_entry(b"foo").is_none());
+        assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 11], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 11], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let last = recv.recv().unwrap().unwrap();
@@ -431,12 +504,12 @@ mod tests {
         assert_eq!(11, entries.len());
         assert!(entries[10].equiv(&last));
 
-        assert!(cache.get_cached(b"foo").unwrap().equiv(&last));
-        assert!(cache.get_cached(&vec![0, 0, 0, 10]).is_none());
-        assert!(cache.get_cached(&vec![0, 0, 0, 10, 5]).is_none());
+        assert!(cache.cached_entry(b"foo").unwrap().equiv(&last));
+        assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
+        assert!(cache.cached_entry(&vec![0, 0, 0, 10, 5]).is_none());
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 9], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 9], deadline(), move |entry| {
             let result = s.send(entry);
             result.unwrap();
         });
@@ -444,7 +517,7 @@ mod tests {
         assert_eq!(11, cache.inner.entries.lock().len());
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 10], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 10], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         let _ = recv.recv().unwrap().unwrap();
@@ -477,12 +550,12 @@ mod tests {
         let (send, recv) = sync_channel(2);
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 0], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 0], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
 
         let s = send.clone();
-        cache.get(vec![0, 0, 0, 8], deadline(), move |entry| {
+        cache.entry(vec![0, 0, 0, 8], deadline(), move |entry| {
             s.send(entry).unwrap();
         });
 
@@ -540,7 +613,7 @@ mod tests {
         let (send, recv) = sync_channel(10);
 
         let s = send.clone();
-        cache.get(b"\0".as_ref().to_owned(), deadline(), move |entry| {
+        cache.entry(b"\0".as_ref().to_owned(), deadline(), move |entry| {
             s.send(entry).unwrap();
         });
         recv.recv().unwrap().unwrap();
@@ -570,7 +643,7 @@ mod tests {
         for (key, expected_entries) in cases {
             cache.clear();
             let s = send.clone();
-            cache.get(key.to_owned(), deadline(), move |entry| {
+            cache.entry(key.to_owned(), deadline(), move |entry| {
                 s.send(entry).unwrap();
             });
             recv.recv().unwrap().unwrap();

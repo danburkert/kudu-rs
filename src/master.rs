@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::mem;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -18,6 +18,7 @@ use rpc::{
     Rpc,
     master
 };
+use util;
 use Error;
 use MasterError;
 use MasterErrorCode;
@@ -57,7 +58,7 @@ macro_rules! impl_master_rpc {
         pub fn $fn_name<F>(&self, deadline: Instant, request: $request_type, cb: F)
             where F: FnOnce(Result<$response_type>) + Send + 'static {
                 // The real leader address will be filled in by `send_to_leader`.
-                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+                let addr = util::dummy_addr();
                 let mut rpc = master::$fn_name(addr, deadline, request);
                 rpc.callback = Some(Box::new(CB(self.clone(), cb, PhantomData::<$response_type>)));
                 self.send_to_leader(rpc);
