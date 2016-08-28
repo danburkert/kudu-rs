@@ -8,8 +8,8 @@ use std::net::{
 use std::str;
 use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use kudu_pb::master::{
     DeleteTableRequestPB,
@@ -48,6 +48,7 @@ pub struct Client {
     master: MasterProxy,
     config: ClientConfig,
     meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
+    latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
 }
 
 impl Client {
@@ -61,6 +62,7 @@ impl Client {
             messenger: messenger,
             config: config,
             meta_caches: Arc::new(Mutex::new(HashMap::new())),
+            latest_observed_timestamp: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -352,6 +354,17 @@ impl Client {
                              .clone();
 
         Ok(Table::new(name, id, schema, partition_schema, resp.get_num_replicas() as u32, self.master.clone(), meta_cache))
+    }
+
+    pub fn latest_observed_timestamp(&self) -> u64 {
+        *self.latest_observed_timestamp.lock()
+    }
+
+    pub fn timestamp_observed(&self, timestamp: u64) {
+        let mut latest = self.latest_observed_timestamp.lock();
+        if timestamp > *latest {
+            *latest = timestamp;
+        }
     }
 
     #[doc(hidden)]

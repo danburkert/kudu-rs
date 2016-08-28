@@ -294,6 +294,13 @@ impl OperationEncoder {
         }
     }
 
+    pub fn with_capacity(data: usize, indirect_data: usize) -> OperationEncoder {
+        OperationEncoder {
+            data: Vec::with_capacity(data),
+            indirect_data: Vec::with_capacity(indirect_data),
+        }
+    }
+
     pub fn encode(&mut self, operation: &Operation) {
         let op_type = match operation.kind() {
             OperationKind::Insert => OperationType::INSERT,
@@ -356,7 +363,7 @@ impl OperationEncoder {
     }
 
     pub fn encoded_len(operation: &Operation) -> usize {
-        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *operation.row();
+        let Row { ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *operation.row();
 
         let mut len = 1; // op type
 

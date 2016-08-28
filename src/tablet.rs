@@ -20,8 +20,8 @@ pub struct Tablet {
 
 impl Tablet {
 
-    pub fn id(&self) -> &TabletId {
-        &self.id
+    pub fn id(&self) -> TabletId {
+        self.id
     }
 
     pub fn partition(&self) -> &Partition {

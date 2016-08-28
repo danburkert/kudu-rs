@@ -1,6 +1,7 @@
 use std::collections::{self, VecDeque};
 use std::fmt;
 use std::mem;
+use std::ops::{Index, IndexMut};
 use std::usize;
 
 /// `QueueMap` is a container with some of the properties of a FIFO queue, and some of the
@@ -57,7 +58,7 @@ impl <T> QueueMap<T> {
 
     /// Dequeues an element, returning the key and value.
     pub fn pop(&mut self) -> Option<(usize, T)> {
-        let key = self.front_key();
+        let key = self.key_offset();
         let val = self.queue.pop_front().map(Option::unwrap);
         self.trim_front();
         if val.is_some() {
@@ -68,7 +69,7 @@ impl <T> QueueMap<T> {
 
     /// Removes an element by key from the `QueueMap`.
     pub fn remove(&mut self, key: usize) -> Option<T> {
-        if key >= self.next_key || key < self.front_key() {
+        if key >= self.next_key || key < self.key_offset() {
             None
         } else {
             let offset = self.queue.len() - (self.next_key - key);
@@ -91,8 +92,8 @@ impl <T> QueueMap<T> {
             self.next_key = key + 1;
             self.len += 1;
             None
-        } else if key < self.front_key() {
-            for k in (key+1)..self.front_key() {
+        } else if key < self.key_offset() {
+            for k in (key+1)..self.key_offset() {
                 println!("pushing empty key: {}", k);
                 self.queue.push_front(None);
             }
@@ -122,7 +123,7 @@ impl <T> QueueMap<T> {
     /// Returns an iterator of the `QueueMap`s elements in FIFO order.
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            key: self.front_key(),
+            key: self.key_offset(),
             itr: self.queue.iter(),
         }
     }
@@ -130,7 +131,7 @@ impl <T> QueueMap<T> {
     /// Returns a mutable iterator of the `QueueMap`s elements in FIFO order.
     pub fn iter_mut(&mut self) -> IterMut<T> {
         IterMut {
-            key: self.front_key(),
+            key: self.key_offset(),
             itr: self.queue.iter_mut(),
         }
     }
@@ -139,19 +140,52 @@ impl <T> QueueMap<T> {
     pub fn drain(&mut self) -> Drain<T> {
         self.len = 0;
         Drain {
-            key: self.front_key(),
+            key: self.key_offset(),
             itr: self.queue.drain(..),
         }
     }
 
-    fn front_key(&self) -> usize {
+    fn key_offset(&self) -> usize {
         self.next_key - self.queue.len() as usize
+    }
+
+    /// The key of the least recently queued element, or `None` if the `QueueMap` is empty.
+    pub fn front_key(&self) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.key_offset())
+        }
+    }
+
+    /// The key of the most recently queued element, or `None` if the `QueueMap` is empty.
+    pub fn back_key(&self) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.next_key - 1)
+        }
     }
 
     fn trim_front(&mut self) {
         while let Some(&None) = self.queue.front() {
             self.queue.pop_front();
         }
+    }
+}
+
+impl <T> Index<usize> for QueueMap<T> {
+    type Output = T;
+    fn index(&self, key: usize) -> &T {
+        let offset = self.queue.len() - (self.next_key - key);
+        self.queue[offset].as_ref().unwrap()
+    }
+}
+
+impl <T> IndexMut<usize> for QueueMap<T> {
+    fn index_mut(&mut self, key: usize) -> &mut T {
+        let offset = self.queue.len() - (self.next_key - key);
+        self.queue[offset].as_mut().unwrap()
     }
 }
 
@@ -174,7 +208,7 @@ impl <T> IntoIterator for QueueMap<T> {
     type IntoIter = IntoIter<T>;
     fn into_iter(self) -> IntoIter<T> {
         IntoIter {
-            key: self.front_key(),
+            key: self.key_offset(),
             itr: self.queue.into_iter(),
         }
     }
