@@ -49,17 +49,19 @@ pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
     h
 }
 
-pub fn encode_primary_key(row: &Row, buf: &mut Vec<u8>) -> Result<()> {
-    encode_columns(row, 0..row.schema().num_primary_key_columns(), buf)
+pub fn encode_primary_key(row: &Row) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    try!(encode_columns(row, 0..row.schema().num_primary_key_columns(), &mut buf));
+    Ok(buf)
 }
 
-pub fn encode_partition_key(partition_schema: &PartitionSchema,
-                            row: &Row,
-                            buf: &mut Vec<u8>) -> Result<()> {
+pub fn encode_partition_key(partition_schema: &PartitionSchema, row: &Row) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
     for hash_schema in partition_schema.hash_partition_schemas() {
-        try!(encode_hash_partition_key(&hash_schema, row, buf));
+        try!(encode_hash_partition_key(&hash_schema, row, &mut buf));
     }
-    encode_range_partition_key(partition_schema.range_partition_schema(), row, buf)
+    try!(encode_range_partition_key(partition_schema.range_partition_schema(), row, &mut buf));
+    Ok(buf)
 }
 
 pub fn encode_range_partition_key(range_schema: &RangePartitionSchema,
@@ -308,8 +310,7 @@ mod test {
             row.set(0, "fuzz\0\0\0\0buster").unwrap();
             row.set(1, 99).unwrap();
             row.set(2, "calibri\0\0\0").unwrap();
-            let mut key = Vec::new();
-            encode_primary_key(&row, &mut key).unwrap();
+            let mut key = encode_primary_key(&row).unwrap();
 
             let decoded_row = decode_primary_key(&schema, &key).unwrap();
             assert_eq!(row, decoded_row);

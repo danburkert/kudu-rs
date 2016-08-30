@@ -46,17 +46,10 @@ impl Operation {
     }
 
     pub fn partition_key(&self) -> Result<Vec<u8>> {
-        let mut key = Vec::new();
-        try!(key::encode_partition_key(&self.meta_cache.partition_schema(), &self.row, &mut key));
-        Ok(key)
+        key::encode_partition_key(&self.meta_cache.partition_schema(), &self.row)
     }
 
     pub fn meta_cache(&self) -> &MetaCache {
         &self.meta_cache
     }
 }
-
-fn sync_send<T>(thing: T) where T: Send + Sync { }
-
-fn foo(op: Operation) { sync_send(op) }
-fn foo1(op: ::error::Error) { sync_send(op) }

@@ -12,6 +12,7 @@ use kudu_pb::common::{
     PartitionSchemaPB_HashBucketSchemaPB as HashBucketSchemaPB
 };
 
+use Client;
 use Column;
 use Error;
 use Operation;
@@ -20,7 +21,6 @@ use Result;
 use Schema;
 use TableId;
 use Tablet;
-use master::MasterProxy;
 use meta_cache::{Entry, MetaCache};
 use partition::PartitionSchema;
 use row::OperationEncoder;
@@ -33,8 +33,8 @@ pub struct Table {
     schema: Schema,
     partition_schema: PartitionSchema,
     num_replicas: u32,
-    master_proxy: MasterProxy,
     meta_cache: MetaCache,
+    client: Client,
 }
 
 impl Table {
@@ -45,16 +45,16 @@ impl Table {
                schema: Schema,
                partition_schema: PartitionSchema,
                num_replicas: u32,
-               master_proxy: MasterProxy,
-               meta_cache: MetaCache) -> Table {
+               meta_cache: MetaCache,
+               client: Client) -> Table {
         Table {
             name: name,
             id: id,
             schema: schema,
             partition_schema: partition_schema,
             num_replicas: num_replicas,
-            master_proxy: master_proxy,
             meta_cache: meta_cache,
+            client: client,
         }
     }
 
@@ -111,6 +111,11 @@ impl Table {
     #[doc(hidden)]
     pub fn meta_cache(&self) -> &MetaCache {
         &self.meta_cache
+    }
+
+    #[doc(hidden)]
+    pub fn client(&self) -> &Client {
+        &self.client
     }
 }
 

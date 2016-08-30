@@ -546,6 +546,15 @@ impl From<TabletServerErrorPB> for TabletServerError {
     }
 }
 
+impl From<StatusPB> for TabletServerError {
+    fn from(mut error: StatusPB) -> TabletServerError {
+        TabletServerError {
+            code: TabletServerErrorCode::UnknownError,
+            status: Status::from(error),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MasterErrorCode {
     /// An error which has no more specific error code. The `Status` code and message may reveal

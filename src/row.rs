@@ -333,7 +333,7 @@ impl OperationEncoder {
         self.encode_row(OperationType::SPLIT_ROW, split);
     }
 
-    fn encode_row(&mut self, op_type: OperationType, row: &Row) {
+    pub fn encode_row(&mut self, op_type: OperationType, row: &Row) {
         let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *row;
 
         self.data.push(op_type as u8);
@@ -362,8 +362,8 @@ impl OperationEncoder {
         self.data.truncate(offset);
     }
 
-    pub fn encoded_len(operation: &Operation) -> usize {
-        let Row { ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *operation.row();
+    pub fn encoded_len(row: &Row) -> usize {
+        let Row { ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *row;
 
         let mut len = 1; // op type
 

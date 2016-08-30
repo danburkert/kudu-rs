@@ -42,10 +42,10 @@ mod schema;
 mod session;
 mod table;
 mod tablet;
-//mod tablet_proxy;
 mod tablet_server;
 mod util;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod mini_cluster;

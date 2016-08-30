@@ -151,7 +151,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
                 return;
             },
         };
-        let encoded_len = OperationEncoder::encoded_len(&operation);
+        let encoded_len = OperationEncoder::encoded_len(operation.row());
 
         // Sanity check: if the operation is bigger than the max batch data size,
         // then we must reject it.
@@ -199,7 +199,7 @@ impl <E> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
 
     /// Flush the `Session`. The provided callback is called with statistics about the flush when
     /// it compeletes.
-    pub fn flush<F>(&self, cb: F) where F: FnOnce(FlushStats) + Send + 'static {
+    pub fn flush<F>(&self, _cb: F) where F: FnOnce(FlushStats) + Send + 'static {
         unimplemented!()
     }
 
@@ -375,7 +375,7 @@ impl <E> Batch<E> where E: Send + 'static {
         self.lookup_locations(rpc);
     }
 
-    fn handle_result(mut self: Box<Self>, result: Result<()>, rpc: Rpc) {
+    fn handle_result(self: Box<Self>, _result: Result<()>, _rpc: Rpc) {
         unimplemented!()
     }
 
@@ -398,7 +398,7 @@ impl <E> Batch<E> where E: Send + 'static {
                 },
                 Ok(None) => self.reapply(),
                 Err(error) => {
-                    warn!("unable to look up leader address for tablet {}", self.tablet);
+                    warn!("unable to look up leader address for tablet {}: {}", self.tablet, error);
                     self.retry(rpc);
                 }
             }
@@ -434,7 +434,7 @@ impl <E> Batch<E> where E: Send + 'static {
 }
 
 impl <E> Callback for Batch<E> where E: Send + 'static {
-    fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
+    fn callback(self: Box<Self>, result: Result<()>, rpc: Rpc) {
         self.handle_result(result, rpc);
     }
 }
@@ -547,6 +547,7 @@ mod test {
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
 
+        /*
         let session = client.new_session();
         let (send, recv) = sync_channel(2);
 
@@ -558,5 +559,6 @@ mod test {
 
             session.apply(insert, |operation, error| send.send((operation, error)).unwrap());
         }
+        */
     }
 }
