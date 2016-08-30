@@ -24,10 +24,8 @@ use kudu_pb::master::{
 use parking_lot::Mutex;
 
 use Error;
-use Operation;
 use Result;
 use Schema;
-use Session;
 use TableId;
 use TabletServer;
 use backoff::Backoff;
@@ -356,10 +354,6 @@ impl Client {
                              .clone();
 
         Ok(Table::new(name, id, schema, partition_schema, resp.get_num_replicas() as u32, meta_cache, self.clone()))
-    }
-
-    pub fn new_session<E>(&self) -> Session<E> where E: FnOnce(Operation, Error) + Send + 'static {
-        Session::new(self.clone())
     }
 
     pub fn latest_observed_timestamp(&self) -> u64 {

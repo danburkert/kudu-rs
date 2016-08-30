@@ -250,6 +250,7 @@ impl Partition {
         &self.upper_bound_encoded
     }
 
+    #[doc(hidden)]
     pub fn from_pb(primary_key_schema: &Schema,
                    partition_schema: &PartitionSchema,
                    mut partition: PartitionPB)

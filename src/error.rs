@@ -547,7 +547,7 @@ impl From<TabletServerErrorPB> for TabletServerError {
 }
 
 impl From<StatusPB> for TabletServerError {
-    fn from(mut error: StatusPB) -> TabletServerError {
+    fn from(error: StatusPB) -> TabletServerError {
         TabletServerError {
             code: TabletServerErrorCode::UnknownError,
             status: Status::from(error),

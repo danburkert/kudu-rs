@@ -15,16 +15,18 @@ use kudu_pb::common::{
 use Client;
 use Column;
 use Error;
-use Operation;
-use OperationKind;
+use FlushStats;
+use meta_cache::{Entry, MetaCache};
+use OperationType;
+use partition::PartitionSchema;
 use Result;
+use row::OperationEncoder;
+use row::Row;
 use Schema;
 use TableId;
 use Tablet;
-use meta_cache::{Entry, MetaCache};
-use partition::PartitionSchema;
-use row::OperationEncoder;
-use row::Row;
+use Writer;
+use WriterConfig;
 
 #[derive(Clone)]
 pub struct Table {
@@ -78,8 +80,10 @@ impl Table {
         self.num_replicas
     }
 
-    pub fn insert(&self) -> Operation {
-        Operation::new(self.meta_cache.clone(), OperationKind::Insert, self.schema.new_row())
+    pub fn new_writer<F, E>(&self, config: WriterConfig, flush_callback: F, error_callback: E) -> Writer<F, E>
+    where F: Fn(FlushStats) + Send + Sync + 'static,
+          E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+        Writer::new(self.clone(), config, flush_callback, error_callback)
     }
 
     pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {

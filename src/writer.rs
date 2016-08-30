@@ -70,13 +70,35 @@ pub struct WriterConfig {
     early_flush_watermark: u8,
 }
 
-
-pub struct Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
-    inner: Arc<Inner<E>>,
+impl Default for WriterConfig {
+    fn default() -> WriterConfig {
+        WriterConfig {
+            flush_timeout: Duration::from_secs(30),
+            background_flush_interval: Duration::from_secs(1),
+            max_buffered_data: 256 * 1024 * 1024,
+            max_data_per_batch: 7 * 1024 * 1024,
+            max_batches_per_tablet: 2,
+            early_flush_watermark: 80,
+        }
+    }
 }
 
-struct Inner<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl WriterConfig {
+    fn early_flush_watermark(&self) -> usize {
+        (self.max_buffered_data / 100) * self.early_flush_watermark as usize
+    }
+}
+
+
+pub struct Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                              E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+    inner: Arc<Inner<F, E>>,
+}
+
+struct Inner<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                         E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
     table: Table,
+    flush_callback: F,
     error_callback: E,
     config: WriterConfig,
     state: Mutex<State>,
@@ -152,12 +174,12 @@ struct FlushState {
     stats: FlushStats,
     lookups_outstanding: usize,
     batches_outstanding: usize,
-    callback: Option<Box<FnOnce(FlushStats) + Send + 'static>>,
 }
 
 /// Carries information about the batches and row operations in a flush.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FlushStats {
+    epoch: usize,
     successful_batches: usize,
     failed_batches: usize,
     successful_operations: usize,
@@ -166,39 +188,82 @@ pub struct FlushStats {
 }
 
 impl FlushStats {
-    fn successful_batches(&self) -> usize {
+    fn new(epoch: usize) -> FlushStats {
+        FlushStats {
+            epoch: epoch,
+            successful_batches: 0,
+            failed_batches: 0,
+            successful_operations: 0,
+            failed_operations: 0,
+            data: 0,
+        }
+    }
+}
+
+impl FlushStats {
+    pub fn epoch(&self) -> usize {
+        self.epoch
+    }
+    pub fn successful_batches(&self) -> usize {
         self.successful_batches
     }
-    fn failed_batches(&self) -> usize {
+    pub fn failed_batches(&self) -> usize {
         self.successful_batches
     }
-    fn successful_operations(&self) -> usize {
+    pub fn successful_operations(&self) -> usize {
         self.successful_batches
     }
-    fn failed_operations(&self) -> usize {
+    pub fn failed_operations(&self) -> usize {
         self.successful_batches
     }
-    fn data(&self) -> usize {
+    pub fn data(&self) -> usize {
         self.successful_batches
     }
 }
 
-impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                               E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
 
-    fn new(table: Table, error_callback: E, config: WriterConfig) -> Writer<E> {
+    #[doc(hidden)]
+    pub fn new(table: Table, config: WriterConfig, flush_callback: F, error_callback: E) -> Writer<F, E> {
+        let flush = FlushState {
+            stats: FlushStats::new(0),
+            lookups_outstanding: 0,
+            batches_outstanding: 0,
+        };
+        let mut flushes = QueueMap::new();
+        debug_assert_eq!(0, flushes.push(flush));
+
         Writer {
             inner: Arc::new(Inner {
                 table: table,
+                flush_callback: flush_callback,
                 error_callback: error_callback,
                 config: config,
                 state: Mutex::new(State {
                     operations_in_lookup: QueueMap::new(),
                     tablets: HashMap::new(),
-                    flushes: QueueMap::new(),
+                    flushes: flushes,
                     buffered_data: 0,
                 }),
             }),
         }
+    }
+
+    pub fn insert(&self, row: Row) {
+        self.apply(row, OperationType::Insert);
+    }
+
+    pub fn update(&self, row: Row) {
+        self.apply(row, OperationType::Update);
+    }
+
+    pub fn upsert(&self, row: Row) {
+        self.apply(row, OperationType::Upsert);
+    }
+
+    pub fn delete(&self, row: Row) {
+        self.apply(row, OperationType::Delete);
     }
 
     pub fn apply(&self, row: Row, op_type: OperationType) {
@@ -246,8 +311,9 @@ impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'stati
             // Add the operation to the operations_in_flight queue. This assigns an idx which
             // uniquely identifies the operation and gives it a total ordering among applied
             // operations in the writer.
-            state.buffered_data = data;
+            state.buffered_data += data;
             let flush_epoch = state.flush_epoch();
+            state.flushes[flush_epoch].lookups_outstanding += 1;
             state.operations_in_lookup.push(OperationInLookup {
                 row: row,
                 flush_epoch: flush_epoch,
@@ -256,7 +322,7 @@ impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'stati
             })
         };
 
-        let writer: Writer<E> = self.clone();
+        let writer: Writer<F, E> = self.clone();
         let deadline = Instant::now() + self.config().flush_timeout;
         self.meta_cache().tablet_id(partition_key, deadline, move |result| {
             if let Some((row, op_type, error)) = writer.op_lookup_complete(idx, result) {
@@ -341,6 +407,7 @@ impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'stati
         let mut complete_flushes = Vec::new();
         {
             let mut state = self.state();
+            state.tablets.get_mut(&tablet).unwrap().1 -= 1;
             state.buffered_data -= data;
             {
                 let flush = &mut state.flushes[flush_epoch];
@@ -365,21 +432,18 @@ impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'stati
             // outside the lock.
             while {
                 let flush = &state.flushes[oldest_epoch];
-                flush.callback.is_some() &&
+                state.flushes.len() > 1 &&
                     flush.lookups_outstanding == 0 &&
                     flush.batches_outstanding == 0
             } {
                 complete_flushes.push(state.flushes.pop().unwrap().1);
-                match state.flushes.front_key() {
-                    Some(key) => oldest_epoch = key,
-                    None => break,
-                }
+                oldest_epoch = state.flushes.front_key().unwrap();
             }
         }
 
         for flush in complete_flushes {
-            let FlushState { stats, callback, .. } = flush;
-            callback.unwrap().call_once(stats);
+            let FlushState { stats, .. } = flush;
+            (self.inner.flush_callback)(stats);
         }
     }
 
@@ -416,27 +480,30 @@ impl <E> Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'stati
     }
 }
 
-impl <E> Clone for Writer<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
-    fn clone(&self) -> Writer<E> {
+impl <F, E> Clone for Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                                   E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+    fn clone(&self) -> Writer<F, E> {
         Writer { inner: self.inner.clone() }
     }
 }
 
 #[must_use]
-struct Batch<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+struct Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                         E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
     tablet: TabletId,
     leader_addrs: Vec<SocketAddr>,
     operations: Vec<(Row, usize, OperationType)>,
-    writer: Writer<E>,
+    writer: Writer<F, E>,
     backoff: Backoff,
     buffered_data: usize,
     flush_epoch: usize,
 }
 
-impl <E> Batch<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                              E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
 
     /// Transforms the buffer into a batch, and sends it to the tablet server.
-    fn send(writer: Writer<E>, tablet: TabletId, buffer: Buffer) {
+    fn send(writer: Writer<F, E>, tablet: TabletId, buffer: Buffer) {
         let Buffer { mut operations, buffered_data, flush_epoch } = buffer;
 
         // Sort the operations so that they are written in apply order.
@@ -560,7 +627,7 @@ impl <E> Batch<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static
         }
     }
 
-    fn retry(mut self, mut rpc: Rpc) {
+    fn retry(mut self, rpc: Rpc) {
         let duration = Duration::from_millis(self.backoff.next_backoff_ms());
         self.writer.messenger().clone().timer(duration, Box::new(move || {
             self.lookup_locations(rpc);
@@ -575,8 +642,95 @@ impl <E> Batch<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static
     }
 }
 
-impl <E> Callback for Batch<E> where E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl <F, E> Callback for Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
+                                           E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
     fn callback(self: Box<Self>, result: Result<()>, rpc: Rpc) {
         self.handle_response(result, rpc);
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use std::sync::Arc;
+    use std::sync::mpsc::sync_channel;
+    use std::time::{Duration, Instant};
+
+    use AlterTableBuilder;
+    use ClientConfig;
+    use Client;
+    use Column;
+    use DataType;
+    use RangePartitionBound;
+    use SchemaBuilder;
+    use TableBuilder;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use schema::tests::simple_schema;
+    use super::*;
+
+    use env_logger;
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    #[test]
+    fn insert() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(&MiniClusterConfig::default());
+
+        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+
+        let schema = SchemaBuilder::new()
+            .add_column(Column::builder("key", DataType::Int32).set_not_null())
+            .add_column(Column::builder("val", DataType::Int32))
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap();
+
+        let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
+        table_builder.add_hash_partitions(vec!["key"], 4);
+        table_builder.set_num_replicas(1);
+
+        // The tablet server is real slow coming up.
+        // TODO: add MiniCluster::wait_for_startup() or equivalent.
+        ::std::thread::sleep_ms(2000);
+
+        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+
+        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+
+        let (flush_send, flush_recv) = sync_channel(10);
+        let (error_send, error_recv) = sync_channel(10);
+
+        let flush_send = Arc::new(flush_send);
+        let error_send = Arc::new(error_send);
+
+        let flush_callback = move |stats| {
+            flush_send.send(stats).unwrap();
+        };
+        let error_callback = move |row, op_type, error| {
+            error_send.send((row, op_type, error)).unwrap();
+        };
+
+        let writer = table.new_writer(WriterConfig::default(), flush_callback, error_callback);
+
+        {
+            let mut insert = table.schema().new_row();
+            insert.set_by_name("key", 123i32).unwrap();
+            insert.set_by_name("val", 123i32).unwrap();
+
+            writer.insert(insert);
+        }
+        {
+            let mut insert = table.schema().new_row();
+            insert.set_by_name("key", 123i32).unwrap();
+            insert.set_by_name("val", 1234i32).unwrap();
+
+            writer.insert(insert);
+        }
+
+
     }
 }
