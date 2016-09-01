@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -68,6 +70,11 @@ pub struct WriterConfig {
     ///
     /// Defaults to 80. Must be between 0 (exclusive) and 100 (inclusive).
     early_flush_watermark: u8,
+
+    /// Determines which events are sent to the event_channel.
+    event_set: EventSet,
+
+    event_channel: Option<SyncSender<Event>>,
 }
 
 impl Default for WriterConfig {
@@ -79,8 +86,51 @@ impl Default for WriterConfig {
             max_data_per_batch: 7 * 1024 * 1024,
             max_batches_per_tablet: 2,
             early_flush_watermark: 80,
+            event_set: EventSet::Flushes,
+            event_channel: None,
         }
     }
+}
+
+impl WriterConfig {
+
+    pub fn event_channel(&mut self) -> Receiver<Event> {
+        self.event_channel_with_capacity(100)
+    }
+
+    pub fn event_channel_with_capacity(&mut self, capacity: usize) -> Receiver<Event> {
+        let (send, recv) = sync_channel(capacity);
+        self.event_channel = Some(send);
+        recv
+    }
+
+    pub fn with_event_channel(&mut self, sender: SyncSender<Event>) {
+        self.event_channel = Some(sender);
+    }
+
+    fn into_config(mut self) -> (Config, Option<SyncSender<Event>>) {
+        (Config {
+            flush_timeout: self.flush_timeout,
+            background_flush_interval: self.background_flush_interval,
+            max_buffered_data: self.max_buffered_data,
+            max_data_per_batch: self.max_data_per_batch,
+            max_batches_per_tablet: self.max_batches_per_tablet,
+            early_flush_watermark: self.early_flush_watermark,
+            event_set: self.event_set,
+        },
+        self.event_channel.take())
+    }
+}
+
+/// WriterConfig without the event_channel.
+struct Config {
+    flush_timeout: Duration,
+    background_flush_interval: Duration,
+    max_buffered_data: usize,
+    max_data_per_batch: usize,
+    max_batches_per_tablet: u8,
+    early_flush_watermark: u8,
+    event_set: EventSet,
 }
 
 impl WriterConfig {
@@ -89,18 +139,71 @@ impl WriterConfig {
     }
 }
 
-
-pub struct Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                              E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
-    inner: Arc<Inner<F, E>>,
+#[derive(Clone, Debug)]
+pub enum Event {
+    Flush(FlushStats),
+    SuccessfulOperation(Row, OperationType),
+    FailedOperation(Row, OperationType, Error),
 }
 
-struct Inner<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                         E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl Event {
+    pub fn is_flush(&self) -> bool {
+        match *self {
+            Event::Flush(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_successful_operation(&self) -> bool {
+        match *self {
+            Event::SuccessfulOperation(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_failed_operation(&self) -> bool {
+        match *self {
+            Event::FailedOperation(..) => true,
+            _ => false,
+        }
+    }
+}
+
+/// The events that the writer should return in the event channel. Each event set builds on the
+/// previous.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventSet {
+    /// Flush events.
+    Flushes,
+    /// Flush events and failed operation events.
+    FailedOperations,
+    /// Flush events, failed operation events, and successful operation events.
+    SuccessfulOperations,
+}
+
+impl EventSet {
+    pub fn has_failed_operations(&self) -> bool {
+        match *self {
+            EventSet::Flushes => false,
+            _ => true,
+        }
+    }
+
+    pub fn has_successful_operation(&self) -> bool {
+        match *self {
+            EventSet::SuccessfulOperations => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Writer {
+    inner: Arc<Inner>,
+    event_channel: Option<SyncSender<Event>>,
+}
+
+struct Inner {
     table: Table,
-    flush_callback: F,
-    error_callback: E,
-    config: WriterConfig,
+    config: Config,
     state: Mutex<State>,
 }
 
@@ -122,6 +225,38 @@ impl State {
     /// Returns the current flush epoch.
     fn flush_epoch(&self) -> usize {
         self.flushes.back_key().unwrap()
+    }
+
+    fn flush(&mut self, flush_epoch: usize, config: &Config, buffers: &mut Vec<(TabletId, Buffer)>) {
+        let flush = self.flushes
+                        .iter()
+                        .take_while(|flush| flush.0 <= flush_epoch)
+                        .all(|flush| flush.1.lookups_outstanding == 0);
+
+        if flush {
+            let max_batches_per_tablet = config.max_batches_per_tablet;
+            for (&tablet_id, &mut (ref mut buffer_opt, ref mut outstanding)) in self.tablets.iter_mut() {
+                if let Some(buffer) = buffer_opt.take() {
+                    // Check that the buffer belongs to the flushing epoch, or that it belongs to a
+                    // previous epoch and it hasn't yet been flushed because the tablet already has
+                    // the maximum number of batches in flight.
+                    debug_assert!(buffer.flush_epoch == flush_epoch ||
+                                  (buffer.flush_epoch < flush_epoch &&
+                                   *outstanding == max_batches_per_tablet));
+
+                    if buffer.flush_epoch == flush_epoch && *outstanding < max_batches_per_tablet {
+                        // Flush the buffer!
+                        buffers.push((tablet_id, buffer));
+                        // Increment the per-tablet batches outstanding and per-flush epoch batches
+                        // outstanding counters.
+                        *outstanding += 1;
+                        self.flushes[flush_epoch].batches_outstanding += 1;
+                    } else {
+                        *buffer_opt = Some(buffer);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -174,7 +309,18 @@ struct FlushState {
     stats: FlushStats,
     lookups_outstanding: usize,
     batches_outstanding: usize,
+    callback: Option<Box<FlushCallback>>,
 }
+
+impl fmt::Debug for FlushState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "FlushState {{ stats: {:?}, lookups_outstanding: {:?}, \
+                   batches_outstanding: {:?}, has_callback: {} }}",
+               self.stats, self.lookups_outstanding,
+               self.batches_outstanding, self.callback.is_some())
+    }
+}
+
 
 /// Carries information about the batches and row operations in a flush.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -221,24 +367,23 @@ impl FlushStats {
     }
 }
 
-impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                               E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl Writer {
 
     #[doc(hidden)]
-    pub fn new(table: Table, config: WriterConfig, flush_callback: F, error_callback: E) -> Writer<F, E> {
+    pub fn new(table: Table, config: WriterConfig) -> Writer {
         let flush = FlushState {
             stats: FlushStats::new(0),
             lookups_outstanding: 0,
             batches_outstanding: 0,
+            callback: None,
         };
         let mut flushes = QueueMap::new();
         debug_assert_eq!(0, flushes.push(flush));
 
+        let (config, event_channel) = config.into_config();
         Writer {
             inner: Arc::new(Inner {
                 table: table,
-                flush_callback: flush_callback,
-                error_callback: error_callback,
                 config: config,
                 state: Mutex::new(State {
                     operations_in_lookup: QueueMap::new(),
@@ -247,6 +392,7 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
                     buffered_data: 0,
                 }),
             }),
+            event_channel: event_channel,
         }
     }
 
@@ -291,7 +437,7 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
         }
 
         let idx = {
-            let mut state = self.state();
+            let mut state = self.lock_state();
 
             // Check that there is space for the operation. If buffering the operation would push
             // the `buffered_data` counter over the `max_buffered_data` limit, then we reject the
@@ -322,17 +468,42 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
             })
         };
 
-        let writer: Writer<F, E> = self.clone();
+        let writer: Writer = self.clone();
         let deadline = Instant::now() + self.config().flush_timeout;
         self.meta_cache().tablet_id(partition_key, deadline, move |result| {
-            if let Some((row, op_type, error)) = writer.op_lookup_complete(idx, result) {
-                writer.fail_operation(row, op_type, error);
-            }
+            writer.op_lookup_complete(idx, result);
         });
     }
 
-    fn op_lookup_complete(&self, idx: usize, result: Result<Option<TabletId>>) -> Option<(Row, OperationType, Error)> {
-        let mut state = self.state();
+    /// Flush the `Writer`. The provided callback is called with statistics about the flush when
+    /// it compeletes.
+    pub fn flush<F>(&self, cb: F) where F: FnOnce(FlushStats) + Send + 'static {
+        let cb = Box::new(cb);
+        let mut buffers = Vec::new();
+        let mut state = self.lock_state();
+
+        let new_flush_epoch = state.flushes.push(FlushState {
+            stats: FlushStats::new(0),
+            lookups_outstanding: 0,
+            batches_outstanding: 0,
+            callback: None,
+        });
+        let flush_epoch = new_flush_epoch - 1;
+
+        state.flushes[flush_epoch].callback = Some(cb);
+
+        // If all flush epochs before the new one have 0 outstanding lookups, then we can flush all
+        // batches associated with the flushed epoch.
+        state.flush(flush_epoch, self.config(), &mut buffers);
+        drop(state);
+        for (tablet_id, buffer) in buffers {
+            Batch::send(self.clone(), tablet_id, buffer);
+        }
+    }
+
+    fn op_lookup_complete(&self, idx: usize, result: Result<Option<TabletId>>) {
+        let mut buffers = Vec::new();
+        let mut state = self.lock_state();
 
         // Retrieve the operation in lookup, and decrement the epoch's operations in lookup
         // counter.
@@ -344,56 +515,74 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
         // exit points don't have to handle it.
         state.buffered_data -= encoded_len;
 
-        match result {
+        let failed_op = match result {
             Ok(Some(tablet_id)) => {
                 let State { ref mut tablets, ref mut flushes, ref mut buffered_data, .. } = *state;
                 let (ref mut buffer, ref mut batches_in_flight) = *tablets.entry(tablet_id)
                                                                           .or_insert_with(|| (None, 0));
-                match *buffer {
+                let failed_op = match *buffer {
                     None => {
                         // Case [1].
                         *buffer = Some(Buffer::new(flush_epoch));
                         *batches_in_flight += 1;
+                        None
                     },
                     Some(ref mut buffer) if buffer.buffered_data.saturating_add(encoded_len) >
                                             self.config().max_data_per_batch => {
                         if *batches_in_flight >= self.config().max_batches_per_tablet {
                             // Case [3].
-                            return Some((row, op_type, Error::Backoff));
+                            // TODO: this clone is unfortunate, as is the entire control flow of
+                            // this funtion.
+                            Some((row.clone(), op_type, Error::Backoff))
+                        } else {
+                            // Case [2].
+                            let buffer = mem::replace(buffer, Buffer::new(flush_epoch));
+                            *batches_in_flight += 1;
+                            let writer = self.clone();
+                            buffers.push((tablet_id, buffer));
+                            None
                         }
-                        // Case [2].
-                        let buffer = mem::replace(buffer, Buffer::new(flush_epoch));
-                        *batches_in_flight += 1;
-                        let writer = self.clone();
-                        // Translating the buffer into a WriteRequestPB is pretty heavy, so do it
-                        // on another thread so that it's not in the critical section.
-                        // TODO: can this be done outside the lock without spawning a new thread?
-                        thread::spawn(move || {
-                            Batch::send(writer, tablet_id, buffer);
-                        });
                     }
-                    _ => (),
+                    _ => None,
                 };
 
-                let buffer = buffer.as_mut().unwrap();
+                if failed_op.is_none() {
+                    let buffer = buffer.as_mut().unwrap();
 
-                // Add the operation to the buffer.
-                buffer.operations.push((row, idx, op_type));
-                buffer.buffered_data += encoded_len;
-                *buffered_data += encoded_len;
+                    // Add the operation to the buffer.
+                    buffer.operations.push((row, idx, op_type));
+                    buffer.buffered_data += encoded_len;
+                    *buffered_data += encoded_len;
 
-                // Check if the operation's epoch falls before the buffer's epoch. If so, we need to
-                // back-date the buffer to the older epoch so that the new operation gets flushed at
-                // the appropriate time.
-                if flush_epoch < buffer.flush_epoch {
-                    flushes[buffer.flush_epoch].batches_outstanding -= 1;
-                    flushes[flush_epoch].batches_outstanding += 1;
-                    buffer.flush_epoch = flush_epoch;
+                    // Check if the operation's epoch falls before the buffer's epoch. If so, we need to
+                    // back-date the buffer to the older epoch so that the new operation gets flushed at
+                    // the appropriate time.
+                    if flush_epoch < buffer.flush_epoch {
+                        flushes[buffer.flush_epoch].batches_outstanding -= 1;
+                        flushes[flush_epoch].batches_outstanding += 1;
+                        buffer.flush_epoch = flush_epoch;
+                    }
                 }
-                None
+                failed_op
             },
             Ok(None) => Some((row, op_type, Error::NoRangePartition)),
             Err(error) => Some((row, op_type, error)),
+        };
+
+        // If all flush epochs before the new one have 0 outstanding lookups, then we can flush all
+        // batches associated with the flushed epoch.
+        if state.flushes[flush_epoch].lookups_outstanding == 0 {
+            state.flush(flush_epoch, self.config(), &mut buffers);
+        }
+
+        drop(state);
+
+        for (tablet_id, buffer) in buffers {
+            Batch::send(self.clone(), tablet_id, buffer);
+        }
+
+        if let Some((row, op_type, error)) = failed_op {
+            self.fail_operation(row, op_type, error);
         }
     }
 
@@ -406,7 +595,7 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
                       data: usize) {
         let mut complete_flushes = Vec::new();
         {
-            let mut state = self.state();
+            let mut state = self.lock_state();
             state.tablets.get_mut(&tablet).unwrap().1 -= 1;
             state.buffered_data -= data;
             {
@@ -432,9 +621,7 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
             // outside the lock.
             while {
                 let flush = &state.flushes[oldest_epoch];
-                state.flushes.len() > 1 &&
-                    flush.lookups_outstanding == 0 &&
-                    flush.batches_outstanding == 0
+                state.flushes.len() > 1 && flush.lookups_outstanding == 0 && flush.batches_outstanding == 0
             } {
                 complete_flushes.push(state.flushes.pop().unwrap().1);
                 oldest_epoch = state.flushes.front_key().unwrap();
@@ -442,8 +629,13 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
         }
 
         for flush in complete_flushes {
-            let FlushState { stats, .. } = flush;
-            (self.inner.flush_callback)(stats);
+            let FlushState { stats, callback, .. } = flush;
+            if let Some(ref channel) = self.event_channel {
+                if channel.try_send(Event::Flush(stats.clone())).is_err() {
+                    debug!("failed to send flush to event channel");
+                }
+            }
+            callback.unwrap().call(stats);
         }
     }
 
@@ -456,14 +648,20 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
     }
 
     fn fail_operation(&self, row: Row, op_type: OperationType, error: Error) {
-        (self.inner.error_callback)(row, op_type, error)
+        if self.config().event_set.has_failed_operations() {
+            if let Some(ref channel) = self.event_channel {
+                if channel.try_send(Event::FailedOperation(row, op_type, error)).is_err() {
+                    debug!("failed to send operation failure to event channel");
+                }
+            }
+        }
     }
 
-    pub fn config(&self) -> &WriterConfig {
+    fn config(&self) -> &Config {
         &self.inner.config
     }
 
-    fn state(&self) -> MutexGuard<State> {
+    fn lock_state(&self) -> MutexGuard<State> {
         self.inner.state.lock()
     }
 
@@ -480,37 +678,30 @@ impl <F, E> Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
     }
 }
 
-impl <F, E> Clone for Writer<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                                   E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
-    fn clone(&self) -> Writer<F, E> {
-        Writer { inner: self.inner.clone() }
-    }
-}
-
 #[must_use]
-struct Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                         E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+struct Batch {
     tablet: TabletId,
     leader_addrs: Vec<SocketAddr>,
     operations: Vec<(Row, usize, OperationType)>,
-    writer: Writer<F, E>,
+    writer: Writer,
     backoff: Backoff,
     buffered_data: usize,
     flush_epoch: usize,
 }
 
-impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                              E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl Batch {
 
     /// Transforms the buffer into a batch, and sends it to the tablet server.
-    fn send(writer: Writer<F, E>, tablet: TabletId, buffer: Buffer) {
+    fn send(writer: Writer, tablet_id: TabletId, buffer: Buffer) {
         let Buffer { mut operations, buffered_data, flush_epoch } = buffer;
+        trace!("Flushing buffer; tablet {}, flush_epoch: {}, operations: {:?}",
+               tablet_id, flush_epoch, operations);
 
         // Sort the operations so that they are written in apply order.
         // TODO: the operations should already be in order, look into bubble or insertion sort.
         operations.sort_by(|a, b| a.1.cmp(&b.1));
 
-        let data_len = writer.schema().row_size() * operations.len();
+        let data_len = OperationEncoder::direct_len(writer.schema()) * operations.len();
         let indirect_data_len = buffered_data - data_len;
         let mut encoder = OperationEncoder::with_capacity(data_len, indirect_data_len);
 
@@ -527,6 +718,7 @@ impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
         message.mut_row_operations().set_indirect_data(indirect_data);
         message.set_schema(writer.schema().as_pb());
         message.set_propagated_timestamp(writer.client().latest_observed_timestamp());
+        message.set_tablet_id(tablet_id.to_string().into_bytes());
 
         let rpc = tablet_server::write(util::dummy_addr(),
                                        Instant::now() + writer.config().flush_timeout,
@@ -534,7 +726,7 @@ impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
 
         let backoff = Backoff::with_duration_range(10, util::duration_to_ms(&writer.config().flush_timeout) as u32 / 2);
         let batch = Batch {
-            tablet: tablet,
+            tablet: tablet_id,
             leader_addrs: Vec::new(),
             operations: operations,
             writer: writer,
@@ -598,31 +790,49 @@ impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
                     unimplemented!();
                 }
 
-                for error in response.mut_per_row_errors().iter_mut() {
-                    let offset = error.get_row_index();
-                    let error = error::TabletServerError::from(error.take_error());
-
-                    // TODO: is there a cleaner or more efficient way to remove the row from the
-                    // operations vector?
-                    let dummy_row = self.writer.schema().new_row();
-                    let (row, _, op_type) = mem::replace(&mut self.operations[offset as usize],
-                                                         (dummy_row, 0, OperationType::Insert));
-
-                    self.writer.fail_operation(row, op_type, Error::TabletServer(error));
-                }
-
                 let failed_ops = response.get_per_row_errors().len();
+                let successful_ops = self.operations.len() - failed_ops;
+
+                debug!("batch complete; successful ops: {}, failed ops: {}",
+                       successful_ops, failed_ops);
+
+                if self.writer.config().event_set.has_failed_operations() {
+                    let &mut Batch { ref mut operations, ref writer, .. } = &mut *self;
+                    if let Some(ref channel) = writer.event_channel {
+                        let mut errors = response.take_per_row_errors();
+                        errors.sort_by_key(|error| error.get_row_index());
+
+                        for mut error in errors.into_iter().rev() {
+                            {
+                                let ops = operations.drain(error.get_row_index() as usize + 1..);
+                                if writer.config().event_set.has_successful_operation() {
+                                    for (row, _, op_type) in ops {
+                                        if channel.try_send(Event::SuccessfulOperation(row, op_type)).is_err() {
+                                            debug!("failed to send successful operation to event channel");
+                                        }
+                                    }
+                                } else {
+                                    for _ in ops {}
+                                }
+                            }
+                            let (row, _, op_type) = operations.pop().unwrap();
+                            let error = error::TabletServerError::from(error.take_error());
+                            if let Err(error) = channel.try_send(Event::FailedOperation(row, op_type, Error::TabletServer(error))) {
+                                debug!("failed to send failed operation to event channel: {}", error);
+                            }
+                        }
+                    }
+                }
 
                 self.writer.batch_complete(true,
                                            self.tablet,
                                            self.flush_epoch,
-                                           self.operations.len() - failed_ops,
+                                           successful_ops,
                                            failed_ops,
                                            self.buffered_data);
             },
-            Err(_) => {
-                // TODO
-                unimplemented!();
+            Err(error) => {
+                unimplemented!()
             }
         }
     }
@@ -642,10 +852,18 @@ impl <F, E> Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
     }
 }
 
-impl <F, E> Callback for Batch<F, E> where F: Fn(FlushStats) + Send + Sync + 'static,
-                                           E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
+impl Callback for Batch {
     fn callback(self: Box<Self>, result: Result<()>, rpc: Rpc) {
         self.handle_response(result, rpc);
+    }
+}
+
+trait FlushCallback: Send {
+    fn call(self: Box<Self>, stats: FlushStats);
+}
+impl <F> FlushCallback for F where F: FnOnce(FlushStats) + Send {
+    fn call(self: Box<F>, stats: FlushStats) {
+        self(stats)
     }
 }
 
@@ -701,20 +919,11 @@ mod test {
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
 
-        let (flush_send, flush_recv) = sync_channel(10);
-        let (error_send, error_recv) = sync_channel(10);
+        let mut config = WriterConfig::default();
+        let recv = config.event_channel();
+        config.event_set = EventSet::SuccessfulOperations;
 
-        let flush_send = Arc::new(flush_send);
-        let error_send = Arc::new(error_send);
-
-        let flush_callback = move |stats| {
-            flush_send.send(stats).unwrap();
-        };
-        let error_callback = move |row, op_type, error| {
-            error_send.send((row, op_type, error)).unwrap();
-        };
-
-        let writer = table.new_writer(WriterConfig::default(), flush_callback, error_callback);
+        let writer = table.new_writer(config);
 
         {
             let mut insert = table.schema().new_row();
@@ -731,6 +940,14 @@ mod test {
             writer.insert(insert);
         }
 
+        let (send, flush_recv) = sync_channel(10);
+        writer.flush(move |stats| send.send(stats).unwrap());
 
+        drop(writer);
+
+        let events = recv.into_iter().collect::<Vec<_>>();
+        assert_eq!(2, events.len());
+        assert!(events[0].is_failed_operation(), "expected FailedOperation, got: {:?}", events[0]);
+        assert!(events[1].is_flush(), "expected Flush, got: {:?}", events[1]);
     }
 }

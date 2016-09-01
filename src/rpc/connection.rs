@@ -408,7 +408,7 @@ impl Connection {
                 rpc.fail(Error::Cancelled);
             } else if rpc.timed_out(now) {
                 event_loop.clear_timeout(timer);
-                rpc.fail(Error::Cancelled);
+                rpc.fail(Error::TimedOut);
             } else if rpc.fail_fast() {
                 event_loop.clear_timeout(timer);
                 rpc.fail(error.clone());

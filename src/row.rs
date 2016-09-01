@@ -15,7 +15,6 @@ use RangePartitionBound;
 use Result;
 use Schema;
 use Value;
-use operation::{Operation, OperationKind};
 use util;
 
 #[derive(Clone)]
@@ -301,17 +300,6 @@ impl OperationEncoder {
         }
     }
 
-    pub fn encode(&mut self, operation: &Operation) {
-        let op_type = match operation.kind() {
-            OperationKind::Insert => OperationType::INSERT,
-            OperationKind::Update => OperationType::UPDATE,
-            OperationKind::Upsert => OperationType::UPSERT,
-            OperationKind::Delete => OperationType::DELETE,
-        };
-
-        self.encode_row(op_type, operation.row());
-    }
-
     pub fn encode_range_split(&mut self, row: &Row) {
         self.encode_row(OperationType::SPLIT_ROW, row);
     }
@@ -329,6 +317,7 @@ impl OperationEncoder {
         self.encode_row(lower_bound_type, &lower_bound);
         self.encode_row(upper_bound_type, &upper_bound);
     }
+
     pub fn encode_range_partition_split(&mut self, split: &Row) {
         self.encode_row(OperationType::SPLIT_ROW, split);
     }
@@ -372,6 +361,14 @@ impl OperationEncoder {
         len += schema.row_size();
         len += indirect_data.values().map(|data| data.len()).sum();
 
+        len
+    }
+
+    pub fn direct_len(schema: &Schema) -> usize {
+        let mut len = 1; // op type
+        len += (schema.columns().len() + 7) / 8;
+        if schema.has_nullable_columns() { len += (schema.columns().len() + 7) / 8; }
+        len += schema.row_size();
         len
     }
 

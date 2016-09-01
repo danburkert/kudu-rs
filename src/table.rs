@@ -15,9 +15,7 @@ use kudu_pb::common::{
 use Client;
 use Column;
 use Error;
-use FlushStats;
 use meta_cache::{Entry, MetaCache};
-use OperationType;
 use partition::PartitionSchema;
 use Result;
 use row::OperationEncoder;
@@ -80,10 +78,8 @@ impl Table {
         self.num_replicas
     }
 
-    pub fn new_writer<F, E>(&self, config: WriterConfig, flush_callback: F, error_callback: E) -> Writer<F, E>
-    where F: Fn(FlushStats) + Send + Sync + 'static,
-          E: Fn(Row, OperationType, Error) + Send + Sync + 'static {
-        Writer::new(self.clone(), config, flush_callback, error_callback)
+    pub fn new_writer(&self, config: WriterConfig) -> Writer {
+        Writer::new(self.clone(), config)
     }
 
     pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {

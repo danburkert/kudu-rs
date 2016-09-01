@@ -33,7 +33,6 @@ mod error;
 mod key;
 mod master;
 mod meta_cache;
-mod operation;
 mod partition;
 mod queue_map;
 mod row;
