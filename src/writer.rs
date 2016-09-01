@@ -4,7 +4,6 @@ use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use kudu_pb::tserver;
@@ -538,7 +537,6 @@ impl Writer {
                             // Case [2].
                             let buffer = mem::replace(buffer, Buffer::new(flush_epoch));
                             *batches_in_flight += 1;
-                            let writer = self.clone();
                             buffers.push((tablet_id, buffer));
                             None
                         }
@@ -831,7 +829,7 @@ impl Batch {
                                            failed_ops,
                                            self.buffered_data);
             },
-            Err(error) => {
+            Err(_) => {
                 unimplemented!()
             }
         }

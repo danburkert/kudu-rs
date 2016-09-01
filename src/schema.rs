@@ -24,7 +24,7 @@ pub struct Column {
     is_nullable: bool,
     compression: CompressionType,
     encoding: EncodingType,
-    block_size: i32,
+    block_size: u32,
 }
 
 impl Column {
@@ -49,7 +49,7 @@ impl Column {
         self.compression
     }
 
-    pub fn block_size(&self) -> Option<i32> {
+    pub fn block_size(&self) -> Option<u32> {
         if self.block_size <= 0 {
             None
         } else {
@@ -109,12 +109,12 @@ impl Column {
         self
     }
 
-    pub fn set_block_size(mut self, block_size: i32) -> Column {
+    pub fn set_block_size(mut self, block_size: u32) -> Column {
         self.set_block_size_by_ref(block_size);
         self
     }
 
-    pub fn set_block_size_by_ref(&mut self, block_size: i32) -> &mut Column {
+    pub fn set_block_size_by_ref(&mut self, block_size: u32) -> &mut Column {
         self.block_size = block_size;
         self
     }
@@ -128,7 +128,8 @@ impl Column {
         pb.set_is_key(is_key);
         pb.set_encoding(self.encoding.to_pb());
         pb.set_compression(self.compression.to_pb());
-        pb.set_cfile_block_size(self.block_size);
+        // TODO: checked cast.
+        pb.set_cfile_block_size(self.block_size as i32);
         pb
     }
 
@@ -140,7 +141,8 @@ impl Column {
             is_nullable: pb.get_is_nullable(),
             compression: try!(CompressionType::from_pb(pb.get_compression())),
             encoding: try!(EncodingType::from_pb(pb.get_encoding())),
-            block_size: pb.get_cfile_block_size(),
+            // TODO: checked cast.
+            block_size: pb.get_cfile_block_size() as u32,
         })
     }
 }
@@ -348,7 +350,7 @@ impl quickcheck::Arbitrary for Schema {
             column.set_compression_by_ref(CompressionType::arbitrary(g));
             if bool::arbitrary(g) {
                 // TODO: can Kudu support arbitrary block sizes?
-                column.set_block_size_by_ref(i32::arbitrary(g));
+                column.set_block_size_by_ref(u32::arbitrary(g));
             }
             builder.add_column_by_ref(column);
         }
