@@ -310,7 +310,7 @@ mod test {
             row.set(0, "fuzz\0\0\0\0buster").unwrap();
             row.set(1, 99).unwrap();
             row.set(2, "calibri\0\0\0").unwrap();
-            let mut key = encode_primary_key(&row).unwrap();
+            let key = encode_primary_key(&row).unwrap();
 
             let decoded_row = decode_primary_key(&schema, &key).unwrap();
             assert_eq!(row, decoded_row);

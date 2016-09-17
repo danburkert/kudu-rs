@@ -259,6 +259,24 @@ impl State {
     }
 }
 
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+
+        let mut buffers: usize = 0;
+        let mut batches_in_flight: usize = 0;
+
+        for &(ref buffer, batches) in self.tablets.values() {
+            if buffer.is_some() { buffers += 1; }
+            batches_in_flight += batches as usize;
+        }
+
+        write!(f, "State {{ operations_in_lookup: {}, buffers: {}, batches_in_flight: {}, \
+                   flushes: {}, buffered_data: {} }}",
+               self.operations_in_lookup.len(), buffers, batches_in_flight, self.flushes.len(),
+               self.buffered_data)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OperationType {
     Insert,
@@ -320,7 +338,6 @@ impl fmt::Debug for FlushState {
     }
 }
 
-
 /// Carries information about the batches and row operations in a flush.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FlushStats {
@@ -356,13 +373,13 @@ impl FlushStats {
         self.successful_batches
     }
     pub fn successful_operations(&self) -> usize {
-        self.successful_batches
+        self.successful_operations
     }
     pub fn failed_operations(&self) -> usize {
-        self.successful_batches
+        self.failed_operations
     }
     pub fn data(&self) -> usize {
-        self.successful_batches
+        self.data
     }
 }
 
@@ -522,8 +539,8 @@ impl Writer {
                 let failed_op = match *buffer {
                     None => {
                         // Case [1].
+                        trace!("creating new buffer for tablet {:?}", tablet_id);
                         *buffer = Some(Buffer::new(flush_epoch));
-                        *batches_in_flight += 1;
                         None
                     },
                     Some(ref mut buffer) if buffer.buffered_data.saturating_add(encoded_len) >
@@ -536,7 +553,6 @@ impl Writer {
                         } else {
                             // Case [2].
                             let buffer = mem::replace(buffer, Buffer::new(flush_epoch));
-                            *batches_in_flight += 1;
                             buffers.push((tablet_id, buffer));
                             None
                         }
@@ -552,9 +568,9 @@ impl Writer {
                     buffer.buffered_data += encoded_len;
                     *buffered_data += encoded_len;
 
-                    // Check if the operation's epoch falls before the buffer's epoch. If so, we need to
-                    // back-date the buffer to the older epoch so that the new operation gets flushed at
-                    // the appropriate time.
+                    // Check if the operation's epoch falls before the buffer's epoch. If so, we
+                    // need to back-date the buffer to the older epoch so that the new operation
+                    // gets flushed at the appropriate time.
                     if flush_epoch < buffer.flush_epoch {
                         flushes[buffer.flush_epoch].batches_outstanding -= 1;
                         flushes[flush_epoch].batches_outstanding += 1;
@@ -569,7 +585,7 @@ impl Writer {
 
         // If all flush epochs before the new one have 0 outstanding lookups, then we can flush all
         // batches associated with the flushed epoch.
-        if state.flushes[flush_epoch].lookups_outstanding == 0 {
+        if state.flush_epoch() > flush_epoch && state.flushes[flush_epoch].lookups_outstanding == 0 {
             state.flush(flush_epoch, self.config(), &mut buffers);
         }
 
@@ -868,20 +884,16 @@ impl <F> FlushCallback for F where F: FnOnce(FlushStats) + Send {
 #[cfg(test)]
 mod test {
 
-    use std::sync::Arc;
     use std::sync::mpsc::sync_channel;
     use std::time::{Duration, Instant};
 
-    use AlterTableBuilder;
     use ClientConfig;
     use Client;
     use Column;
     use DataType;
-    use RangePartitionBound;
     use SchemaBuilder;
     use TableBuilder;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use schema::tests::simple_schema;
     use super::*;
 
     use env_logger;
@@ -923,29 +935,32 @@ mod test {
 
         let writer = table.new_writer(config);
 
-        {
+        // Insert a bunch of values
+        for i in 0..10 {
             let mut insert = table.schema().new_row();
-            insert.set_by_name("key", 123i32).unwrap();
-            insert.set_by_name("val", 123i32).unwrap();
-
-            writer.insert(insert);
-        }
-        {
-            let mut insert = table.schema().new_row();
-            insert.set_by_name("key", 123i32).unwrap();
-            insert.set_by_name("val", 1234i32).unwrap();
-
+            insert.set_by_name::<i32>("key", i).unwrap();
+            insert.set_by_name::<i32>("val", i).unwrap();
             writer.insert(insert);
         }
 
-        let (send, flush_recv) = sync_channel(10);
+        // Insert a duplicate value
+        {
+            let mut insert = table.schema().new_row();
+            insert.set_by_name::<i32>("key", 1).unwrap();
+            insert.set_by_name::<i32>("val", 1).unwrap();
+
+            writer.insert(insert);
+        }
+
+        let (send, flush_recv) = sync_channel(100);
         writer.flush(move |stats| send.send(stats).unwrap());
 
         drop(writer);
 
         let events = recv.into_iter().collect::<Vec<_>>();
-        assert_eq!(2, events.len());
         assert!(events[0].is_failed_operation(), "expected FailedOperation, got: {:?}", events[0]);
         assert!(events[1].is_flush(), "expected Flush, got: {:?}", events[1]);
+        assert!(false, "expected Flush, got: {:?}", events[1]);
+        assert_eq!(11, events.len());
     }
 }

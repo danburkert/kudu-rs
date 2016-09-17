@@ -99,6 +99,7 @@ impl MiniCluster {
             args.push(("rpc_bind_addresses", addr.to_string()));
             args.push(("webserver_port", 0.to_string()));
             args.push(("logtostderr", true.to_string()));
+            args.push(("unlock_unsafe_flags", true.to_string()));
 
             if conf.num_masters > 1 {
                 args.push(("master_addresses", master_addresses.clone()));
@@ -124,6 +125,7 @@ impl MiniCluster {
             args.push(("webserver_port", 0.to_string()));
             args.push(("logtostderr", true.to_string()));
             args.push(("tserver_master_addrs", master_addresses.clone()));
+            args.push(("unlock_unsafe_flags", true.to_string()));
 
             let mut node = Node::new(name, tserver_bin.clone(), args);
             node.start();
