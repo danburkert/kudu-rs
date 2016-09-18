@@ -1,23 +1,32 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use std::time::Instant;
-use std::net::SocketAddr;
-use RaftRole;
 
 use kudu_pb::master::{GetTableLocationsRequestPB, TabletLocationsPB};
 use parking_lot::Mutex;
 
+use Error;
+use MasterErrorCode;
 use PartitionSchema;
+use RaftRole;
 use Result;
 use Schema;
 use TableId;
 use TabletId;
+use backoff::Backoff;
 use master::MasterProxy;
 use tablet::Tablet;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
+
+/// Backoff used for retrying after a `TABLET_NOT_RUNNING` error.
+fn backoff() -> Backoff {
+    Backoff::with_duration_range(100, 60_000_000)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entry {
@@ -146,7 +155,7 @@ impl MetaCache {
                     deadline: Instant,
                     cb: F)
     where F: FnOnce(Result<Entry>) + Send + 'static {
-        self.extract(partition_key, deadline, |entry| entry.clone(), cb);
+        self.extract(partition_key, deadline, backoff(), |entry| entry.clone(), cb);
     }
 
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
@@ -168,7 +177,7 @@ impl MetaCache {
                 None
             }
         };
-        self.extract(partition_key, deadline, extractor, cb);
+        self.extract(partition_key, deadline, backoff(), extractor, cb);
     }
 
     pub fn tablet_leader<F>(&self,
@@ -187,12 +196,13 @@ impl MetaCache {
                 None
             }
         };
-        self.extract(partition_key, deadline, extractor, cb);
+        self.extract(partition_key, deadline, backoff(), extractor, cb);
     }
 
     fn extract<Extractor, T, F>(&self,
                                 partition_key: Vec<u8>,
                                 deadline: Instant,
+                                mut backoff: Backoff,
                                 extractor: Extractor,
                                 cb: F)
     where Extractor: FnOnce(&Entry) -> T + Send + 'static,
@@ -217,6 +227,13 @@ impl MetaCache {
                                                     extractor,
                                                     cb);
                 },
+                Err(Error::Master(ref error)) if error.code() == MasterErrorCode::TabletNotRunning => {
+                    let duration = Duration::from_millis(backoff.next_backoff_ms());
+                    let messenger = meta_cache.inner.master.messenger().clone();
+                    messenger.timer(duration, Box::new(move || {
+                        meta_cache.extract(partition_key, deadline, backoff, extractor, cb);
+                    }));
+                }
                 Err(error) => cb(Err(error)),
             }
         });
@@ -408,7 +425,6 @@ mod tests {
         ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
         let cache = table.meta_cache().clone();
@@ -469,7 +485,6 @@ mod tests {
         ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
         let cache = table.meta_cache().clone();

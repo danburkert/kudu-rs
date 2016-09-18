@@ -799,6 +799,8 @@ impl Batch {
             Ok(_) => {
                 let response = rpc.mut_response::<tserver::WriteResponsePB>();
 
+                trace!("batch response: {:?}", response);
+
                 if response.has_error() {
                     // TODO
                     unimplemented!();
@@ -916,7 +918,7 @@ mod test {
             .build()
             .unwrap();
 
-        let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
+        let mut table_builder = TableBuilder::new("insert", schema.clone());
         table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
@@ -925,7 +927,7 @@ mod test {
         ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+        // Don't wait for table creation in order to test retry logic.
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
 
@@ -960,7 +962,6 @@ mod test {
         let events = recv.into_iter().collect::<Vec<_>>();
         assert!(events[0].is_failed_operation(), "expected FailedOperation, got: {:?}", events[0]);
         assert!(events[1].is_flush(), "expected Flush, got: {:?}", events[1]);
-        assert!(false, "expected Flush, got: {:?}", events[1]);
-        assert_eq!(11, events.len());
+        assert_eq!(2, events.len());
     }
 }
