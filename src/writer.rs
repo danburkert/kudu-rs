@@ -370,7 +370,7 @@ impl FlushStats {
         self.successful_batches
     }
     pub fn failed_batches(&self) -> usize {
-        self.successful_batches
+        self.failed_batches
     }
     pub fn successful_operations(&self) -> usize {
         self.successful_operations
@@ -922,10 +922,6 @@ mod test {
         table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         // Don't wait for table creation in order to test retry logic.
 
@@ -963,5 +959,13 @@ mod test {
         assert!(events[0].is_failed_operation(), "expected FailedOperation, got: {:?}", events[0]);
         assert!(events[1].is_flush(), "expected Flush, got: {:?}", events[1]);
         assert_eq!(2, events.len());
+
+        let flush = flush_recv.recv().unwrap();
+        assert_eq!(flush.epoch(), 0);
+        assert_eq!(flush.successful_batches(), 4);
+        assert_eq!(flush.failed_batches(), 0);
+        assert_eq!(flush.successful_operations(), 10);
+        assert_eq!(flush.failed_operations(), 1);
+        assert_eq!(flush.data(), 121);
     }
 }

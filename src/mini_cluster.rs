@@ -7,7 +7,12 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
+use Client;
+use ClientConfig;
+use Error;
+use backoff::Backoff;
 use tempdir::TempDir;
 
 /// A Kudu server node (either master or tablet server).
@@ -100,6 +105,7 @@ impl MiniCluster {
             args.push(("webserver_port", 0.to_string()));
             args.push(("logtostderr", true.to_string()));
             args.push(("unlock_unsafe_flags", true.to_string()));
+            args.push(("unlock_experimental_flags", true.to_string()));
 
             if conf.num_masters > 1 {
                 args.push(("master_addresses", master_addresses.clone()));
@@ -126,10 +132,30 @@ impl MiniCluster {
             args.push(("logtostderr", true.to_string()));
             args.push(("tserver_master_addrs", master_addresses.clone()));
             args.push(("unlock_unsafe_flags", true.to_string()));
+            args.push(("unlock_experimental_flags", true.to_string()));
 
             let mut node = Node::new(name, tserver_bin.clone(), args);
             node.start();
             nodes.insert(*addr, node);
+        }
+
+        if conf.wait_for_startup {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut backoff = Backoff::with_duration_range(50, 1000);
+
+            let client = Client::new(ClientConfig::new(master_addrs.to_owned()));
+            loop {
+                match client.list_tablet_servers(deadline) {
+                    Ok(ref tservers) if tservers.len() == conf.num_tservers as usize => break,
+                    Ok(_) => (),
+                    Err(Error::TimedOut) => panic!("timed out waiting for tablet servers to start"),
+                    Err(error) => warn!("error while waiting for tservers: {:?}", error),
+                }
+                let backoff_ms = backoff.next_backoff_ms();
+                trace!("waiting {}ms for {} tablet servers to register",
+                       backoff_ms, conf.num_tservers);
+                thread::sleep(Duration::from_millis(backoff_ms));
+            }
         }
 
         MiniCluster {
@@ -205,9 +231,11 @@ fn get_executable_path(executable: &str) -> PathBuf {
 /// and tablet server defaults.
 pub struct MiniClusterConfig {
     /// The number of masters in the mini cluster. Default: 1.
-    num_masters: i32,
+    num_masters: u32,
     /// The number of tablet servers in the mini cluster. Default: 1.
-    num_tservers: i32,
+    num_tservers: u32,
+
+    wait_for_startup: bool,
 
     // Logging Options
 
@@ -249,13 +277,18 @@ pub struct MiniClusterConfig {
 
 impl MiniClusterConfig {
 
-    pub fn num_masters(&mut self, num_masters: i32) -> &mut MiniClusterConfig {
+    pub fn num_masters(&mut self, num_masters: u32) -> &mut MiniClusterConfig {
         self.num_masters = num_masters;
         self
     }
 
-    pub fn num_tservers(&mut self, num_tservers: i32) -> &mut MiniClusterConfig {
+    pub fn num_tservers(&mut self, num_tservers: u32) -> &mut MiniClusterConfig {
         self.num_tservers = num_tservers;
+        self
+    }
+
+    pub fn wait_for_startup(&mut self, wait_for_startup: bool) -> &mut MiniClusterConfig {
+        self.wait_for_startup = wait_for_startup;
         self
     }
 
@@ -359,6 +392,7 @@ impl Default for MiniClusterConfig {
         MiniClusterConfig {
             num_masters: 1,
             num_tservers: 1,
+            wait_for_startup: true,
             min_log_level: None,
             vlog: None,
             vmodule: Vec::new(),

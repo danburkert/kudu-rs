@@ -464,10 +464,6 @@ mod tests {
                                                          .num_tservers(3));
         let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
             .add_column(Column::builder("val", DataType::Int32))

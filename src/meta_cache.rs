@@ -420,10 +420,6 @@ mod tests {
         table_builder.set_range_partition_columns(vec!["key".to_owned()]);
         table_builder.set_num_replicas(1);
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let table_id = client.create_table(table_builder, deadline()).unwrap();
 
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
@@ -479,10 +475,6 @@ mod tests {
         let mut table_builder = TableBuilder::new("multi_tablet", schema.clone());
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
-
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
 
@@ -552,10 +544,6 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
@@ -615,10 +603,6 @@ mod tests {
         let mut split = schema.new_row();
         split.set(0, "c").unwrap();
         table_builder.add_range_partition_split(split);
-
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
 
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();

@@ -460,10 +460,6 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let table_id = client.create_table(table_builder, deadline()).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
 
@@ -493,10 +489,6 @@ mod tests {
                                                          .num_tservers(3));
         let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
 
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
-
         let tablet_servers = client.list_tablet_servers(deadline()).unwrap();
         assert_eq!(3, tablet_servers.len());
     }
@@ -519,10 +511,6 @@ mod tests {
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(1));
-
-        // The tablet server is real slow coming up.
-        // TODO: add MiniCluster::wait_for_startup() or equivalent.
-        ::std::thread::sleep_ms(2000);
 
         let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
         let mut table_builder = TableBuilder::new("t", simple_schema());
