@@ -300,7 +300,8 @@ impl OperationType {
 struct OperationInLookup {
     row: Row,
     flush_epoch: usize,
-    encoded_len: usize,
+    direct_len: usize,
+    indirect_len: usize,
     op_type: OperationType,
 }
 
@@ -308,16 +309,22 @@ struct OperationInLookup {
 struct Buffer {
     operations: Vec<(Row, usize, OperationType)>,
     /// Current amount of buffered data.
-    buffered_data: usize,
+    direct_buffered_data: usize,
+    indirect_buffered_data: usize,
     flush_epoch: usize,
 }
 
 impl Buffer {
     fn new(flush_epoch: usize) -> Buffer {
         Buffer { operations: Vec::new(),
-                 buffered_data: 0,
+                 direct_buffered_data: 0,
+                 indirect_buffered_data: 0,
                  flush_epoch: flush_epoch,
         }
+    }
+
+    fn buffered_data(&self) -> usize {
+        self.direct_buffered_data + self.indirect_buffered_data
     }
 }
 
@@ -442,7 +449,8 @@ impl Writer {
                 return;
             },
         };
-        let encoded_len = OperationEncoder::encoded_len(&row);
+        let (direct_len, indirect_len) = OperationEncoder::encoded_len(&row);
+        let encoded_len = direct_len + indirect_len;
 
         // Sanity check: if the operation is bigger than the max batch data size,
         // then we must reject it.
@@ -479,7 +487,8 @@ impl Writer {
             state.operations_in_lookup.push(OperationInLookup {
                 row: row,
                 flush_epoch: flush_epoch,
-                encoded_len: encoded_len,
+                direct_len: direct_len,
+                indirect_len: indirect_len,
                 op_type: op_type,
             })
         };
@@ -523,8 +532,9 @@ impl Writer {
 
         // Retrieve the operation in lookup, and decrement the epoch's operations in lookup
         // counter.
-        let OperationInLookup { row, flush_epoch, encoded_len, op_type } =
+        let OperationInLookup { row, flush_epoch, direct_len, indirect_len, op_type } =
             state.operations_in_lookup.remove(idx).unwrap();
+        let encoded_len = direct_len + indirect_len;
         state.flushes[flush_epoch].lookups_outstanding -= 1;
 
         // Temporarily decrease the buffered data amount by the operation's size so that early
@@ -543,7 +553,7 @@ impl Writer {
                         *buffer = Some(Buffer::new(flush_epoch));
                         None
                     },
-                    Some(ref mut buffer) if buffer.buffered_data.saturating_add(encoded_len) >
+                    Some(ref mut buffer) if buffer.buffered_data().saturating_add(encoded_len) >
                                             self.config().max_data_per_batch => {
                         if *batches_in_flight >= self.config().max_batches_per_tablet {
                             // Case [3].
@@ -565,7 +575,8 @@ impl Writer {
 
                     // Add the operation to the buffer.
                     buffer.operations.push((row, idx, op_type));
-                    buffer.buffered_data += encoded_len;
+                    buffer.direct_buffered_data += direct_len;
+                    buffer.indirect_buffered_data += indirect_len;
                     *buffered_data += encoded_len;
 
                     // Check if the operation's epoch falls before the buffer's epoch. If so, we
@@ -707,7 +718,8 @@ impl Batch {
 
     /// Transforms the buffer into a batch, and sends it to the tablet server.
     fn send(writer: Writer, tablet_id: TabletId, buffer: Buffer) {
-        let Buffer { mut operations, buffered_data, flush_epoch } = buffer;
+        let Buffer { mut operations, direct_buffered_data,
+                     indirect_buffered_data, flush_epoch } = buffer;
         trace!("Flushing buffer; tablet {}, flush_epoch: {}, operations: {:?}",
                tablet_id, flush_epoch, operations);
 
@@ -715,17 +727,16 @@ impl Batch {
         // TODO: the operations should already be in order, look into bubble or insertion sort.
         operations.sort_by(|a, b| a.1.cmp(&b.1));
 
-        let data_len = OperationEncoder::direct_len(writer.schema()) * operations.len();
-        let indirect_data_len = buffered_data - data_len;
-        let mut encoder = OperationEncoder::with_capacity(data_len, indirect_data_len);
+        let mut encoder = OperationEncoder::with_capacity(direct_buffered_data,
+                                                          indirect_buffered_data);
 
         for &(ref row, _, op_type) in &operations {
             encoder.encode_row(op_type.as_pb(), row);
         }
 
         let (data, indirect_data) = encoder.unwrap();
-        debug_assert_eq!(data.len(), data_len);
-        debug_assert_eq!(indirect_data.len(), indirect_data_len);
+        debug_assert_eq!(data.len(), direct_buffered_data, "direct data length");
+        debug_assert_eq!(indirect_data.len(), indirect_buffered_data, "indirect data length");
 
         let mut message = tserver::WriteRequestPB::new();
         message.mut_row_operations().set_rows(data);
@@ -745,7 +756,7 @@ impl Batch {
             operations: operations,
             writer: writer,
             backoff: backoff,
-            buffered_data: buffered_data,
+            buffered_data: direct_buffered_data + indirect_buffered_data,
             flush_epoch: flush_epoch,
         };
 
@@ -835,6 +846,14 @@ impl Batch {
                             let error = error::TabletServerError::from(error.take_error());
                             if let Err(error) = channel.try_send(Event::FailedOperation(row, op_type, Error::TabletServer(error))) {
                                 debug!("failed to send failed operation to event channel: {}", error);
+                            }
+                        }
+
+                        if writer.config().event_set.has_successful_operation() {
+                            for (row, _, op_type) in operations.drain(..) {
+                                if channel.try_send(Event::SuccessfulOperation(row, op_type)).is_err() {
+                                    debug!("failed to send successful operation to event channel");
+                                }
                             }
                         }
                     }
@@ -929,7 +948,7 @@ mod test {
 
         let mut config = WriterConfig::default();
         let recv = config.event_channel();
-        config.event_set = EventSet::SuccessfulOperations;
+        config.event_set = EventSet::FailedOperations;
 
         let writer = table.new_writer(config);
 
@@ -950,22 +969,30 @@ mod test {
             writer.insert(insert);
         }
 
+        // Insert a null value
+        {
+            let mut insert = table.schema().new_row();
+            insert.set_by_name::<i32>("key", 11).unwrap();
+            insert.set_by_name::<Option<i32>>("val", None).unwrap();
+            writer.insert(insert);
+        }
+
         let (send, flush_recv) = sync_channel(100);
         writer.flush(move |stats| send.send(stats).unwrap());
 
         drop(writer);
 
         let events = recv.into_iter().collect::<Vec<_>>();
+        assert_eq!(2, events.len());
         assert!(events[0].is_failed_operation(), "expected FailedOperation, got: {:?}", events[0]);
         assert!(events[1].is_flush(), "expected Flush, got: {:?}", events[1]);
-        assert_eq!(2, events.len());
 
         let flush = flush_recv.recv().unwrap();
         assert_eq!(flush.epoch(), 0);
         assert_eq!(flush.successful_batches(), 4);
         assert_eq!(flush.failed_batches(), 0);
-        assert_eq!(flush.successful_operations(), 10);
+        assert_eq!(flush.successful_operations(), 11);
         assert_eq!(flush.failed_operations(), 1);
-        assert_eq!(flush.data(), 121);
+        assert_eq!(flush.data(), 128);
     }
 }

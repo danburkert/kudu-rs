@@ -59,6 +59,22 @@ impl Row {
         }
     }
 
+    pub fn set_null(&mut self, idx: usize) -> Result<&mut Row> {
+        try!(self.check_column_for_nullability(idx));
+        self.set_columns.insert(idx);
+        self.null_columns.insert(idx);
+        self.indirect_data.remove(idx);
+        Ok(self)
+    }
+
+    pub fn set_null_by_name(&mut self, column: &str) -> Result<&mut Row> {
+        if let Some(idx) = self.schema.column_index(column) {
+            self.set_null(idx)
+        } else {
+            Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
+        }
+    }
+
     pub unsafe fn set_unchecked<'a, V>(&mut self,
                                        idx: usize,
                                        value: V)
@@ -67,6 +83,7 @@ impl Row {
         self.set_columns.insert(idx);
         if value.is_null() {
             self.null_columns.insert(idx);
+            self.indirect_data.remove(idx);
         } else {
             if self.schema.has_nullable_columns() { self.null_columns.remove(idx); }
             if V::is_var_len() {
@@ -162,6 +179,18 @@ impl Row {
         if V::is_nullable() && !column.is_nullable() {
             return Err(Error::InvalidArgument(format!("nullable type is invalid for column {:?}",
                                                       column)));
+        }
+        Ok(())
+    }
+
+    fn check_column_for_nullability(&self, idx: usize) -> Result<()> {
+        if idx >= self.schema.columns().len() {
+            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
+                                                      idx, self.schema)));
+        }
+        let column = &self.schema.columns()[idx];
+        if !column.is_nullable() {
+            return Err(Error::InvalidArgument(format!("column {:?} is not nullable", column)));
         }
         Ok(())
     }
@@ -351,25 +380,21 @@ impl OperationEncoder {
         self.data.truncate(offset);
     }
 
-    pub fn encoded_len(row: &Row) -> usize {
+    /// Returns the direct and indirect encoded length for the row.
+    pub fn encoded_len(row: &Row) -> (usize, usize) {
         let Row { ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *row;
 
-        let mut len = 1; // op type
+        let mut direct = 1; // op type
 
-        len += set_columns.data().len();
-        len += null_columns.data().len();
-        len += schema.row_size();
-        len += indirect_data.values().map(|data| data.len()).sum();
+        direct += set_columns.data().len();
+        direct += null_columns.data().len();
 
-        len
-    }
-
-    pub fn direct_len(schema: &Schema) -> usize {
-        let mut len = 1; // op type
-        len += (schema.columns().len() + 7) / 8;
-        if schema.has_nullable_columns() { len += (schema.columns().len() + 7) / 8; }
-        len += schema.row_size();
-        len
+        for (idx, column) in schema.columns().iter().enumerate() {
+            if !set_columns.get(idx) { continue; }
+            if column.is_nullable() && null_columns.get(idx) { continue; }
+            direct += column.data_type().size();
+        }
+        (direct, indirect_data.values().map(|data| data.len()).sum())
     }
 
     pub fn clear(&mut self) {
