@@ -866,8 +866,8 @@ impl Batch {
                                            failed_ops,
                                            self.buffered_data);
             },
-            Err(_) => {
-                unimplemented!()
+            Err(error) => {
+                panic!("error handling unimplemented. error: {}", error);
             }
         }
     }
