@@ -149,7 +149,7 @@ impl Column {
 
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f, "{:?} {:?}", self.name, self.data_type));
+        try!(write!(f, "{} {:?}", self.name, self.data_type));
         if !self.is_nullable {
             try!(write!(f, " NOT NULL"));
         }
