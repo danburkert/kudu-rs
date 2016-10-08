@@ -35,7 +35,7 @@ impl Tablet {
     /// Creates a new `Tablet` from a tablet locations protobuf message.
     #[doc(hidden)]
     pub fn from_pb(primary_key_schema: &Schema,
-                   partition_schema: &PartitionSchema,
+                   partition_schema: PartitionSchema,
                    mut pb: TabletLocationsPB)
                    -> Result<Tablet> {
         let id = try!(TabletId::parse_bytes(pb.get_tablet_id()));

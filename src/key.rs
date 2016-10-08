@@ -278,6 +278,95 @@ fn increment_cell(row: &mut Row, idx: usize) -> bool {
     true
 }
 
+/// Compares the cell values in two rows. If either cell is not set or null, returns false.
+fn is_cell_equal(a: &Row, b: &Row, idx: usize) -> bool {
+    assert_eq!(a.schema(), b.schema());
+
+    if !a.is_set(idx).unwrap() || a.is_null(idx).unwrap() ||
+       !b.is_set(idx).unwrap() || b.is_null(idx).unwrap() {
+        return false;
+    }
+
+    match a.schema().columns()[idx].data_type() {
+        DataType::Bool => a.get::<bool>(idx) == b.get::<bool>(idx),
+        DataType::Int8 => a.get::<i8>(idx) == b.get::<i8>(idx),
+        DataType::Int16 => a.get::<i16>(idx) == b.get::<i16>(idx),
+        DataType::Int32 => a.get::<i32>(idx) == b.get::<i32>(idx),
+        DataType::Int64 | DataType::Timestamp => a.get::<i64>(idx) == b.get::<i64>(idx),
+        DataType::Binary | DataType::String => a.get::<&[u8]>(idx) == b.get::<&[u8]>(idx),
+        DataType::Float => a.get::<f32>(idx) == b.get::<f32>(idx),
+        DataType::Double => return a.get::<f64>(idx) == b.get::<f64>(idx),
+    }
+}
+
+fn is_cell_incremented(lower: &Row, upper: &Row, idx: usize) -> bool {
+    assert_eq!(lower.schema(), upper.schema());
+
+    if !lower.is_set(idx).unwrap() || lower.is_null(idx).unwrap() ||
+       !upper.is_set(idx).unwrap() || upper.is_null(idx).unwrap() {
+        return false;
+    }
+
+    match lower.schema().columns()[idx].data_type() {
+        DataType::Bool => {
+            lower.get::<bool>(idx).unwrap() == false && upper.get::<bool>(idx).unwrap() == true
+        },
+        DataType::Int8 => {
+            let lower = lower.get::<i8>(idx).unwrap();
+            let upper = upper.get::<i8>(idx).unwrap();
+            lower < i8::MAX && lower + 1 == upper
+        },
+        DataType::Int16 => {
+            let lower = lower.get::<i16>(idx).unwrap();
+            let upper = upper.get::<i16>(idx).unwrap();
+            lower < i16::MAX && lower + 1 == upper
+        },
+        DataType::Int32 => {
+            let lower = lower.get::<i32>(idx).unwrap();
+            let upper = upper.get::<i32>(idx).unwrap();
+            lower < i32::MAX && lower + 1 == upper
+        },
+        DataType::Int64 | DataType::Timestamp => {
+            let lower = lower.get::<i8>(idx).unwrap();
+            let upper = upper.get::<i8>(idx).unwrap();
+            lower < i8::MAX && lower + 1 == upper
+        },
+        DataType::Binary | DataType::String => {
+            let lower = lower.get::<&[u8]>(idx).unwrap();
+            let upper = upper.get::<&[u8]>(idx).unwrap();
+            lower.len() + 1 == upper.len() &&
+                lower == &upper[..lower.len()] &&
+                upper[upper.len() - 1] == 0
+        },
+        DataType::Float => {
+            let lower = lower.get::<f32>(idx).unwrap();
+            let upper = upper.get::<f32>(idx).unwrap();
+            lower != f32::INFINITY && lower.next() == upper
+        },
+        DataType::Double => {
+            let lower = lower.get::<f64>(idx).unwrap();
+            let upper = upper.get::<f64>(idx).unwrap();
+            lower != f64::INFINITY && lower.next() == upper
+        },
+    }
+}
+
+pub fn is_row_incremented(lower: &Row, upper: &Row, idxs: &[usize]) -> bool {
+    let mut equals = false;
+    for &idx in idxs.iter().rev() {
+        if equals {
+            if is_cell_equal(lower, upper, idx) { continue; }
+            else { return false; }
+        }
+
+        if !lower.is_set(idx).unwrap() && !upper.is_set(idx).unwrap() { continue; }
+
+        if !is_cell_incremented(lower, upper, idx) { return false; }
+        equals = true;
+    }
+    true
+}
+
 #[cfg(test)]
 mod test {
 

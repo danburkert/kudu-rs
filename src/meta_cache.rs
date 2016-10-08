@@ -55,14 +55,14 @@ impl Entry {
 
     fn partition_lower_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition().lower_bound_encoded(),
+            Entry::Tablet(ref tablet) => tablet.partition().lower_bound_key(),
             Entry::NonCoveredRange { ref partition_lower_bound, .. } => partition_lower_bound,
         }
     }
 
     fn partition_upper_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition().upper_bound_encoded(),
+            Entry::Tablet(ref tablet) => tablet.partition().upper_bound_key(),
             Entry::NonCoveredRange { ref partition_upper_bound, .. } => partition_upper_bound,
         }
     }
@@ -103,8 +103,8 @@ impl Entry {
                 // Sanity check that if the tablet IDs match, the ranges also match. If this fails,
                 // something is very wrong (possibly in the server).
                 debug_assert!(a.id() != b.id() ||
-                              (a.partition().lower_bound_encoded() == b.partition().lower_bound_encoded() &&
-                               a.partition().upper_bound_encoded() == b.partition().upper_bound_encoded()));
+                              (a.partition().lower_bound_key() == b.partition().lower_bound_key() &&
+                               a.partition().upper_bound_key() == b.partition().upper_bound_key()));
                 a.id() == b.id()
             },
             (&Entry::NonCoveredRange { partition_lower_bound: ref a_lower,
@@ -359,13 +359,13 @@ impl MetaCache {
 
         for tablet in tablets {
             let tablet = try!(Tablet::from_pb(&self.inner.primary_key_schema,
-                                              &self.inner.partition_schema,
+                                              self.inner.partition_schema.clone(),
                                               tablet));
-            if tablet.partition().lower_bound_encoded() > &last_upper_bound {
+            if tablet.partition().lower_bound_key() > &last_upper_bound {
                 entries.push_back(Entry::non_covered_range(last_upper_bound,
-                                                           tablet.partition().lower_bound_encoded().to_owned()));
+                                                           tablet.partition().lower_bound_key().to_owned()));
             }
-            last_upper_bound = tablet.partition().upper_bound_encoded().to_owned();
+            last_upper_bound = tablet.partition().upper_bound_key().to_owned();
             entries.push_back(Entry::Tablet(tablet));
         }
 

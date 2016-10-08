@@ -252,18 +252,7 @@ impl fmt::Debug for Row {
             if self.is_null(idx).unwrap() {
                 try!(write!(f, "NULL"))
             } else {
-                match column.data_type() {
-                    DataType::Bool => try!(write!(f, "{}", self.get::<bool>(idx).unwrap())),
-                    DataType::Int8 => try!(write!(f, "{}", self.get::<i8>(idx).unwrap())),
-                    DataType::Int16 => try!(write!(f, "{}", self.get::<i16>(idx).unwrap())),
-                    DataType::Int32 => try!(write!(f, "{}", self.get::<i32>(idx).unwrap())),
-                    DataType::Int64 => try!(write!(f, "{}", self.get::<i64>(idx).unwrap())),
-                    DataType::Timestamp => try!(util::fmt_timestamp(f, self.get::<SystemTime>(idx).unwrap())),
-                    DataType::Float => try!(write!(f, "{}", self.get::<f32>(idx).unwrap())),
-                    DataType::Double => try!(write!(f, "{}", self.get::<f64>(idx).unwrap())),
-                    DataType::Binary => try!(util::fmt_hex(f, self.get::<&[u8]>(idx).unwrap())),
-                    DataType::String => try!(write!(f, "{:?}", self.get::<&str>(idx).unwrap())),
-                }
+                try!(util::fmt_cell(f, self, idx));
             }
         }
         Ok(())

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
 use std::fmt;
 use std::cmp;
 
@@ -12,11 +11,11 @@ use kudu_pb::common::{
     SchemaPB,
 };
 
-use DataType;
+use Error;
 use Result;
 use Row;
 use Schema;
-use key::decode_range_partition_key;
+use key;
 use util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,50 +125,7 @@ impl PartitionSchema {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct PartitionKey {
-    hash_buckets: Vec<u32>,
-    row: Row,
-    partition_schema: PartitionSchema,
-}
-
-impl PartitionKey {
-
-    pub fn hash_buckets(&self) -> &[u32] {
-        &self.hash_buckets
-    }
-
-    pub fn range_row(&self) -> &Row {
-        &self.row
-    }
-
-    pub fn partition_schema(&self) -> &PartitionSchema {
-        &self.partition_schema
-    }
-
-    fn from_encoded(schema: &Schema,
-                    partition_schema: &PartitionSchema,
-                    mut encoded_key: &[u8]) -> Result<PartitionKey> {
-
-        let mut hash_buckets = Vec::with_capacity(partition_schema.hash_partition_schemas().len());
-        for _ in partition_schema.hash_partition_schemas() {
-            if encoded_key.is_empty() { break; }
-            hash_buckets.push(BigEndian::read_u32(encoded_key));
-            encoded_key = &encoded_key[4..];
-        }
-
-        let range_row = try!(decode_range_partition_key(schema,
-                                                        partition_schema.range_partition_schema(),
-                                                        encoded_key));
-
-        Ok(PartitionKey {
-            hash_buckets: hash_buckets,
-            row: range_row,
-            partition_schema: partition_schema.clone(),
-        })
-    }
-}
-
+/*
 impl fmt::Debug for PartitionKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
@@ -207,26 +163,28 @@ impl fmt::Debug for PartitionKey {
         Ok(())
     }
 }
+*/
 
 #[derive(Clone)]
 pub struct Partition {
-    lower_bound_encoded: Vec<u8>,
-    upper_bound_encoded: Vec<u8>,
-    lower_bound: PartitionKey,
-    upper_bound: PartitionKey,
+    partition_schema: PartitionSchema,
+    lower_bound_key: Vec<u8>,
+    upper_bound_key: Vec<u8>,
+    hash_partitions: Vec<u32>,
+    range_lower_bound: Row,
+    range_upper_bound: Row,
 }
 
 impl fmt::Debug for Partition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[({:?}), ({:?}))", &self.lower_bound, &self.upper_bound)
+        write!(f, "[({:?}), ({:?}))", &self.lower_bound_key, &self.upper_bound_key)
     }
 }
 
 impl cmp::PartialEq for Partition {
     fn eq(&self, other: &Partition) -> bool {
-        self.lower_bound_encoded == other.lower_bound_encoded &&
-            self.upper_bound_encoded == other.upper_bound_encoded &&
-            self.lower_bound.partition_schema == other.lower_bound.partition_schema
+        &self.lower_bound_key == &other.lower_bound_key &&
+            &self.upper_bound_key == &other.upper_bound_key
     }
 }
 
@@ -234,39 +192,125 @@ impl cmp::Eq for Partition { }
 
 impl Partition {
 
-    pub fn lower_bound(&self) -> &PartitionKey {
-        &self.lower_bound
+    pub fn lower_bound_key(&self) -> &[u8] {
+        &self.lower_bound_key
     }
 
-    pub fn upper_bound(&self) -> &PartitionKey {
-        &self.upper_bound
+    pub fn upper_bound_key(&self) -> &[u8] {
+        &self.upper_bound_key
     }
 
-    pub fn lower_bound_encoded(&self) -> &[u8] {
-        &self.lower_bound_encoded
+    pub fn range_lower_bound(&self) -> &Row {
+        &self.range_lower_bound
     }
 
-    pub fn upper_bound_encoded(&self) -> &[u8] {
-        &self.upper_bound_encoded
+    pub fn range_upper_bound(&self) -> &Row {
+        &self.range_upper_bound
+    }
+
+    pub fn hash_partitions(&self) -> &[u32] {
+        &self.hash_partitions
+    }
+
+    /// Formats the range partition.
+    ///
+    /// VALUES = 123
+    /// VALUES = (123, 456)
+    /// 123 <= VALUES < 999
+    /// (123, 456) <= VALUES < (789, 102)
+    pub fn fmt_range_partition(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let idxs = &self.partition_schema.range_partition_schema().columns;
+
+        let lower_bound_idxs = idxs.iter().take_while(|&idx| self.range_lower_bound.is_set(*idx).unwrap()).count();
+        let upper_bound_idxs = idxs.iter().take_while(|&idx| self.range_upper_bound.is_set(*idx).unwrap()).count();
+
+        match (lower_bound_idxs, upper_bound_idxs) {
+            (0, 0) => write!(f, "UNBOUNDED"),
+            (0, count) => {
+                try!(write!(f, "VALUES < "));
+                fmt_row(f, &self.range_upper_bound, &idxs[..count])
+            },
+            (count, 0) => {
+                try!(write!(f, "VALUES >= "));
+                fmt_row(f, &self.range_lower_bound, &idxs[..count])
+            },
+            _ => {
+                if key::is_row_incremented(&self.range_lower_bound, &self.range_upper_bound, idxs) {
+                    try!(write!(f, "VALUES = "));
+                    fmt_row(f, &self.range_lower_bound, idxs)
+                } else {
+                    try!(fmt_row(f, &self.range_lower_bound, idxs));
+                    try!(write!(f, " <= VALUES < "));
+                    fmt_row(f, &self.range_upper_bound, idxs)
+                }
+            }
+        }
     }
 
     #[doc(hidden)]
     pub fn from_pb(primary_key_schema: &Schema,
-                   partition_schema: &PartitionSchema,
+                   partition_schema: PartitionSchema,
                    mut partition: PartitionPB)
                    -> Result<Partition> {
-        let lower_bound = try!(PartitionKey::from_encoded(primary_key_schema,
-                                                          partition_schema,
-                                                          partition.get_partition_key_start()));
-        let upper_bound = try!(PartitionKey::from_encoded(primary_key_schema,
-                                                          partition_schema,
-                                                          partition.get_partition_key_end()));
+        let lower_bound_key = partition.take_partition_key_start();
+        let upper_bound_key = partition.take_partition_key_end();
+
+        let hash_partition_levels = partition_schema.hash_partition_schemas().len();
+        let mut hash_partitions = Vec::with_capacity(hash_partition_levels);
+        {
+            let mut key = &lower_bound_key[..];
+            for _ in partition_schema.hash_partition_schemas() {
+                if key.is_empty() {
+                    hash_partitions.push(0)
+                } else if key.len() < 4 {
+                    return Err(Error::Serialization(format!("invalid lower bound partition key: {:?}",
+                                                            lower_bound_key)));
+                } else {
+                    hash_partitions.push(BigEndian::read_u32(key));
+                    key = &key[4..];
+                }
+            }
+        }
+
+        let range_lower_bound = if lower_bound_key.len() > hash_partition_levels * 4 {
+            try!(key::decode_range_partition_key(primary_key_schema,
+                                                 partition_schema.range_partition_schema(),
+                                                 &lower_bound_key[hash_partition_levels * 4..]))
+        } else {
+            primary_key_schema.new_row()
+        };
+        let range_upper_bound = if upper_bound_key.len() > hash_partition_levels * 4 {
+            try!(key::decode_range_partition_key(primary_key_schema,
+                                                 partition_schema.range_partition_schema(),
+                                                 &upper_bound_key[hash_partition_levels * 4..]))
+        } else {
+            primary_key_schema.new_row()
+        };
 
         Ok(Partition {
-            lower_bound_encoded: partition.take_partition_key_start(),
-            upper_bound_encoded: partition.take_partition_key_end(),
-            lower_bound: lower_bound,
-            upper_bound: upper_bound,
+            partition_schema: partition_schema,
+            lower_bound_key: lower_bound_key,
+            upper_bound_key: upper_bound_key,
+            hash_partitions: hash_partitions,
+            range_lower_bound: range_lower_bound,
+            range_upper_bound: range_upper_bound,
         })
     }
+}
+
+fn fmt_row(f: &mut fmt::Formatter, row: &Row, idxs: &[usize]) -> fmt::Result {
+    debug_assert!(!idxs.is_empty());
+
+    if idxs.len() == 1 {
+        return util::fmt_cell(f, row, idxs[0]);
+    }
+
+    try!(write!(f, "("));
+    let mut is_first = true;
+    for &idx in idxs {
+        if is_first { is_first = false; }
+        else { try!(write!(f, ", ")) }
+        try!(util::fmt_cell(f, row, idx));
+    }
+    write!(f, ")")
 }

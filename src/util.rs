@@ -5,6 +5,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use chrono;
 
+use DataType;
+use Row;
+
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + duration.subsec_nanos() as u64 / 1000_000
 }
@@ -57,6 +60,21 @@ pub fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Resu
     };
 
     write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
+}
+
+pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
+    match row.schema().columns()[idx].data_type() {
+        DataType::Bool => write!(f, "{}", row.get::<bool>(idx).unwrap()),
+        DataType::Int8 => write!(f, "{}", row.get::<i8>(idx).unwrap()),
+        DataType::Int16 => write!(f, "{}", row.get::<i16>(idx).unwrap()),
+        DataType::Int32 => write!(f, "{}", row.get::<i32>(idx).unwrap()),
+        DataType::Int64 => write!(f, "{}", row.get::<i64>(idx).unwrap()),
+        DataType::Timestamp => fmt_timestamp(f, row.get::<SystemTime>(idx).unwrap()),
+        DataType::Float => write!(f, "{}", row.get::<f32>(idx).unwrap()),
+        DataType::Double => write!(f, "{}", row.get::<f64>(idx).unwrap()),
+        DataType::Binary => fmt_hex(f, row.get::<&[u8]>(idx).unwrap()),
+        DataType::String => write!(f, "{:?}", row.get::<&str>(idx).unwrap()),
+    }
 }
 
 pub fn dummy_addr() -> SocketAddr {

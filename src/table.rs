@@ -95,7 +95,7 @@ impl Table {
 
             match try!(recv.recv().unwrap()) {
                 Entry::Tablet(tablet) => {
-                    last_partition_key = tablet.partition().upper_bound_encoded().to_owned();
+                    last_partition_key = tablet.partition().upper_bound_key().to_owned();
                     tablets.push(tablet);
                 },
                 Entry::NonCoveredRange { partition_upper_bound, .. } => {
