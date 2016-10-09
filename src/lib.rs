@@ -2,6 +2,7 @@
 
 extern crate byteorder;
 extern crate chrono;
+extern crate futures;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;

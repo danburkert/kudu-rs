@@ -2,25 +2,25 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc::sync_channel;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 use std::fmt;
 
 use rpc::Rpc;
 use rpc::connection::{Connection, ConnectionOptions};
-use util::duration_to_ms;
 use Result;
 use Error;
 
 use mio::{
+    Ready,
+    Token,
+};
+use mio::deprecated::{
     EventLoop,
-    EventLoopConfig,
-    EventSet,
+    EventLoopBuilder,
     Handler,
     Sender,
-    Token,
 };
 use slab::Slab;
 
@@ -68,33 +68,23 @@ pub enum TimeoutKind {
     Timer(Box<TimerCallback>),
 }
 
-struct Inner {
-    channel: Sender<Command>,
-    thread: JoinHandle<io::Result<()>>,
-}
-
 #[derive(Clone)]
 pub struct Messenger {
-    inner: Arc<Inner>,
+    channel: Sender<Command>,
 }
 
 impl Messenger {
     pub fn new() -> io::Result<Messenger> {
-        let mut event_loop_config = EventLoopConfig::new();
+        let mut event_loop_builder = EventLoopBuilder::new();
         // Timer granularity of 10ms.
-        event_loop_config.timer_tick_ms(10);
-        let mut event_loop = try!(EventLoop::configured(event_loop_config));
+        event_loop_builder.timer_tick(Duration::from_millis(10));
+        let mut event_loop = try!(event_loop_builder.build());
         let channel = event_loop.channel();
-        let thread = thread::spawn(move || {
+        thread::spawn(move || {
             let mut connection_manager = MessengerHandler::new();
             event_loop.run(&mut connection_manager)
         });
-        Ok(Messenger {
-            inner: Arc::new(Inner {
-                channel: channel,
-                thread: thread,
-            }),
-        })
+        Ok(Messenger { channel: channel })
     }
 
 
@@ -103,7 +93,7 @@ impl Messenger {
         // TODO: is there a better way to handle queue failure?
         debug_assert!(rpc.callback.is_some());
         rpc.response.clear();
-        self.inner.channel.send(Command::Send(rpc)).unwrap();
+        self.channel.send(Command::Send(rpc)).unwrap();
     }
 
     pub fn delayed_send(&self, delay: Duration, rpc: Rpc) {
@@ -127,7 +117,7 @@ impl Messenger {
     }
 
     pub fn timer(&self, duration: Duration, callback: Box<TimerCallback>) {
-        self.inner.channel.send(Command::Timer((duration, callback))).unwrap();
+        self.channel.send(Command::Timer((duration, callback))).unwrap();
     }
 }
 
@@ -140,7 +130,7 @@ pub struct MessengerHandler {
 impl MessengerHandler {
     fn new() -> MessengerHandler {
         MessengerHandler {
-            connection_slab: Slab::new(128),
+            connection_slab: Slab::with_capacity(128),
             index: HashMap::new(),
             cxn_options: Rc::new(ConnectionOptions::default()),
         }
@@ -149,7 +139,7 @@ impl MessengerHandler {
 
 impl fmt::Debug for MessengerHandler {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MessengerHandler {{ connections: {} }}", self.connection_slab.count())
+        write!(f, "MessengerHandler {{ connections: {} }}", self.connection_slab.len())
     }
 }
 
@@ -158,7 +148,7 @@ impl Handler for MessengerHandler {
     type Timeout = TimeoutKind;
     type Message = Command;
 
-    fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
+    fn ready(&mut self, event_loop: &mut Loop, token: Token, events: Ready) {
         self.connection_slab[token].ready(event_loop, token, events)
     }
 
@@ -168,25 +158,25 @@ impl Handler for MessengerHandler {
             Command::Send(rpc) => {
                 let token = self.index.get(&rpc.addr).cloned().unwrap_or_else(|| {
                     // No open connection for the socket address; create a new one.
-                    if !self.connection_slab.has_remaining() {
-                        let count = self.connection_slab.count();
-                        self.connection_slab.grow(count / 2);
+                    if !self.connection_slab.has_available() {
+                        let len = self.connection_slab.len();
+                        self.connection_slab.reserve_exact(len / 2);
                     }
                     let cxn_options = self.cxn_options.clone();
-                    let token = self.connection_slab
-                                    .insert_with(|token| Connection::new(event_loop,
-                                                                         token,
-                                                                         rpc.addr,
-                                                                         cxn_options))
-                                    .unwrap();
+                    let token = {
+                        let entry = self.connection_slab.vacant_entry().unwrap();
+                        let token = entry.index();
+                        let connection = Connection::new(event_loop, token, rpc.addr, cxn_options);
+                        entry.insert(connection);
+                        token
+                    };
                     self.index.insert(rpc.addr, token);
                     token
                 });
                 self.connection_slab[token].send_rpc(event_loop, token, rpc);
             },
             Command::Timer((duration, callback)) => {
-                event_loop.timeout_ms(TimeoutKind::Timer(callback),
-                                      duration_to_ms(&duration)).unwrap();
+                event_loop.timeout(TimeoutKind::Timer(callback), duration).unwrap();
             }
         }
     }

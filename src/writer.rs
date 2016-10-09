@@ -197,11 +197,11 @@ impl EventSet {
 #[derive(Clone)]
 pub struct Writer {
     inner: Arc<Inner>,
+    table: Table,
     event_channel: Option<SyncSender<Event>>,
 }
 
 struct Inner {
-    table: Table,
     config: Config,
     state: Mutex<State>,
 }
@@ -405,8 +405,8 @@ impl Writer {
 
         let (config, event_channel) = config.into_config();
         Writer {
+            table: table,
             inner: Arc::new(Inner {
-                table: table,
                 config: config,
                 state: Mutex::new(State {
                     operations_in_lookup: QueueMap::new(),
@@ -665,11 +665,11 @@ impl Writer {
     }
 
     fn schema(&self) -> &Schema {
-        self.inner.table.schema()
+        self.table.schema()
     }
 
     fn partition_schema(&self) -> &PartitionSchema {
-        self.inner.table.partition_schema()
+        self.table.partition_schema()
     }
 
     fn fail_operation(&self, row: Row, op_type: OperationType, error: Error) {
@@ -691,15 +691,15 @@ impl Writer {
     }
 
     fn meta_cache(&self) -> &MetaCache {
-        self.inner.table.meta_cache()
+        self.table.meta_cache()
     }
 
     fn client(&self) -> &Client {
-        self.inner.table.client()
+        self.table.client()
     }
 
     fn messenger(&self) -> &Messenger {
-        self.inner.table.client().messenger()
+        self.table.client().messenger()
     }
 }
 

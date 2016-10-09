@@ -6,7 +6,7 @@ use std::i32;
 use std::io::{self, ErrorKind, Write};
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use Error;
 use Result;
@@ -21,11 +21,11 @@ use util::duration_to_ms;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use mio::{
-    EventSet,
+    Ready,
     PollOpt,
-    Timeout,
     Token,
 };
+use mio::timer::Timeout;
 use mio::tcp::TcpStream;
 use net2::TcpBuilder;
 use netbuf::Buf;
@@ -213,8 +213,8 @@ impl Connection {
     }
 
     /// Notifies the connection of socket events.
-    pub fn ready(&mut self, event_loop: &mut Loop, token: Token, events: EventSet) {
-        fn inner(cxn: &mut Connection, event_loop: &mut Loop, events: EventSet) -> Result<()> {
+    pub fn ready(&mut self, event_loop: &mut Loop, token: Token, events: Ready) {
+        fn inner(cxn: &mut Connection, event_loop: &mut Loop, events: Ready) -> Result<()> {
             match cxn.state {
                 ConnectionState::Initiating => {
                     if events.is_readable() {
@@ -270,8 +270,8 @@ impl Connection {
         trace!("{:?}: queueing rpc: {:?}", self, rpc);
 
         self.send_queue.push_with(|call_id| {
-            let timer = event_loop.timeout_ms(TimeoutKind::Rpc(token, call_id),
-                                              duration_to_ms(&rpc.deadline.duration_since(now)));
+            let timer = event_loop.timeout(TimeoutKind::Rpc(token, call_id),
+                                           rpc.deadline.duration_since(now));
             QueuedRpc { rpc: rpc, timer: timer.unwrap() }
         });
 
@@ -404,13 +404,13 @@ impl Connection {
         let mut retries = Vec::new();
         for (call_id, QueuedRpc { rpc, timer }) in self.recv_queue.drain().chain(self.send_queue.drain()) {
             if rpc.cancelled() {
-                event_loop.clear_timeout(timer);
+                event_loop.clear_timeout(&timer);
                 rpc.fail(Error::Cancelled);
             } else if rpc.timed_out(now) {
-                event_loop.clear_timeout(timer);
+                event_loop.clear_timeout(&timer);
                 rpc.fail(Error::TimedOut);
             } else if rpc.fail_fast() {
-                event_loop.clear_timeout(timer);
+                event_loop.clear_timeout(&timer);
                 rpc.fail(error.clone());
             } else {
                 retries.push((call_id, QueuedRpc { rpc: rpc, timer: timer }));
@@ -422,7 +422,8 @@ impl Connection {
         }
         trace!("{:?}: retrying rpcs: {:?}", self, self.send_queue);
 
-        event_loop.timeout_ms(TimeoutKind::ConnectionReset(token), backoff_ms).unwrap();
+        event_loop.timeout(TimeoutKind::ConnectionReset(token),
+                           Duration::from_millis(backoff_ms)).unwrap();
     }
 
     /// Writes the message to the send buffer with a request header.
@@ -604,7 +605,7 @@ impl Connection {
                         // Remove the RPC from the recv queue, and fail it. The message may not be
                         // in the recv queue if it has already timed out.
                         if let Some(QueuedRpc { rpc, timer }) = self.recv_queue.remove(&(self.response_header.get_call_id() as usize)) {
-                            event_loop.clear_timeout(timer);
+                            event_loop.clear_timeout(&timer);
                             rpc.fail(Error::Rpc(error.clone()));
                         }
                         // If the message is fatal, then return an error in order to have the
@@ -627,7 +628,7 @@ impl Connection {
                         }
 
                         let QueuedRpc { rpc, timer } = entry.remove();
-                        event_loop.clear_timeout(timer);
+                        event_loop.clear_timeout(&timer);
                         rpc.complete();
                         self.throttle += 1;
                     }
@@ -658,12 +659,12 @@ impl Connection {
 
                 if rpc.cancelled() {
                     trace!("{:?}: cancelling {:?}", self, rpc);
-                    event_loop.clear_timeout(timer);
+                    event_loop.clear_timeout(&timer);
                     rpc.fail(Error::Cancelled);
                     break;
                 } else if rpc.timed_out(now) {
                     trace!("{:?}: timing out {:?}", self, rpc);
-                    event_loop.clear_timeout(timer);
+                    event_loop.clear_timeout(&timer);
                     rpc.fail(Error::TimedOut);
                     break;
                 }
@@ -732,15 +733,15 @@ impl Connection {
     }
 
     /// Returns the event set that the connection should register to handle.
-    fn event_set(&self) -> EventSet {
-        let mut event_set = EventSet::hup() | EventSet::error() | EventSet::readable();
+    fn event_set(&self) -> Ready {
+        let mut event_set = Ready::hup() | Ready::error() | Ready::readable();
 
         if self.state == ConnectionState::Initiating {
             if !self.send_buf.is_empty() {
-                event_set = event_set | EventSet::writable();
+                event_set = event_set | Ready::writable();
             }
         } else if !self.send_buf.is_empty() || self.can_send() {
-            event_set = event_set | EventSet::writable();
+            event_set = event_set | Ready::writable();
         }
 
         event_set

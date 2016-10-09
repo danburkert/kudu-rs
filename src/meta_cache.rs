@@ -120,6 +120,7 @@ impl Entry {
 
 #[derive(Clone)]
 pub struct MetaCache {
+    master: MasterProxy,
     inner: Arc<Inner>,
 }
 
@@ -128,8 +129,6 @@ pub struct Inner {
     primary_key_schema: Schema,
     partition_schema: PartitionSchema,
     entries: Mutex<Vec<Entry>>,
-    master: MasterProxy,
-
 }
 
 impl MetaCache {
@@ -140,12 +139,12 @@ impl MetaCache {
                master: MasterProxy)
                -> MetaCache {
         MetaCache {
+            master: master,
             inner: Arc::new(Inner {
                 table: table,
                 primary_key_schema: primary_key_schema,
                 partition_schema: partition_schema,
                 entries: Mutex::new(Vec::new()),
-                master: master,
             })
         }
     }
@@ -219,7 +218,7 @@ impl MetaCache {
         request.set_max_returned_locations(MAX_RETURNED_TABLE_LOCATIONS);
 
         let meta_cache = self.clone();
-        self.inner.master.get_table_locations(deadline, request, move |resp| {
+        self.master.get_table_locations(deadline, request, move |resp| {
             match resp {
                 Ok(mut resp) => {
                     meta_cache.add_tablet_locations(partition_key,
@@ -229,7 +228,7 @@ impl MetaCache {
                 },
                 Err(Error::Master(ref error)) if error.code() == MasterErrorCode::TabletNotRunning => {
                     let duration = Duration::from_millis(backoff.next_backoff_ms());
-                    let messenger = meta_cache.inner.master.messenger().clone();
+                    let messenger = meta_cache.master.messenger().clone();
                     messenger.timer(duration, Box::new(move || {
                         meta_cache.extract(partition_key, deadline, backoff, extractor, cb);
                     }));
