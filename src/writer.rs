@@ -206,6 +206,30 @@ struct Inner {
     state: Mutex<State>,
 }
 
+/// `State` wraps all the mutable state of a writer.
+///
+/// # Data Flow
+///
+/// When operations are first applied to a writer, they are put into the
+/// `State::operations_in_lookup` queue. This assigns operations a `Writer`-unique `idx`. The
+/// `idx` is used to ensure that operations to the same tablet are sent in `apply` order[1].
+///
+/// When the operation location lookup is done and the `MetaCache` executes the callback, the
+/// operation is moved from `operations_in_lookup` to the appropriate buffer in `tablets`.
+///
+/// # Flush Epoch
+///
+/// Each time the application calls `Writer::flush`, `Writer` will increment its flush-epoch and
+/// attempt to send all outstanding `Buffer` instances to their respective tablet server. A
+/// `Buffer` may not be able to be sent if there are already
+/// `SessionConfig::max_batches_per_tablet` in-flight to the tablet. In this case the `Buffer` will
+/// stay in `tablets`, and will be flushed when an in-flight `Buffer` to that tablet is complete.
+///
+/// [1] There are two known holes in the `apply`-order guarantee:
+///     1. two operations can have their `MetaCache` lookup complete out of order, and subsequently
+///        get added to two different batches due to a background flush.
+///     2. two operations can be added to different batches which are sent in correct `idx` order,
+///        but the batches may not be completed by the server in-order due to retries.
 struct State {
     /// Operations currently in lookup.
     operations_in_lookup: QueueMap<OperationInLookup>,
@@ -526,6 +550,22 @@ impl Writer {
         }
     }
 
+    /// The per-operation `MetaCache` lookup callback.
+    ///
+    /// Moves an operation from `operations_in_lookup` to the buffer assigned to the tablet.
+    /// There are a few non-happy path cases to account for:
+    ///
+    /// * [1] The buffer does not exist
+    ///          If the buffer doesn't exist a new one is created.
+    /// * [2] The buffer is full
+    ///          If applying the operation to the buffer would push it over `max_data_per_batch`
+    ///          limit, then the buffer is sent to the tablet server.
+    /// * [3] The buffer is full, and the tablet has reached the limit of batches in-flight
+    ///          If sending the full buffer would result in exceeding the `max_batches_per_tablet`
+    ///          limit, then the operation is failed with Error::Backoff.
+    ///
+    /// If the location lookup or case [3] occurs, then this method returns the operation, the
+    /// error callback, and the associated error. The caller should complete the error callback.
     fn op_lookup_complete(&self, idx: usize, result: Result<Option<TabletId>>) {
         let mut buffers = Vec::new();
         let mut state = self.lock_state();
@@ -879,7 +919,7 @@ impl Batch {
         }));
     }
 
-    /// Reapply each operation in the batch to the session with the same epoch and idx.
+    /// Reapply each operation in the batch to the writer with the same epoch and idx.
     ///
     /// This is executed when the batch determines that its tablet has been dropped.
     fn reapply(self) {
