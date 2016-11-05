@@ -12,7 +12,7 @@ chrono = "0.2"
 futures = "0.1"
 ieee754 = "0.2"
 ifaces = "0.0"
-itertools = "0.4"
+itertools = "0.5"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 lazy_static = "0.2"
 log = "0.3"

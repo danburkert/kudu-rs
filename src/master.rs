@@ -354,7 +354,7 @@ impl MasterProxy {
         }
 
         if !discovered_replicas.is_empty() {
-            info!("discovered replicas: [{}]", discovered_replicas.iter().format_default(", "));
+            info!("discovered replicas: [{}]", discovered_replicas.iter().format(", "));
             let deadline = Instant::now() + Duration::from_secs(LEADER_REFRESH_TIMEOUT_SECS);
             for addr in discovered_replicas {
                 self.send_list_masters(addr, deadline, cancel.clone());
@@ -391,7 +391,7 @@ impl MasterProxy {
 
         if leader.len() > 1 {
             info!("discovered leader master {}, chosen from resolved addresses [{}]",
-                  addr, leader.iter().format_default(", "));
+                  addr, leader.iter().format(", "));
         } else {
             info!("discovered leader master {}", addr);
         }
