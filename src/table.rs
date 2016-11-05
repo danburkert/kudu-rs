@@ -225,15 +225,6 @@ impl TableBuilder {
                     "range partition splits specified without range partitioning columns".to_string()));
         }
 
-        let mut range_partition_idxs = Vec::new();
-        for column in &range_partition_columns {
-            match schema.column_index(column) {
-                Some(idx) => range_partition_idxs.push(idx),
-                None => return Err(Error::InvalidArgument(
-                        format!("range partition column '{}' not found in schema", column))),
-            }
-        }
-
         for (lower, upper) in range_partitions {
             if &schema != lower.row().schema() || &schema != upper.row().schema() {
                 return Err(Error::InvalidArgument(
@@ -258,6 +249,8 @@ impl TableBuilder {
         pb.mut_split_rows_range_bounds().set_rows(data);
         pb.mut_split_rows_range_bounds().set_indirect_data(indirect_data);
 
+        // Ensure that the partition schema gets set;
+        pb.mut_partition_schema().mut_range_schema();
         for column in range_partition_columns {
             let mut column_pb = ColumnIdentifierPB::new();
             column_pb.set_name(column);

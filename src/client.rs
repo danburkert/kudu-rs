@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(&[0], table.partition_schema().hash_partition_schemas()[0].columns());
         assert_eq!(4, table.partition_schema().hash_partition_schemas()[0].num_buckets());
         assert_eq!(0, table.partition_schema().hash_partition_schemas()[0].seed());
-        assert_eq!(&[0], table.partition_schema().range_partition_schema().columns());
+        assert!(table.partition_schema().range_partition_schema().columns().is_empty());
 
         let tables = client.list_tables(deadline()).unwrap();
         assert_eq!(1, tables.len());
