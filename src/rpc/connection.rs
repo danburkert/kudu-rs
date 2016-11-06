@@ -252,7 +252,7 @@ impl Connection {
     }
 
     /// Send an RPC to the Kudu server.
-    pub fn send_rpc(&mut self, event_loop: &mut Loop, token: Token, rpc: Rpc) {
+    pub fn send_rpc(&mut self, event_loop: &mut Loop, token: Token, mut rpc: Rpc) {
 
         let now = Instant::now();
         if rpc.cancelled() {
@@ -402,7 +402,7 @@ impl Connection {
 
         let now = Instant::now();
         let mut retries = Vec::new();
-        for (call_id, QueuedRpc { rpc, timer }) in self.recv_queue.drain().chain(self.send_queue.drain()) {
+        for (call_id, QueuedRpc { mut rpc, timer }) in self.recv_queue.drain().chain(self.send_queue.drain()) {
             if rpc.cancelled() {
                 event_loop.clear_timeout(&timer);
                 rpc.fail(Error::Cancelled);
@@ -655,7 +655,7 @@ impl Connection {
         let now = Instant::now();
         while !self.send_buf.is_empty() || self.can_send() {
             while self.send_buf.len() < 4096 && self.can_send() {
-                let (call_id, QueuedRpc { rpc, timer }) = self.send_queue.pop().unwrap();
+                let (call_id, QueuedRpc { mut rpc, timer }) = self.send_queue.pop().unwrap();
 
                 if rpc.cancelled() {
                     trace!("{:?}: cancelling {:?}", self, rpc);

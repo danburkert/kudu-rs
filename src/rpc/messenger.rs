@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::fmt;
 
-use rpc::Rpc;
-use rpc::connection::{Connection, ConnectionOptions};
-use Result;
 use Error;
+use rpc::Rpc;
+use rpc::RpcResult;
+use rpc::connection::{Connection, ConnectionOptions};
 
+use futures::sync::oneshot;
+use futures::Future;
 use mio::{
     Ready,
     Token,
@@ -74,6 +75,7 @@ pub struct Messenger {
 }
 
 impl Messenger {
+
     pub fn new() -> io::Result<Messenger> {
         let mut event_loop_builder = EventLoopBuilder::new();
         // Timer granularity of 10ms.
@@ -89,31 +91,40 @@ impl Messenger {
 
 
     /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
-    pub fn send(&self, mut rpc: Rpc) {
+    pub fn send(&self, mut rpc: Rpc) -> oneshot::Receiver<RpcResult> {
         // TODO: is there a better way to handle queue failure?
-        debug_assert!(rpc.callback.is_some());
+        debug_assert!(rpc.oneshot.is_none());
+
         rpc.response.clear();
+
+        let (send, recv) = oneshot::channel();
+        rpc.oneshot = Some(send);
+
         self.channel.send(Command::Send(rpc)).unwrap();
+        recv
     }
 
-    pub fn delayed_send(&self, delay: Duration, rpc: Rpc) {
+    pub fn delayed_send(&self, delay: Duration, mut rpc: Rpc) -> oneshot::Receiver<RpcResult> {
+        // TODO: is there a better way to handle queue failure?
+        debug_assert!(rpc.oneshot.is_none());
+        rpc.response.clear();
+
+        let (send, recv) = oneshot::channel();
+        rpc.oneshot = Some(send);
+
         let deadline = rpc.deadline.clone();
         if Instant::now() + delay > deadline {
             rpc.fail(Error::TimedOut);
-            return;
+            return recv;
         }
 
-        let messenger = self.clone();
-        let rpc: Rpc = rpc;
-        self.timer(delay, Box::new(move || { messenger.send(rpc) }));
+        let channel = self.channel.clone();
+        self.timer(delay, Box::new(move || channel.send(Command::Send(rpc)).unwrap()));
+        recv
     }
 
-    pub fn send_sync(&self, mut rpc: Rpc) -> (Result<()>, Rpc) {
-        let (send, recv) = sync_channel(0);
-        assert!(rpc.callback.is_none());
-        rpc.callback = Some(Box::new(move |result, rpc| send.send((result, rpc)).unwrap()));
-        self.send(rpc);
-        recv.recv().unwrap()
+    pub fn send_sync(&self, rpc: Rpc) -> RpcResult {
+        self.send(rpc).wait().unwrap()
     }
 
     pub fn timer(&self, duration: Duration, callback: Box<TimerCallback>) {

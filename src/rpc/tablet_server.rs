@@ -29,8 +29,7 @@ macro_rules! rpc {
                 request: Box::new(request),
                 response: Box::new($response_type::new()),
                 sidecars: Vec::new(),
-                callback: None,
-                cancel: None,
+                oneshot: None,
                 fail_fast: true,
             }
         }

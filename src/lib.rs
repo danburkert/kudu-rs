@@ -28,38 +28,38 @@ extern crate vec_map;
 
 mod backoff;
 mod bit_set;
-mod client;
+//mod client;
 mod dns;
 mod error;
 mod key;
-mod master;
-mod meta_cache;
+//mod master;
+//mod meta_cache;
 mod partition;
 mod queue_map;
 mod row;
 mod rpc;
 mod schema;
-mod table;
-mod tablet;
-mod tablet_server;
+//mod table;
+//mod tablet;
+//mod tablet_server;
 mod util;
 mod value;
-mod writer;
+//mod writer;
 
 #[cfg(test)]
 mod mini_cluster;
 
-pub use client::*;
+//pub use client::*;
 pub use error::*;
-pub use master::Master;
+//pub use master::Master;
 pub use partition::*;
 pub use row::Row;
 pub use schema::*;
-pub use table::*;
-pub use tablet::*;
-pub use tablet_server::TabletServer;
+//pub use table::*;
+//pub use tablet::*;
+//pub use tablet_server::TabletServer;
 pub use value::Value;
-pub use writer::*;
+//pub use writer::*;
 
 use std::fmt;
 use std::str;

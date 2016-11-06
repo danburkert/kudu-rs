@@ -9,7 +9,7 @@ keywords = ["kudu", "database"]
 [dependencies]
 byteorder = "0.5"
 chrono = "0.2"
-futures = "0.1"
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
 ieee754 = "0.2"
 ifaces = "0.0"
 itertools = "0.5"

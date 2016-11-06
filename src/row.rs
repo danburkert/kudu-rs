@@ -11,7 +11,7 @@ use vec_map::VecMap;
 
 use DataType;
 use Error;
-use RangePartitionBound;
+//use RangePartitionBound;
 use Result;
 use Schema;
 use Value;
@@ -322,6 +322,7 @@ impl OperationEncoder {
         self.encode_row(OperationType::SPLIT_ROW, row);
     }
 
+    /*
     pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
         let (lower_bound, lower_bound_type) = match *lower {
             RangePartitionBound::Inclusive(ref row) => (row, OperationType::RANGE_LOWER_BOUND),
@@ -335,6 +336,7 @@ impl OperationEncoder {
         self.encode_row(lower_bound_type, &lower_bound);
         self.encode_row(upper_bound_type, &upper_bound);
     }
+    */
 
     pub fn encode_range_partition_split(&mut self, split: &Row) {
         self.encode_row(OperationType::SPLIT_ROW, split);
