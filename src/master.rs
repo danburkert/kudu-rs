@@ -13,9 +13,9 @@ use itertools::Itertools;
 use protobuf::Message;
 use queue_map::QueueMap;
 use rpc::{
-    Callback,
     Messenger,
     Rpc,
+    RpcResult,
     master
 };
 use util;
@@ -27,6 +27,8 @@ use RaftRole;
 use Result;
 use Status;
 
+use futures::{Future, Poll};
+use futures::sync::oneshot;
 use parking_lot::Mutex;
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 use kudu_pb::master::{
@@ -55,14 +57,16 @@ const LEADER_REFRESH_TIMEOUT_SECS: u64 = 60;
 
 macro_rules! impl_master_rpc {
     ($fn_name:ident, $request_type:ident, $response_type:ident) => {
-        pub fn $fn_name<F>(&self, deadline: Instant, request: $request_type, cb: F)
-            where F: FnOnce(Result<$response_type>) + Send + 'static {
-                // The real leader address will be filled in by `send_to_leader`.
-                let addr = util::dummy_addr();
-                let mut rpc = master::$fn_name(addr, deadline, request);
-                rpc.callback = Some(Box::new(CB(self.clone(), cb, PhantomData::<$response_type>)));
-                self.send_to_leader(rpc);
-            }
+        pub fn $fn_name<F>(&self, deadline: Instant, request: $request_type) -> Box<Future<Item=$response_type, Error=Error>> {
+            // The real leader address will be filled in by `send_to_leader`.
+            let addr = util::dummy_addr();
+            let mut rpc = master::$fn_name(addr, deadline, request);
+            let (send, recv) = oneshot::channel();
+
+            rpc.oneshot = Some(send);
+
+            self.send_to_leader(rpc);
+        }
     };
 }
 
@@ -465,6 +469,17 @@ impl MasterResponse for ListMastersResponsePB {
     }
 }
 
+pub struct MasterFuture<Resp>(MasterProxy, oneshot::Sender<RpcResult>, PhantomData<Resp>) where Resp: MasterResponse;
+
+impl <Resp> Future for MasterFuture<Resp> where Resp: MasterResponse {
+    type Item = Resp;
+    type Error = Error;
+    fn poll(&mut self) -> Poll<Resp, Error> {
+        unimplemented!()
+    }
+}
+
+/*
 struct CB<Resp, F>(MasterProxy, F, PhantomData<Resp>)
 where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static;
 impl <Resp, F> Callback for CB<Resp, F>
@@ -493,6 +508,7 @@ where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static {
         }
     }
 }
+*/
 
 /// Master metadata.
 ///

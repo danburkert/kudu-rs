@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+extern crate tokio_core as tokio;
 extern crate byteorder;
 extern crate chrono;
 extern crate futures;
