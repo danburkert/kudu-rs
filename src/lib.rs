@@ -3,7 +3,7 @@
 extern crate tokio_core as tokio;
 extern crate byteorder;
 extern crate chrono;
-extern crate futures;
+
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
@@ -24,6 +24,7 @@ extern crate vec_map;
 #[cfg(any(feature="quickcheck", test))]
 #[macro_use] extern crate quickcheck;
 
+#[macro_use] extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 
