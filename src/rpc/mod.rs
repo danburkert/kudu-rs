@@ -14,7 +14,7 @@ pub use rpc::messenger::Messenger;
 use Error;
 
 mod connection;
-mod connection_task;
+mod connection_sink;
 pub mod master;
 mod messenger;
 pub mod tablet_server;

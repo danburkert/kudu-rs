@@ -686,12 +686,58 @@ impl Connection {
     }
     */
 
+/*
 impl futures::Future for Connection {
     type Item = ();
     type Error = Error;
 
     fn poll(&mut self) -> futures::Poll<(), Error> {
-        let Connection { ref mut state, ref mut request_header, ref mut send_buf, .. } = *self;
+
+        fn inner(cxn: &mut Connection) -> Result<()> {
+            match cxn.state {
+                ConnectionState::Initiating => {
+                    if events.is_readable() {
+                        assert!(!events.is_writable());
+                        assert!(cxn.send_buf.is_empty());
+                        try!(cxn.recv(event_loop))
+                    } else if events.is_writable() {
+                        assert!(!events.is_readable());
+                        assert!(cxn.recv_buf.is_empty());
+                        try!(cxn.flush());
+                    }
+                },
+                ConnectionState::Connected => {
+                    if events.is_readable() {
+                        try!(cxn.recv(event_loop))
+                    } else if events.is_writable() {
+                        try!(cxn.send(event_loop))
+                    }
+                },
+                _ => unreachable!("{:?}: unexpected ready, events: {:?}", cxn, events),
+            };
+            Ok(())
+        }
+
+        debug!("{:?}: ready; events: {:?}", self, events);
+        if events.is_error() || events.is_hup() {
+            self.reset(event_loop, token, Error::ConnectionError);
+        } else {
+            inner(self, event_loop, events).and_then(|_| self.reregister(event_loop, token))
+                                           .unwrap_or_else(|error| {
+                                               info!("{:?} error: {}", self, &error);
+                                               self.reset(event_loop, token, error)
+                                           })
+        }
+
+
+
+
+
+
+
+
+
+
 
         *state = match *state {
             ConnectionState::Connecting(ref mut socket_fut) => {
@@ -739,154 +785,4 @@ impl futures::Future for Connection {
         unimplemented!()
     }
 }
-
-/// Writes the message to the send buffer with a request header.
-///
-/// Does not flush the buffer.
-///
-/// If an error is returned, the connection should be torn down.
-fn write_message(header: &rpc_header::RequestHeader, msg: &Message, buf: &mut Buf) -> Result<()> {
-    let header_len = header.compute_size();
-    let msg_len = msg.compute_size();
-    let len = header_len + header_len.len_varint() + msg_len + msg_len.len_varint();
-    buf.write_u32::<BigEndian>(len)?;
-    header.write_length_delimited_to(buf)?;
-    msg.write_length_delimited_to(buf).map_err(From::from)
-}
-
-/// Writes the KRPC connection header to the send buffer.
-///
-/// Does not flush the buffer.
-///
-/// If an error is returned, the connection should be torn down.
-fn write_connection_header(buf: &mut Buf) -> Result<()> {
-    //trace!("{:?}: sending connection header to server", self);
-    buf.write(b"hrpc\x09\0\0")?;
-    Ok(())
-}
-
-/// Writes a SASL negotiate message to the buffer.
-///
-/// If an error is returned, the connection should be torn down.
-fn write_sasl_negotiate(header: &mut rpc_header::RequestHeader, buf: &mut Buf) -> Result<()> {
-    //trace!("{:?}: sending SASL NEGOTIATE request to server", self);
-    header.clear();
-    header.set_call_id(-33);
-    let mut msg = rpc_header::SaslMessagePB::new();
-    msg.set_state(SaslState::NEGOTIATE);
-    write_message(header, &msg, buf)
-}
-
-/// Reads available messages from the socket.
-///
-/// If this connection is in the `Initiating` state, the message is assumed to be a SASL
-/// handshake message, and is passed to `Connection::handle_sasl_message`. If this connection
-/// is in the `Connected` state, the message is assumed to be an RPC response, and the
-/// corresponding queued `Rpc` is completed with the deserialized response.
-///
-/// This method should be called when the connection's socket is readable.
-///
-/// If an error is returned, the connection should be torn down.
-fn recv(socket: &mut TcpStream, buf: &mut Buf) -> Result<()> {
-    trace!("{:?}: recv", self);
-
-    loop {
-        // Read, or continue reading, an RPC response message from the socket into the receive
-        // buffer. Every RPC response is prefixed with a 4 bytes length header.
-        if self.recv_buf.len() < 4 {
-            let needed = 4 - self.recv_buf.len();
-            let read = try!(self.read(needed));
-            if read < needed { break; }
-        }
-
-        let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
-        if msg_len > self.options.max_message_length as usize {
-            return Err(RpcError::invalid_rpc_header(format!(
-                        "RPC response message is too long; length: {}, max length: {}",
-                        msg_len, self.options.max_message_length)).into());
-        }
-        if self.recv_buf.len() - 4 < msg_len {
-            let needed = msg_len + 4 - self.recv_buf.len();
-            let read = try!(self.read(needed));
-            if read < needed { break; }
-        }
-
-        // The whole message has been read. Skip the length prefix.
-        self.recv_buf.consume(4);
-
-        // TODO: the below would be a lot simpler if a single CodedInputStream wrapping
-        // self.recv_buf could be used, but unfortunately that trips the borrow checker.
-        // Perhaps once non-lexical lifetimes land it can be cleaned up.
-
-        // Read the response header into self.response_header
-        self.response_header.clear();
-        let header_len = {
-            let mut coded_stream = CodedInputStream::from_bytes(&self.recv_buf[..msg_len]);
-            try!(coded_stream.merge_message(&mut self.response_header));
-            coded_stream.pos() as usize
-        };
-        self.recv_buf.consume(header_len);
-
-        match self.state {
-            ConnectionState::Initiating => {
-                // All SASL messages are required to have call ID -33.
-                debug_assert_eq!(-33, self.response_header.get_call_id());
-                // Only one response should be in flight during SASL negotiation.
-                debug_assert_eq!(msg_len - header_len, self.recv_buf.len());
-
-                if self.response_header.get_is_error() {
-                    // All errors during SASL negotiation should result in tearing down the
-                    // connection.
-                    return Err(Error::Rpc(RpcError::from(try!(
-                                    parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                        &mut CodedInputStream::from_bytes(&self.recv_buf[..]))))));
-                }
-
-                let sasl_msg = try!(parse_length_delimited_from(
-                        &mut CodedInputStream::from_bytes(&self.recv_buf[..])));
-                try!(self.handle_sasl_message(event_loop, sasl_msg));
-            },
-            ConnectionState::Connected => {
-                trace!("{:?}: received response from server: {:?}", self, self.response_header);
-                if self.response_header.get_is_error() {
-                    let error = RpcError::from(try!(
-                            parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                &mut CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len]))));
-                    // Remove the RPC from the recv queue, and fail it. The message may not be
-                    // in the recv queue if it has already timed out.
-                    if let Some(QueuedRpc { rpc, timer }) = self.recv_queue.remove(&(self.response_header.get_call_id() as usize)) {
-                        event_loop.clear_timeout(&timer);
-                        rpc.fail(Error::Rpc(error.clone()));
-                    }
-                    // If the message is fatal, then return an error in order to have the
-                    // connection torn down.
-                    if error.is_fatal() {
-                        return Err(Error::Rpc(error.clone()))
-                    }
-                } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(self.response_header.get_call_id() as usize) {
-                    // Use the entry API so that the RPC is not removed from the recv queue
-                    // if the protobuf decode step fails. Since it isn't removed, it has the
-                    // opportunity to be retried when the error is bubbled up and the
-                    // connection is reset.
-                    //
-                    // The message may not be in the recv queue if it has already timed out.
-                    try!(CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len])
-                            .merge_message(&mut *entry.get_mut().rpc.response));
-
-                    if !self.response_header.get_sidecar_offsets().is_empty() {
-                        panic!("sidecar decoding not implemented");
-                    }
-
-                    let QueuedRpc { rpc, timer } = entry.remove();
-                    event_loop.clear_timeout(&timer);
-                    rpc.complete();
-                    self.throttle += 1;
-                }
-            },
-            _ => unreachable!("{:?}: recv"),
-        };
-        self.recv_buf.consume(msg_len - header_len);
-    };
-
-    Ok(())
-}
+*/
