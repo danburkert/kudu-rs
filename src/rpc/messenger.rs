@@ -1,230 +1,91 @@
 use std::collections::HashMap;
-use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::thread;
 use std::time::{Duration, Instant};
 use std::fmt;
 
+use shared::Shared;
 use Error;
 use rpc::Rpc;
-use rpc::RpcResult;
 use rpc::connection::{Connection, ConnectionOptions};
 
-use futures::sync::oneshot;
-use futures::Future;
-use mio::{
-    Ready,
-    Token,
-};
-use mio::deprecated::{
-    EventLoop,
-    EventLoopBuilder,
-    Handler,
-    Sender,
-};
-use slab::Slab;
+use futures::{Async, Future, Poll, Sink, StartSend};
+use tokio::reactor::{Handle, Timeout};
 
-pub type Loop = EventLoop<MessengerHandler>;
-
-pub enum Command {
-    Shutdown,
-    Send(Rpc),
-    Timer((Duration, Box<TimerCallback>)),
-}
-
-impl fmt::Debug for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Command::Shutdown => write!(f, "Command::Shutdown"),
-            Command::Send(ref rpc) => write!(f, "Command::Send({:?})", rpc),
-            Command::Timer((ref duration, _)) => write!(f, "Command::Timer({:?})", duration),
-        }
-    }
-}
-
-/// Essentially FnBox...
-pub trait TimerCallback: Send {
-    fn callback(self: Box<Self>);
-}
-
-impl <F> TimerCallback for F where F: FnOnce() + Send {
-    fn callback(self: Box<F>) {
-        (*self)()
-    }
-}
-
-pub enum TimeoutKind {
-
-    /// Active while a connection is reset. After expiration, the connection creates a new socket
-    /// and attempts negotiation.
-    ConnectionReset(Token),
-
-    /// An RPC timeout.
-    ///
-    /// This timeout tracks an RPC timeout deadline. When it expires, the RPC should be timed out.
-    Rpc(Token, usize),
-
-    /// A general timer timeout.
-    Timer(Box<TimerCallback>),
-}
-
-#[derive(Clone)]
 pub struct Messenger {
-    channel: Sender<Command>,
+    handle: Handle,
+    options: Rc<ConnectionOptions>,
+    connections: HashMap<SocketAddr, Shared<Connection>>,
 }
 
 impl Messenger {
-
-    pub fn new() -> io::Result<Messenger> {
-        let mut event_loop_builder = EventLoopBuilder::new();
-        // Timer granularity of 10ms.
-        event_loop_builder.timer_tick(Duration::from_millis(10));
-        let mut event_loop = try!(event_loop_builder.build());
-        let channel = event_loop.channel();
-        thread::spawn(move || {
-            let mut connection_manager = MessengerHandler::new();
-            event_loop.run(&mut connection_manager)
-        });
-        Ok(Messenger { channel: channel })
+    fn new(handle: Handle, options: ConnectionOptions) -> Messenger {
+        Messenger {
+            handle: handle,
+            options: Rc::new(options),
+            connections: HashMap::new(),
+        }
     }
 
-
-    /// Sends a generic Kudu RPC, and executes the callback when the RPC is complete.
-    pub fn send(&self, mut rpc: Rpc) -> oneshot::Receiver<RpcResult> {
-        // TODO: is there a better way to handle queue failure?
-        debug_assert!(rpc.oneshot.is_none());
-
-        rpc.response.clear();
-
-        let (send, recv) = oneshot::channel();
-        rpc.oneshot = Some(send);
-
-        self.channel.send(Command::Send(rpc)).unwrap();
-        recv
+    fn connection(&mut self, addr: SocketAddr) -> &mut Shared<Connection> {
+        let Messenger { ref mut handle, ref options, ref mut connections } = *self;
+        connections.entry(addr)
+                   .or_insert_with(|| {
+                       let connection = Shared::new(Connection::new(handle.clone(), addr, options.clone()));
+                       handle.spawn(connection.clone());
+                       connection
+                   })
     }
 
-    pub fn delayed_send(&self, delay: Duration, mut rpc: Rpc) -> oneshot::Receiver<RpcResult> {
-        // TODO: is there a better way to handle queue failure?
-        debug_assert!(rpc.oneshot.is_none());
+    pub fn delayed_send(&mut self, delay: Duration, mut rpc: Rpc) {
+        debug_assert!(rpc.oneshot.is_some());
         rpc.response.clear();
-
-        let (send, recv) = oneshot::channel();
-        rpc.oneshot = Some(send);
 
         let deadline = rpc.deadline.clone();
         if Instant::now() + delay > deadline {
-            rpc.fail(Error::TimedOut);
-            return recv;
+            return rpc.fail(Error::TimedOut);
         }
 
-        let channel = self.channel.clone();
-        self.timer(delay, Box::new(move || channel.send(Command::Send(rpc)).unwrap()));
-        recv
-    }
+        let connection = self.connection(rpc.addr).clone();
+        let f = Timeout::new(delay, &self.handle)
+                        .unwrap()
+                        .map_err(|_| ())
+                        .and_then(|_| connection.send(rpc).map(|_| ()));
 
-    pub fn send_sync(&self, rpc: Rpc) -> RpcResult {
-        self.send(rpc).wait().unwrap()
-    }
-
-    pub fn timer(&self, duration: Duration, callback: Box<TimerCallback>) {
-        self.channel.send(Command::Timer((duration, callback))).unwrap();
+        self.handle.spawn(f);
     }
 }
 
-pub struct MessengerHandler {
-    connection_slab: Slab<Connection, Token>,
-    index: HashMap<SocketAddr, Token>,
-    cxn_options: Rc<ConnectionOptions>,
-}
+impl Sink for Messenger {
+    type SinkItem = Rpc;
+    type SinkError = ();
 
-impl MessengerHandler {
-    fn new() -> MessengerHandler {
-        MessengerHandler {
-            connection_slab: Slab::with_capacity(128),
-            index: HashMap::new(),
-            cxn_options: Rc::new(ConnectionOptions::default()),
+    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
+        info!("{:?}: start_send, rpc: {:?}", self, rpc);
+        debug_assert!(rpc.oneshot.is_some());
+        rpc.response.clear();
+        self.connection(rpc.addr).start_send(rpc)
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), ()> {
+        for connection in self.connections.values_mut() {
+            try_ready!(connection.poll_complete());
         }
+        Ok(Async::Ready(()))
     }
 }
 
-impl fmt::Debug for MessengerHandler {
+
+impl fmt::Debug for Messenger {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MessengerHandler {{ connections: {} }}", self.connection_slab.len())
-    }
-}
-
-impl Handler for MessengerHandler {
-
-    type Timeout = TimeoutKind;
-    type Message = Command;
-
-    fn ready(&mut self, event_loop: &mut Loop, token: Token, events: Ready) {
-        self.connection_slab[token].ready(event_loop, token, events)
-    }
-
-    fn notify(&mut self, event_loop: &mut Loop, command: Command) {
-        match command {
-            Command::Shutdown => event_loop.shutdown(),
-            Command::Send(rpc) => {
-                let token = self.index.get(&rpc.addr).cloned().unwrap_or_else(|| {
-                    // No open connection for the socket address; create a new one.
-                    if !self.connection_slab.has_available() {
-                        let len = self.connection_slab.len();
-                        self.connection_slab.reserve_exact(len / 2);
-                    }
-                    let cxn_options = self.cxn_options.clone();
-                    let token = {
-                        let entry = self.connection_slab.vacant_entry().unwrap();
-                        let token = entry.index();
-                        let connection = Connection::new(event_loop, token, rpc.addr, cxn_options);
-                        entry.insert(connection);
-                        token
-                    };
-                    self.index.insert(rpc.addr, token);
-                    token
-                });
-                self.connection_slab[token].send_rpc(event_loop, token, rpc);
-            },
-            Command::Timer((duration, callback)) => {
-                event_loop.timeout(TimeoutKind::Timer(callback), duration).unwrap();
-            }
-        }
-    }
-
-    fn timeout(&mut self, event_loop: &mut Loop, timeout: TimeoutKind) {
-
-        match timeout {
-            TimeoutKind::ConnectionReset(token) => {
-                let drop_cxn = self.connection_slab
-                                   .get_mut(token)
-                                   .unwrap()
-                                   .reset_timeout(event_loop, token);
-                if drop_cxn {
-                    let cxn = self.connection_slab.remove(token).unwrap();
-                    let removed_token = self.index.remove(cxn.addr()).unwrap();
-                    assert!(removed_token == token);
-                    debug!("{:?}: closing", cxn);
-                }
-            },
-            TimeoutKind::Rpc(token, call_id) => {
-                // Connection RPC timeout. A note on the unwrap calls below: the connection
-                // carefully cancels all outstanding timers before asking to be torn down in
-                // Connection#timeout, so if a connection timer fires, the connection must still
-                // exist.
-                self.connection_slab
-                    .get_mut(token)
-                    .unwrap()
-                    .rpc_timeout(call_id);
-            },
-            TimeoutKind::Timer(callback) => callback.callback(),
-        }
+        write!(f, "Messenger {{ connections: {} }}", self.connections.len())
     }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use std::iter;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{sync_channel, SyncSender};
@@ -233,30 +94,41 @@ mod tests {
     use env_logger;
     use kudu_pb;
 
-    use mini_cluster::{self, MiniCluster, MiniClusterConfig};
-    use rpc::{channel_callback, retry_channel_callback, master, Callback, Rpc};
-    use super::*;
     use Error;
     use Result;
+    use mini_cluster::{self, MiniCluster, MiniClusterConfig};
+    use rpc::connection::ConnectionOptions;
+    use rpc::{master, Rpc, RpcError, RpcResult};
+    use super::*;
+    use tokio::reactor::Core;
+    use futures::{self, AsyncSink, Future, Sink};
+    use futures::sync::oneshot;
 
     #[test]
     fn send() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
                                                          .num_tservers(0)
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
 
-        let messenger = Messenger::new().unwrap();
-        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
-        let mut rpc = master::ping(cluster.master_addrs()[0],
+        let mut core = Core::new().unwrap();
+        let addr = cluster.master_addrs()[0];
+
+        let mut messenger = Messenger::new(core.handle(), ConnectionOptions::default());
+        let mut rpc = master::ping(addr,
                                    Instant::now() + Duration::from_secs(5),
                                    kudu_pb::master::PingRequestPB::new());
-        rpc.callback = Some(retry_channel_callback(messenger.clone(), send));
+        let oneshot = rpc.oneshot();
 
-        messenger.send(rpc);
-        let (result, _) = recv.recv().unwrap();
-        assert_eq!(Ok(()), result);
+        let f = futures::lazy(move || {
+            assert!(messenger.start_send(rpc).unwrap().is_ready());
+            oneshot
+        });
+
+        let result = core.run(f);
+        result.unwrap();
     }
 
     #[test]
@@ -266,53 +138,32 @@ mod tests {
                                                          .num_tservers(0)
                                                          .log_rpc_negotiation_trace(true)
                                                          .log_rpc_trace(true));
-        let messenger = Messenger::new().unwrap();
+        let mut core = Core::new().unwrap();
+        let addr = cluster.master_addrs()[0];
 
-        let (send, recv) = sync_channel::<Result<()>>(100);
+        let mut options = ConnectionOptions::default();
+        options.rpc_queue_len = 1;
+        let messenger = Messenger::new(core.handle(), options);
 
-        struct PingCB(u8, Messenger, SyncSender<Result<()>>);
-        impl Callback for PingCB {
-            fn callback(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
-                if result.as_ref().err().map_or(false, |error| error.is_network_error()) {
-                    trace!("retrying RPC {:?} after network error: {}", rpc, result.unwrap_err());
-                    let messenger = self.1.clone();
-                    rpc.response.clear();
-                    rpc.callback = Some(self);
-                    return messenger.send(rpc);
-                }
-
-                let is_ok = result.is_ok();
-                self.2.send(result).unwrap();
-                self.0 -= 1;
-                if is_ok && self.0 > 0 {
-                    let messenger = self.1.clone();
-                    rpc.response.clear();
-                    rpc.callback = Some(self);
-                    messenger.send(rpc);
-                }
-            }
-        }
-
-        // Send 100 pings, with 10 outstanding at a time.
-        for _ in 0..10 {
-            let mut rpc = master::ping(cluster.master_addrs()[0],
+        let (oneshots, rpcs): (Vec<_>, Vec<_>) = iter::repeat(0u32).take(100).map(|_| {
+            let mut rpc = master::ping(addr,
                                        Instant::now() + Duration::from_secs(5),
                                        kudu_pb::master::PingRequestPB::new());
+            let oneshot: oneshot::Receiver<RpcResult> = rpc.oneshot();
+            (oneshot, Ok(rpc))
+        }).unzip();
 
 
-            rpc.callback = Some(Box::new(PingCB(10, messenger.clone(), send.clone())));
-            messenger.send(rpc);
-        }
-        drop(send);
+        let send = futures::lazy(move || messenger.send_all(futures::stream::iter(rpcs)));
+        let recv = futures::future::join_all(oneshots)
+                                    .map_err(|error| panic!("error: {:?}", error));
 
-        let mut count = 0;
-        for result in recv {
-            result.unwrap();
-            count += 1;
-        }
-        assert_eq!(100, count);
+        let (_, results) = core.run(send.join(recv)).unwrap();
+
+        assert_eq!(100, results.len());
     }
 
+    /*
     #[test]
     fn timeout() {
         let _ = env_logger::init();
@@ -444,4 +295,5 @@ mod tests {
         let (result, _) = messenger.send_sync(rpc);
         assert_eq!(Err(Error::ConnectionError), result);
     }
+    */
 }

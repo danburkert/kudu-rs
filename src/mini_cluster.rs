@@ -9,10 +9,10 @@ use std::process::{Command, Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use Client;
-use ClientConfig;
+//use Client;
+//use ClientConfig;
 use Error;
-use backoff::Backoff;
+//use backoff::Backoff;
 use tempdir::TempDir;
 
 /// A Kudu server node (either master or tablet server).
@@ -140,22 +140,24 @@ impl MiniCluster {
         }
 
         if conf.wait_for_startup {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let mut backoff = Backoff::with_duration_range(50, 1000);
+            thread::sleep(Duration::from_millis(2000));
+            //let deadline = Instant::now() + Duration::from_secs(10);
+            //let mut backoff = Backoff::with_duration_range(50, 1000);
 
-            let client = Client::new(ClientConfig::new(master_addrs.to_owned()));
-            loop {
-                match client.list_tablet_servers(deadline) {
-                    Ok(ref tservers) if tservers.len() == conf.num_tservers as usize => break,
-                    Ok(_) => (),
-                    Err(Error::TimedOut) => panic!("timed out waiting for tablet servers to start"),
-                    Err(error) => warn!("error while waiting for tservers: {:?}", error),
-                }
-                let backoff_ms = backoff.next_backoff_ms();
-                trace!("waiting {}ms for {} tablet servers to register",
-                       backoff_ms, conf.num_tservers);
-                thread::sleep(Duration::from_millis(backoff_ms));
-            }
+
+            //let client = Client::new(ClientConfig::new(master_addrs.to_owned()));
+            //loop {
+                //match client.list_tablet_servers(deadline) {
+                    //Ok(ref tservers) if tservers.len() == conf.num_tservers as usize => break,
+                    //Ok(_) => (),
+                    //Err(Error::TimedOut) => panic!("timed out waiting for tablet servers to start"),
+                    //Err(error) => warn!("error while waiting for tservers: {:?}", error),
+                //}
+                //let backoff_ms = backoff.next_backoff_ms();
+                //trace!("waiting {}ms for {} tablet servers to register",
+                       //backoff_ms, conf.num_tservers);
+                //thread::sleep(Duration::from_millis(backoff_ms));
+            //}
         }
 
         MiniCluster {

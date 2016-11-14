@@ -14,7 +14,6 @@ pub use rpc::messenger::Messenger;
 use Error;
 
 mod connection;
-mod connection_sink;
 pub mod master;
 mod messenger;
 pub mod tablet_server;
@@ -78,6 +77,13 @@ pub struct Rpc {
 }
 
 impl Rpc {
+
+    pub fn oneshot(&mut self) -> oneshot::Receiver<RpcResult> {
+        assert!(self.oneshot.is_none());
+        let (send, recv) = oneshot::channel();
+        self.oneshot = Some(send);
+        recv
+    }
 
     fn complete(mut self) {
         if let Some(oneshot) = self.oneshot.take() {

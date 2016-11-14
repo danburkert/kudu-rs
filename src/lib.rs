@@ -9,12 +9,12 @@ extern crate ifaces;
 extern crate itertools;
 extern crate kudu_pb;
 extern crate mio;
-extern crate net2;
 extern crate netbuf;
 extern crate parking_lot;
 extern crate protobuf;
 extern crate rand;
 extern crate slab;
+extern crate take_mut;
 extern crate uuid;
 extern crate vec_map;
 
@@ -29,6 +29,7 @@ extern crate vec_map;
 #[macro_use] extern crate log;
 
 mod backoff;
+mod shared;
 mod bit_set;
 //mod client;
 mod dns;
