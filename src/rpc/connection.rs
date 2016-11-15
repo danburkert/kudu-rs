@@ -231,6 +231,7 @@ impl Connection {
     pub fn tick(&mut self) {
         fn inner(cxn: &mut Connection) -> Result<()> {
             loop {
+                trace!("{:?}: tick loop", cxn);
                 match cxn.state_kind() {
                     StateKind::Connecting => {
                         match cxn.stream_new().poll()? {
@@ -249,29 +250,30 @@ impl Connection {
                         return Ok(());
                     },
                     StateKind::Connected => {
-                        let result = cxn.recv();
-                        info!("recv result: {:?}", result);
+                        let result = cxn.send();
+                        info!("{:?}: send result: {:?}", cxn, result);
                         try!(result);
 
-
-                        let result = cxn.send();
-                        info!("send result: {:?}", result);
+                        let result = cxn.recv();
+                        info!("{:?}: recv result: {:?}", cxn, result);
                         try!(result);
 
                         info!("poll_read: {:?}", cxn.stream().poll_read());
                         info!("poll_write: {:?}", cxn.stream().poll_write());
-
 
                         return Ok(());
                     },
                     StateKind::Reset => {
                         if let Async::Ready(..) = cxn.timeout().poll()? {
                             cxn.state = State::Connecting(TcpStream::connect(&cxn.addr, &cxn.handle));
+                        } else {
+                            return Ok(());
                         }
                     },
                 }
             }
         }
+        trace!("{:?}: tick", self);
         inner(self).unwrap_or_else(|error| self.reset(error));
     }
 
@@ -536,7 +538,6 @@ impl Connection {
         trace!("{:?}: send", self);
 
         let now = Instant::now();
-        info!("can_send: {:?}", self.can_send());
         while !self.send_buf.is_empty() || self.can_send() {
             while self.send_buf.len() < 4096 && self.can_send() {
                 let (call_id, mut rpc) = self.send_queue.pop().unwrap();

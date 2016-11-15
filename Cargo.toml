@@ -24,6 +24,7 @@ quickcheck = { version = "0.3", optional = true }
 rand = "0.3.14"
 slab = "0.3"
 take_mut = "0.1"
+#tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
 tokio-core = { path = "../tokio-core" }
 uuid = "0.3"
 vec_map = "0.6"

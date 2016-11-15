@@ -7,11 +7,10 @@ use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 //use Client;
 //use ClientConfig;
-use Error;
 //use backoff::Backoff;
 use tempdir::TempDir;
 

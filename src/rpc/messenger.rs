@@ -86,22 +86,17 @@ impl fmt::Debug for Messenger {
 mod tests {
 
     use std::iter;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::{sync_channel, SyncSender};
     use std::time::{Duration, Instant};
 
     use env_logger;
     use kudu_pb;
 
-    use Error;
-    use Result;
-    use mini_cluster::{self, MiniCluster, MiniClusterConfig};
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use rpc::connection::ConnectionOptions;
-    use rpc::{master, Rpc, RpcError, RpcResult};
+    use rpc::{master, RpcResult};
     use super::*;
     use tokio::reactor::Core;
-    use futures::{self, AsyncSink, Future, Sink};
+    use futures::{self, Future, Sink};
     use futures::sync::oneshot;
 
     #[test]
@@ -128,7 +123,7 @@ mod tests {
         });
 
         let result = core.run(f);
-        result.unwrap();
+        result.unwrap().unwrap();
     }
 
     #[test]
