@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-extern crate tokio_core as tokio;
 extern crate byteorder;
 extern crate chrono;
 
@@ -27,6 +26,7 @@ extern crate vec_map;
 #[macro_use] extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
+#[macro_use] extern crate tokio_core as tokio;
 
 mod backoff;
 mod shared;

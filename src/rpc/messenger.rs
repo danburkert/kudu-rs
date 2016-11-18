@@ -37,6 +37,7 @@ impl Messenger {
                    })
     }
 
+    /*
     pub fn delayed_send(&mut self, delay: Duration, mut rpc: Rpc) {
         debug_assert!(rpc.oneshot.is_some());
         rpc.response.clear();
@@ -54,6 +55,7 @@ impl Messenger {
 
         self.handle.spawn(f);
     }
+    */
 }
 
 impl Sink for Messenger {
@@ -61,17 +63,23 @@ impl Sink for Messenger {
     type SinkError = ();
 
     fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
+        unimplemented!()
+        /*
         info!("{:?}: start_send, rpc: {:?}", self, rpc);
         debug_assert!(rpc.oneshot.is_some());
         rpc.response.clear();
         self.connection(rpc.addr).start_send(rpc)
+        */
     }
 
     fn poll_complete(&mut self) -> Poll<(), ()> {
+        unimplemented!()
+        /*
         for connection in self.connections.values_mut() {
             try_ready!(connection.poll_complete());
         }
         Ok(Async::Ready(()))
+        */
     }
 }
 

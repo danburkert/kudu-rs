@@ -14,8 +14,8 @@ pub use rpc::messenger::Messenger;
 use Error;
 
 mod connection;
-pub mod master;
 mod messenger;
+pub mod master;
 pub mod tablet_server;
 
 pub type RpcResult = result::Result<Rpc, RpcError>;
