@@ -108,6 +108,30 @@ impl State {
             _ => unreachable!(),
         }
     }
+
+    fn transition_negotiating(&mut self, stream: TcpStream) {
+        debug_assert_eq!(StateKind::Connecting, self.kind());
+        *self = State::Negotiating(stream);
+    }
+
+    fn transition_connected(&mut self) {
+        debug_assert_eq!(StateKind::Negotiating, self.kind());
+        take_mut::take(self, |state| {
+            match state {
+                State::Negotiating(stream) => State::Connected(stream),
+                _ => unreachable!(),
+            }
+        });
+    }
+
+    fn transition_reset(&mut self, timeout: Timeout) {
+        *self = State::Reset(timeout);
+    }
+
+    fn transition_connecting(&mut self, stream_new: TcpStreamNew) {
+        debug_assert_eq!(StateKind::Reset, self.kind());
+        *self = State::Connecting(stream_new);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,12 +250,99 @@ impl Connection {
         &self.addr
     }
 
-    /// Notifies the connection of socket events.
-    pub fn tick(&mut self) {
-    }
-
     pub fn throttle(&mut self) {
         self.throttle = cmp::min(self.throttle, self.options.rpc_queue_len) / 2;
+    }
+
+    /// Poll the connection while in the `Connecting` state.
+    ///
+    /// If the TCP socket is successfully connect, the connection will be transition to the
+    /// `Negotiating` state, and `poll_negotiating` will be called.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) on success.
+    ///     * Err(..) on fatal error. The call should reset the connection.
+    fn poll_connecting(&mut self) -> Poll<(), Error> {
+        // Check if the TCP stream has connected.
+        let stream = try_ready!(self.stream_new().poll());
+
+        // If it has, set the TCP socket options and start negotiating.
+        stream.set_nodelay(self.options.nodelay)?;
+        self.state.transition_negotiating(stream);
+        self.buffer_connection_header()?;
+        self.buffer_sasl_negotiate()?;
+        self.poll_negotiating()
+    }
+
+    /// Poll the connection while in the `Negotiating` state.
+    ///
+    /// If the connection negotiation is completed, the connection will transition to the
+    /// `Negotiating` state, and `poll_negotiating` will be called.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) on success.
+    ///     * Err(..) on fatal error. The call should reset the connection.
+    fn poll_negotiating(&mut self) -> Poll<(), Error> {
+        loop {
+            // Attempt to send any buffered negotiation messages.
+            try_ready!(self.poll_flush());
+
+            // We're waiting for a negotiation response, attempt to read it.
+            let msg = try_ready!(self.poll_read_negotiation());
+
+            trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
+            match msg.get_state() {
+                SaslState::NEGOTIATE => {
+                    if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
+                        self.buffer_sasl_initiate()?;
+                        // Fall through to another trip through the loop.
+                    } else {
+                        return Err(Error::NegotiationError("SASL PLAIN authentication not available"));
+                    }
+                },
+                SaslState::SUCCESS => {
+                    self.state.transition_connected();
+                    self.reset_backoff.reset();
+                    self.buffer_connection_context()?;
+                    return Ok(Async::Ready(()));
+                },
+                _ => unreachable!("Unexpected SASL message: {:?}", msg),
+            }
+        }
+    }
+
+    /// Poll the connection while in the `Connected` state.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) on success.
+    ///     * Err(..) on fatal error. The call should reset the connection.
+    fn poll_connected(&mut self) -> Poll<(), Error> {
+        fn do_while_ready<F>(mut f: F) -> Result<()> where F: FnMut() -> Poll<(), Error> {
+            while let Async::Ready(..) = f()? { }
+            Ok(())
+        }
+
+        do_while_ready(|| self.poll_read_connected())?;
+        do_while_ready(|| self.poll_write_connected())?;
+        try_ready!(self.poll_flush());
+
+        Ok(Async::NotReady)
+    }
+
+    /// Poll the connection while in the `Reset` state.
+    ///
+    /// If the reset period is over, the connection will transition to the `Connecting` state, and
+    /// `poll_connecting` will be called.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) on success.
+    ///     * Err(..) on fatal error. The call should reset the connection.
+    fn poll_reset(&mut self) -> Poll<(), Error> {
+        // Check if the timeout period is over.
+        try_ready!(self.timeout().poll());
+
+        self.state.transition_connecting(TcpStream::connect(&self.addr, &self.handle));
+        self.poll_connecting()
     }
 
     /// Resets the connection following an error.
@@ -294,7 +405,7 @@ impl Connection {
     /// Does not flush the buffer.
     ///
     /// If an error is returned, the connection should be torn down.
-    fn buffer_sasl_negotiation(&mut self) -> Result<()> {
+    fn buffer_sasl_negotiate(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL NEGOTIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
@@ -336,186 +447,192 @@ impl Connection {
         self.buffer_message(&msg)
     }
 
-    /// Handles a SASL handshake response message.
-    fn handle_sasl_message(&mut self, msg: rpc_header::SaslMessagePB) -> Result<()> {
-        trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
-        match msg.get_state() {
-            SaslState::NEGOTIATE => {
-                if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
-                    try!(self.buffer_sasl_initiate());
-                    try!(self.flush());
-                    Ok(())
-                } else {
-                    Err(Error::NegotiationError("SASL PLAIN authentication not available"))
-                }
-            },
-            SaslState::SUCCESS => {
-                take_mut::take(&mut self.state, |state| {
-                    match state {
-                        State::Negotiating(stream) => State::Connected(stream),
-                        _ => unreachable!(),
-                    }
-                });
-                self.reset_backoff.reset();
-                try!(self.buffer_connection_context());
-
-                // Optimistically flush the connection context and send any queued messages. The
-                // connection has not necessarily received a writeable event at this point, but it
-                // is highly likely that there is space available in the socket's write buffer.
-                self.poll_write()?;
-                Ok(())
-            },
-            _ => unreachable!("Unexpected SASL message: {:?}", msg),
+    /// Reads the bytes for an RPC response message from the socket into the receive buffer, and
+    /// then decodes the header into the response header. Returns the length of the message body.
+    fn poll_read_header(&mut self) -> Poll<usize, Error> {
+        /// Attempts to read at least `min` bytes from the socket into the receive buffer.
+        /// Fewer bytes may be read if there is no data available.
+        fn read_at_least(&mut Connection { ref mut state, ref mut recv_buf, .. }: &mut Connection,
+                         min: usize)
+                         -> Poll<(), io::Error> {
+            let mut received = 0;
+            while received < min {
+                received += try_nb!(recv_buf.read_from(state.stream()));
+            }
+            Ok(Async::Ready(()))
         }
+
+        // Read, or continue reading, an RPC response message from the socket into the read buffer.
+        // Every RPC response is prefixed with a 4 bytes length header.
+        if self.recv_buf.len() < 4 {
+            let needed = 4 - self.recv_buf.len();
+            try_ready!(read_at_least(self, needed));
+        }
+
+        let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
+        if msg_len > self.options.max_message_length as usize {
+            return Err(RpcError::invalid_rpc_header(format!(
+                       "RPC response message is too long; length: {}, max length: {}",
+                       msg_len, self.options.max_message_length)).into());
+        }
+        if self.recv_buf.len() - 4 < msg_len {
+            let needed = msg_len + 4 - self.recv_buf.len();
+            try_ready!(read_at_least(self, needed));
+        }
+
+        let pos = {
+            self.response_header.clear();
+            let mut cis = CodedInputStream::from_bytes(&self.recv_buf[4..]);
+            cis.merge_message(&mut self.response_header)?;
+            cis.pos() as usize
+        };
+
+        self.recv_buf.consume(4 + pos);
+        trace!("{:?}: received header from server: {:?}", self, self.response_header);
+        Ok(Async::Ready(msg_len - pos))
     }
 
-    /// Reads available messages from the socket.
-    ///
-    /// If this connection is in the `Initiating` state, the message is assumed to be a SASL
-    /// handshake message, and is passed to `Connection::handle_sasl_message`. If this connection
-    /// is in the `Connected` state, the message is assumed to be an RPC response, and the
-    /// corresponding queued `Rpc` is completed with the deserialized response.
-    ///
-    /// This method should be called when the connection's socket is readable.
+    /// Reads a negotiation message from the socket.
     ///
     /// If an error is returned, the connection should be torn down.
-    fn poll_read(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: poll_read", self);
+    fn poll_read_negotiation(&mut self) -> Poll<rpc_header::SaslMessagePB, Error> {
+        trace!("{:?}: poll_read_negotiation", self);
 
-        loop {
-            // Read, or continue reading, an RPC response message from the socket into the receive
-            // buffer. Every RPC response is prefixed with a 4 bytes length header.
-            if self.recv_buf.len() < 4 {
-                let needed = 4 - self.recv_buf.len();
-                try_ready!(self.read_at_least(needed));
-            }
+        let body_len = try_ready!(self.poll_read_header());
 
-            let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
-            if msg_len > self.options.max_message_length as usize {
-                return Err(RpcError::invalid_rpc_header(format!(
-                           "RPC response message is too long; length: {}, max length: {}",
-                            msg_len, self.options.max_message_length)).into());
-            }
-            if self.recv_buf.len() - 4 < msg_len {
-                let needed = msg_len + 4 - self.recv_buf.len();
-                try_ready!(self.read_at_least(needed));
-            }
+        // SASL messages are required to have call ID -33.
+        if self.response_header.get_call_id() != 33 {
+            return Err(Error::Rpc(RpcError::invalid_rpc_header(
+                        format!("negotiation RPC response header has illegal call id: {:?}",
+                                self.response_header))));
 
-            // The whole message has been read. Skip the length prefix.
-            self.recv_buf.consume(4);
-
-            // TODO: the below would be a lot simpler if a single CodedInputStream wrapping
-            // self.recv_buf could be used, but unfortunately that trips the borrow checker.
-            // Perhaps once non-lexical lifetimes land it can be cleaned up.
-
-            // Read the response header into self.response_header
-            self.response_header.clear();
-            let header_len = {
-                let mut coded_stream = CodedInputStream::from_bytes(&self.recv_buf[..msg_len]);
-                try!(coded_stream.merge_message(&mut self.response_header));
-                coded_stream.pos() as usize
-            };
-            self.recv_buf.consume(header_len);
-
-            match self.state_kind() {
-                StateKind::Negotiating => {
-                    // All SASL messages are required to have call ID -33.
-                    if self.response_header.get_call_id() != 33 {
-                        return Err(Error::Rpc(RpcError::invalid_rpc_header(
-                                    format!("Negotiation RPC response header has illegal call id: {:?}",
-                                            self.response_header))));
-                    }
-                    // Only one response should be in flight during SASL negotiation.
-                    debug_assert_eq!(msg_len - header_len, self.recv_buf.len());
-
-                    if self.response_header.get_is_error() {
-                        // All errors during SASL negotiation should result in tearing down the
-                        // connection.
-                        return Err(Error::Rpc(RpcError::from(try!(
-                                        parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                            &mut CodedInputStream::from_bytes(&self.recv_buf[..]))))));
-                    }
-
-                    let sasl_msg = try!(parse_length_delimited_from(
-                            &mut CodedInputStream::from_bytes(&self.recv_buf[..])));
-                    try!(self.handle_sasl_message(sasl_msg));
-                },
-                StateKind::Connected => {
-                    trace!("{:?}: received response from server: {:?}", self, self.response_header);
-                    if self.response_header.get_is_error() {
-                        let error = RpcError::from(try!(
-                                parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                                    &mut CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len]))));
-                        // Remove the RPC from the read queue, and fail it. The message may not be
-                        // in the read queue if it has already timed out.
-                        if let Some(rpc) = self.recv_queue.remove(&(self.response_header.get_call_id() as usize)) {
-                            rpc.fail(Error::Rpc(error.clone()));
-                        }
-                        // If the message is fatal, then return an error in order to have the
-                        // connection torn down.
-                        if error.is_fatal() {
-                            return Err(Error::Rpc(error.clone()))
-                        }
-                    } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(self.response_header.get_call_id() as usize) {
-                        // Use the entry API so that the RPC is not removed from the read queue
-                        // if the protobuf decode step fails. Since it isn't removed, it has the
-                        // opportunity to be retried when the error is bubbled up and the
-                        // connection is reset.
-                        //
-                        // The message may not be in the read queue if it has already been
-                        // cancelled.
-                        try!(CodedInputStream::from_bytes(&self.recv_buf[..msg_len - header_len])
-                             .merge_message(&mut *entry.get_mut().response));
-
-                        if !self.response_header.get_sidecar_offsets().is_empty() {
-                            panic!("sidecar decoding not implemented");
-                        }
-
-                        let rpc = entry.remove();
-                        rpc.complete();
-                        if self.throttle < self.options.rpc_queue_len {
-                            self.throttle += 1;
-                        }
-                    }
-                },
-                _ => unreachable!("{:?}: poll_read"),
-            };
-            self.recv_buf.consume(msg_len - header_len);
         }
+
+        // SASL messages may not have sidecars.
+        if !self.response_header.get_sidecar_offsets().is_empty() {
+            return Err(Error::Rpc(RpcError::invalid_rpc_header(
+                        "negotiation RPC response includes sidecars".to_string())));
+        }
+
+        // We only expect a single response message to be in flight during negotiation.
+        if body_len != self.recv_buf.len() {
+            return Err(Error::NegotiationError(
+                    "detected multiple in-flight RPC responses during negotiation"))
+        }
+
+        let msg = {
+            let mut cis = CodedInputStream::from_bytes(&self.recv_buf[..]);
+
+            if self.response_header.get_is_error() {
+                // All errors during SASL negotiation are fatal.
+                let err = parse_length_delimited_from::<rpc_header::ErrorStatusPB>(&mut cis)?;
+                return Err(Error::Rpc(RpcError::from(err)));
+            }
+
+            let msg = parse_length_delimited_from(&mut cis)?;
+
+            if body_len != cis.pos() as usize {
+                return Err(Error::NegotiationError(
+                        "decoded message length does not match the header length"));
+            }
+
+            msg
+        };
+
+        self.recv_buf.consume(body_len);
+        Ok(Async::Ready(msg))
     }
 
-    /// Send messages until either there are no more messages to send, or the socket can not accept
-    /// any more writes. If an error is returned, the connection should be torn down.
-    fn poll_write(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: poll", self);
+    /// Reads an RPC response messsage from the socket, and completes the corresponding `Rpc` in
+    /// the receive queue.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) if a message is not ready to be read from the socket.
+    ///     * Ok(Async::Ready(..)) if a message is successfully read from the socket.
+    ///     * Err(..) if a fatal error occurs. The caller should reset the connection.
+    fn poll_read_connected(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_read_connected", self);
+
+        let body_len = try_ready!(self.poll_read_header());
+        let call_id = self.response_header.get_call_id() as usize;
+        if self.response_header.get_is_error() {
+            let error = RpcError::from(
+                parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
+                    &mut CodedInputStream::from_bytes(&self.recv_buf[..body_len]))?);
+
+            // Remove the RPC from the read queue, and fail it. The message may not be
+            // in the receive queue if it has already timed out or been cancelled.
+            if let Some(rpc) = self.recv_queue.remove(&call_id) {
+                rpc.fail(Error::Rpc(error.clone()));
+            }
+            // If the message is fatal, then return an error in order to have the
+            // connection torn down.
+            if error.is_fatal() {
+                return Err(Error::Rpc(error))
+            }
+        } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(call_id) {
+            // Use the entry API so that the RPC is not removed from the read queue
+            // if the protobuf decode step fails. Since it isn't removed, it has the
+            // opportunity to be retried when the error is bubbled up and the
+            // connection is reset.
+            //
+            // The message may not be in the read queue if it has already been
+            // cancelled.
+            CodedInputStream::from_bytes(&self.recv_buf[..body_len])
+                             .merge_message(&mut *entry.get_mut().response)?;
+
+            if !self.response_header.get_sidecar_offsets().is_empty() {
+                panic!("sidecar decoding not implemented");
+            }
+
+            let rpc = entry.remove();
+            rpc.complete();
+            if self.throttle < self.options.rpc_queue_len {
+                self.throttle += 1;
+            }
+        }
+
+        self.recv_buf.consume(body_len);
+        Ok(Async::Ready(()))
+    }
+
+    /// Send messages until either there are no more messages to send, or the connection can not
+    /// accept any more writes.
+    ///
+    /// Returns:
+    ///     * Ok(Async::NotReady) if a message is not ready to be sent, or the connection can not
+    ///       accept any more writes.
+    ///     * Ok(Async::Ready(..)) if a message is successfully sent.
+    ///     * Err(..) if a fatal error occurs. The caller should reset the connection.
+    fn poll_write_connected(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_write_connected", self);
+
+        // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
+        // *still* over 8KiB, then stop sending messages until the buffer clears.
+        if self.write_buf.len() > 8 * 1024 {
+            self.poll_flush()?;
+            if self.write_buf.len() > 8 * 1024 {
+                return Ok(Async::NotReady);
+            }
+        }
+
+        // Check if the connection is throttled.
+        if self.recv_queue.len() >= self.throttle as usize {
+            return Ok(Async::NotReady);
+        }
 
         let now = Instant::now();
 
-        // While we aren't throttled
-        while self.recv_queue.len() < self.throttle as usize {
+        if let Some((call_id, mut rpc)) = self.send_queue.pop() {
+            let (call_id, mut rpc) = self.send_queue.pop().unwrap();
 
-            // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
-            // *still* over 8KiB, then apply backpressure (stop pulling from the write queue).
-            if self.write_buf.len() > 8 * 1024 {
-                try!(self.flush());
-                if self.write_buf.len() > 8 * 1024 {
-                    return Ok(Async::NotReady);
-                }
-            }
-
-            if let Some((call_id, mut rpc)) = self.send_queue.pop() {
-                let (call_id, mut rpc) = self.send_queue.pop().unwrap();
-
-                if rpc.cancelled() {
-                    trace!("{:?}: cancelling {:?}", self, rpc);
-                    rpc.fail(Error::Cancelled);
-                    continue;
-                } else if rpc.timed_out(now) {
-                    trace!("{:?}: timing out {:?}", self, rpc);
-                    rpc.fail(Error::TimedOut);
-                    continue;
-                }
-
+            if rpc.cancelled() {
+                trace!("{:?}: cancelling {:?}", self, rpc);
+                rpc.fail(Error::Cancelled);
+            } else if rpc.timed_out(now) {
+                trace!("{:?}: timing out {:?}", self, rpc);
+                rpc.fail(Error::TimedOut);
+            } else {
                 if call_id > i32::MAX as usize {
                     warn!("{:?}: call id overflowed", self);
                     return Err(Error::ConnectionError);
@@ -531,17 +648,22 @@ impl Connection {
                 trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
                 self.buffer_message(&*rpc.request)?;
                 self.recv_queue.insert(call_id, rpc);
-            } else {
-                break;
             }
+            Ok(Async::Ready(()))
+        } else {
+            // No more messages to send!
+            Ok(Async::NotReady)
         }
-
-        self.flush()
     }
 
     /// Flushes the write buffer to the socket.
-    fn flush(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: flush", self);
+    ///
+    /// Returns:
+    ///     * Ok(Async::Ready) if the entire write buffer is flushed to the socket.
+    ///     * Ok(Async::NotReady) if the socket is not ready for the entire write buffer.
+    ///     * Err(..) on fatal error. The caller should reset the connection.
+    fn poll_flush(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_flush", self);
         let Connection { ref mut state, ref mut write_buf, .. } = *self;
         while !write_buf.is_empty() {
             let n = try_nb!(write_buf.write_to(state.stream()));
@@ -553,16 +675,6 @@ impl Connection {
         Ok(Async::Ready(()))
     }
 
-    /// Attempts to read at least `min` bytes from the socket into the receive buffer.
-    /// Fewer bytes may be read if there is no data available.
-    fn read_at_least(&mut self, min: usize) -> Poll<(), io::Error> {
-        let Connection { ref mut state, ref mut recv_buf, .. } = *self;
-        let mut received = 0;
-        while received < min {
-            received += try_nb!(recv_buf.read_from(state.stream()));
-        }
-        Ok(Async::Ready(()))
-    }
 
     /// Returns the number of queued RPCs.
     fn queue_len(&self) -> usize {
@@ -590,43 +702,22 @@ impl Future for Connection {
     type Item = ();
     type Error = ();
     fn poll(&mut self) -> Poll<(), ()> {
-        fn inner(cxn: &mut Connection) -> Result<()> {
-            trace!("{:?}: tick", cxn);
-            loop {
-                match cxn.state_kind() {
-                    StateKind::Connecting => {
-                        match cxn.stream_new().poll()? {
-                            Async::Ready(stream) => {
-                                stream.set_nodelay(cxn.options.nodelay)?;
-                                cxn.state = State::Negotiating(stream);
-                                cxn.buffer_connection_header()?;
-                                cxn.buffer_sasl_negotiation()?;
-                            },
-                            Async::NotReady => return Ok(()),
-                        }
-                    },
-                    StateKind::Negotiating => {
-                        cxn.poll_read()?;
-                        cxn.flush()?;
-                        return Ok(());
-                    },
-                    StateKind::Connected => {
-                        cxn.poll_read()?;
-                        cxn.poll_write()?;
-                        return Ok(());
-                    },
-                    StateKind::Reset => {
-                        if let Async::Ready(..) = cxn.timeout().poll()? {
-                            cxn.state = State::Connecting(TcpStream::connect(&cxn.addr, &cxn.handle));
-                        } else {
-                            return Ok(());
-                        }
-                    },
-                }
-            }
+        trace!("{:?}: poll", self);
+        let poll = match self.state_kind() {
+            StateKind::Connecting => self.poll_connecting(),
+            StateKind::Negotiating => self.poll_negotiating(),
+            StateKind::Connected => self.poll_connected(),
+            StateKind::Reset => self.poll_reset(),
+        };
+        match poll {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(error) => {
+                info!("{:?} error during poll: {}", self, error);
+                self.reset(error);
+                Ok(Async::NotReady)
+            },
+            Ok(Async::Ready(())) => unreachable!(),
         }
-        inner(self).unwrap_or_else(|error| self.reset(error));
-        Ok(Async::NotReady)
     }
 }
 
