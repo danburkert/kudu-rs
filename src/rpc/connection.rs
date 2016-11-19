@@ -487,7 +487,7 @@ impl Connection {
     /// Send messages until either there are no more messages to send, or the socket can not accept
     /// any more writes. If an error is returned, the connection should be torn down.
     fn poll_write(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: poll_write", self);
+        trace!("{:?}: poll", self);
 
         let now = Instant::now();
 
