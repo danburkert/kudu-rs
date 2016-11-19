@@ -9,15 +9,13 @@ keywords = ["kudu", "database"]
 [dependencies]
 byteorder = "0.5"
 chrono = "0.2"
-futures = { git = "https://github.com/carllerche/futures-rs", branch = "mpsc" }
-
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
 ieee754 = "0.2"
 ifaces = "0.0"
 itertools = "0.5"
 kudu-pb = { path = "kudu-pb", version = "0.1.0" }
 lazy_static = "0.2"
 log = "0.3"
-mio = "0.6"
 netbuf = "0.3"
 parking_lot = "0.3"
 protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
@@ -25,8 +23,7 @@ quickcheck = { version = "0.3", optional = true }
 rand = "0.3.14"
 slab = "0.3"
 take_mut = "0.1"
-#tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
-tokio-core = { path = "../tokio-core" }
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
 uuid = "0.3"
 vec_map = "0.6"
 

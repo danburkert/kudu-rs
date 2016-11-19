@@ -7,7 +7,6 @@ extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
 extern crate kudu_pb;
-extern crate mio;
 extern crate netbuf;
 extern crate parking_lot;
 extern crate protobuf;
