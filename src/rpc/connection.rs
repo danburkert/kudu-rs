@@ -279,6 +279,7 @@ impl Connection {
     ///     * Ok(Async::NotReady) on success.
     ///     * Err(..) on fatal error. The call should reset the connection.
     fn poll_connecting(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_connecting", self);
         // Check if the TCP stream has connected.
         let stream = try_ready!(self.stream_new().poll());
 
@@ -299,6 +300,7 @@ impl Connection {
     ///     * Ok(Async::NotReady) on success.
     ///     * Err(..) on fatal error. The call should reset the connection.
     fn poll_negotiating(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_negotiating", self);
         loop {
             // Attempt to send any buffered negotiation messages.
             try_ready!(self.poll_flush());
@@ -320,7 +322,7 @@ impl Connection {
                     self.state.transition_connected();
                     self.reset_backoff.reset();
                     self.buffer_connection_context()?;
-                    return Ok(Async::Ready(()));
+                    return self.poll_connected();
                 },
                 _ => unreachable!("Unexpected SASL message: {:?}", msg),
             }
@@ -354,6 +356,7 @@ impl Connection {
     ///     * Ok(Async::NotReady) on success.
     ///     * Err(..) on fatal error. The call should reset the connection.
     fn poll_reset(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_reset", self);
         // Check if the timeout period is over.
         try_ready!(self.timeout().poll());
 
@@ -362,7 +365,7 @@ impl Connection {
     }
 
     /// Resets the connection following an error.
-    fn reset(&mut self, error: Error) {
+    fn reset(&mut self, error: Error) -> Poll<(), Error> {
         let backoff_ms = self.reset_backoff.next_backoff_ms();
         warn!("{:?}: reset, error: {}, backoff: {}ms", self, error, backoff_ms);
         self.state = State::Reset(Timeout::new(Duration::from_millis(backoff_ms), &self.handle).unwrap());
@@ -385,6 +388,9 @@ impl Connection {
                 retries.push((call_id, rpc));
             }
         }
+
+        self.poll_reset()
+
 
         // TODO:
         /*
@@ -520,10 +526,10 @@ impl Connection {
         let body_len = try_ready!(self.poll_read_header());
 
         // SASL messages are required to have call ID -33.
-        if self.response_header.get_call_id() != 33 {
+        if self.response_header.get_call_id() != -33 {
             return Err(Error::Rpc(RpcError::invalid_rpc_header(
                         format!("negotiation RPC response header has illegal call id: {:?}",
-                                self.response_header))));
+                                self.response_header.get_call_id()))));
 
         }
 
@@ -719,7 +725,7 @@ impl Future for Connection {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(error) => {
                 info!("{:?} error during poll: {}", self, error);
-                self.reset(error);
+                self.reset(error).unwrap();
                 Ok(Async::NotReady)
             },
             Ok(Async::Ready(())) => unreachable!(),

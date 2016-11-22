@@ -10,7 +10,6 @@ use futures::{Async, Poll, Sink, StartSend};
 use parking_lot::Mutex;
 use tokio::reactor::Remote;
 
-use Result;
 use rpc::Rpc;
 use rpc::connection::{Connection, ConnectionOptions};
 
@@ -98,7 +97,7 @@ mod tests {
     use futures::sync::oneshot;
 
     #[test]
-    fn send() {
+    fn send_single() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
@@ -135,7 +134,7 @@ mod tests {
         let addr = cluster.master_addrs()[0];
 
         let mut options = ConnectionOptions::default();
-        options.max_rpcs_in_flight = 1;
+        options.max_rpcs_in_flight = 10;
         let messenger = Messenger::new(&[core.remote()], options);
 
         let (oneshots, rpcs): (Vec<_>, Vec<_>) = iter::repeat(0u32).take(100).map(|_| {
