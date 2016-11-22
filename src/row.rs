@@ -26,9 +26,9 @@ pub struct Row {
     schema: Schema,
 }
 
-/// TODO: unset/unset_by_name.  Should zero out existing values so that equality can still be fast.
-/// TODO: remove varlen column bytes from `data` (right now it takes up 16 useless bytes) (is this
-/// as easy as changing them to 0 width in the Value trait?).
+// TODO: unset/unset_by_name.  Should zero out existing values so that equality can still be fast.
+// TODO: remove varlen column bytes from `data` (right now it takes up 16 useless bytes) (is this
+// as easy as changing them to 0 width in the Value trait?).
 impl Row {
     pub fn new(schema: Schema) -> Row {
         let num_columns = schema.columns().len();

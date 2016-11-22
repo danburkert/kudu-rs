@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::i32;
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, Write};
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-use futures::{self, Async, AsyncSink, Future, Poll, Sink, StartSend};
+use futures::sync::mpsc;
+use futures::{Async, Future, Poll, Stream};
 use netbuf::Buf;
 use protobuf::rt::ProtobufVarint;
 use protobuf::{parse_length_delimited_from, Clear, CodedInputStream, Message};
@@ -23,23 +23,15 @@ use backoff::Backoff;
 use error::RpcError;
 use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
 use kudu_pb::rpc_header;
-use queue_map::QueueMap;
 use rpc::Rpc;
 use util::duration_to_ms;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionOptions {
-    /// Whether to disable Nagle's algorithm.
+    /// Maximum number of outstandings RPCs to allow in the connection.
     ///
-    /// Defaults to true.
-    pub nodelay: bool,
-
-    /// Maximum number of RPCs to queue in the connection.
-    ///
-    /// When the queue is full, additional attempts to send RPCs will immediately fail.
-    ///
-    /// Defaults to 256.
-    pub rpc_queue_len: u32,
+    /// Defaults to 32.
+    pub max_rpcs_in_flight: u32,
 
     /// Initial time in milliseconds to wait after an error before attempting to reconnect to the
     /// server.
@@ -57,13 +49,18 @@ pub struct ConnectionOptions {
     ///
     /// Defaults to 5 MiB.
     pub max_message_length: u32,
+
+    /// Whether to disable Nagle's algorithm.
+    ///
+    /// Defaults to true.
+    pub nodelay: bool,
 }
 
 impl Default for ConnectionOptions {
     fn default() -> ConnectionOptions {
         ConnectionOptions {
             nodelay: true,
-            rpc_queue_len: 256,
+            max_rpcs_in_flight: 32,
             backoff_initial: 10,
             backoff_max: 30_000,
             max_message_length: 5 * 1024 * 1024,
@@ -124,10 +121,6 @@ impl State {
         });
     }
 
-    fn transition_reset(&mut self, timeout: Timeout) {
-        *self = State::Reset(timeout);
-    }
-
     fn transition_connecting(&mut self, stream_new: TcpStreamNew) {
         debug_assert_eq!(StateKind::Reset, self.kind());
         *self = State::Connecting(stream_new);
@@ -164,8 +157,8 @@ enum StateKind {
 /// # Back Pressure & Flow Control
 ///
 /// Internally, the connection holds a queue of pending and in-flight `Rpc`s. The queue size is
-/// limited by the `ConnectionOptions::rpc_queue_len` option. If the queue is full, then subsequent
-/// attempts to send an `Rpc` will fail with `Error::Backoff`.
+/// limited by the `ConnectionOptions::max_rpcs_in_flight` option. If the queue is full, then
+/// subsequent attempts to send an `Rpc` will fail with `Error::Backoff`.
 ///
 /// The Kudu Tablet Server has a special error type, `Throttled`, to indicate that the server is
 /// under memory pressure and is currently unable to handle RPCs. When an RPC fails due to
@@ -175,7 +168,7 @@ enum StateKind {
 /// therefore is not detectable by `Connection`. See `Connection::throttle()` for details.
 pub struct Connection {
     /// The connection options.
-    options: Rc<ConnectionOptions>,
+    options: ConnectionOptions,
     /// The current connection state.
     state: State,
     /// The address of the remote Kudu server.
@@ -184,7 +177,9 @@ pub struct Connection {
     handle: Handle,
 
     /// Queue of RPCs to send.
-    send_queue: QueueMap<Rpc>,
+    send_queue: mpsc::Receiver<Rpc>,
+    send_queue_sender: mpsc::Sender<Rpc>,
+
     /// RPCs which have been sent and are awaiting response.
     recv_queue: HashMap<usize, Rpc>,
 
@@ -194,7 +189,7 @@ pub struct Connection {
     response_header: rpc_header::ResponseHeader,
 
     /// Byte buffer holding the next incoming response.
-    recv_buf: Buf,
+    read_buf: Buf,
     /// Byte buffer holding the next outgoing request.
     write_buf: Buf,
 
@@ -203,15 +198,18 @@ pub struct Connection {
 
     /// Maximum size of recv_queue. The throttle is halved every time `Connection::throttle` is
     /// called (which should be in response to a tablet server `Throttled` error), increased by
-    /// one for every successful RPC, and bounded by `ConnectionOptions::rpc_queue_len`.
+    /// one for every successful RPC, and bounded by `ConnectionOptions::max_rpcs_in_flight`.
     throttle: u32,
+
+    /// The next call id.
+    next_call_id: i32,
 }
 
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Connection {{ state: {:?}, addr: {}, queue (tx/rx): {}/{}, buf (tx/rx): {}/{} }}",
-               self.state_kind(), self.addr, self.send_queue.len(), self.recv_queue.len(),
-               self.write_buf.len(), self.recv_buf.len())
+        write!(f, "Connection {{ state: {:?}, addr: {}, in-flight: {}, buf (tx/rx): {}/{} }}",
+               self.state_kind(), self.addr, self.recv_queue.len(),
+               self.write_buf.len(), self.read_buf.len())
     }
 }
 
@@ -222,27 +220,30 @@ impl Connection {
     /// The connection automatically attempts to connect to the remote server.
     pub fn new(handle: Handle,
                addr: SocketAddr,
-               options: Rc<ConnectionOptions>)
-               -> Connection {
+               options: ConnectionOptions,
+               send: mpsc::Sender<Rpc>,
+               recv: mpsc::Receiver<Rpc>) -> Connection {
         trace!("Creating new connection to {:?}", addr);
-        let reset_backoff = Backoff::with_duration_range(options.backoff_initial, options.backoff_max);
-        let throttle = options.rpc_queue_len;
-
+        let reset_backoff = Backoff::with_duration_range(options.backoff_initial,
+                                                         options.backoff_max);
+        let throttle = options.max_rpcs_in_flight;
         let stream_new = TcpStream::connect(&addr, &handle);
 
         Connection {
             options: options,
             state: State::Connecting(stream_new),
             addr: addr,
-            handle: handle,
-            send_queue: QueueMap::new(),
+            handle: handle.clone(),
+            send_queue: recv,
+            send_queue_sender: send,
             recv_queue: HashMap::new(),
             request_header: rpc_header::RequestHeader::new(),
             response_header: rpc_header::ResponseHeader::new(),
-            recv_buf: Buf::new(),
+            read_buf: Buf::new(),
             write_buf: Buf::new(),
             reset_backoff: reset_backoff,
             throttle: throttle,
+            next_call_id: 0,
         }
     }
 
@@ -251,7 +252,22 @@ impl Connection {
     }
 
     pub fn throttle(&mut self) {
-        self.throttle = cmp::min(self.throttle, self.options.rpc_queue_len) / 2;
+        self.throttle = cmp::min(self.throttle, self.options.max_rpcs_in_flight) / 2;
+    }
+
+    fn sender(&self) -> mpsc::Sender<Rpc> {
+        self.send_queue_sender.clone()
+    }
+
+    pub fn next_call_id(&mut self) -> Result<i32> {
+        let call_id = self.next_call_id;
+        if let Some(next) = self.next_call_id.checked_add(1) {
+            self.next_call_id = next;
+            Ok(call_id)
+        } else {
+            warn!("{:?}: call id overflowed", self);
+            Err(Error::ConnectionError)
+        }
     }
 
     /// Poll the connection while in the `Connecting` state.
@@ -351,14 +367,14 @@ impl Connection {
         warn!("{:?}: reset, error: {}, backoff: {}ms", self, error, backoff_ms);
         self.state = State::Reset(Timeout::new(Duration::from_millis(backoff_ms), &self.handle).unwrap());
 
-        let recv_buf_len = self.recv_buf.len();
-        self.recv_buf.consume(recv_buf_len);
+        let recv_buf_len = self.read_buf.len();
+        self.read_buf.consume(recv_buf_len);
         let write_buf_len = self.write_buf.len();
         self.write_buf.consume(write_buf_len);
 
         let now = Instant::now();
         let mut retries = Vec::new();
-        for (call_id, mut rpc) in self.recv_queue.drain().chain(self.send_queue.drain()) {
+        for (call_id, mut rpc) in self.recv_queue.drain() {
             if rpc.cancelled() {
                 continue;
             } else if rpc.timed_out(now) {
@@ -370,10 +386,13 @@ impl Connection {
             }
         }
 
+        // TODO:
+        /*
         for (call_id, rpc) in retries {
             self.send_queue.insert(call_id, rpc);
         }
-        trace!("{:?}: retrying rpcs: {:?}", self, self.send_queue);
+        */
+        //trace!("{:?}: retrying rpcs: {:?}", self, self.send_queue);
     }
 
     /// Writes the message to the send buffer with a request header.
@@ -452,42 +471,42 @@ impl Connection {
     fn poll_read_header(&mut self) -> Poll<usize, Error> {
         /// Attempts to read at least `min` bytes from the socket into the receive buffer.
         /// Fewer bytes may be read if there is no data available.
-        fn read_at_least(&mut Connection { ref mut state, ref mut recv_buf, .. }: &mut Connection,
+        fn read_at_least(&mut Connection { ref mut state, ref mut read_buf, .. }: &mut Connection,
                          min: usize)
                          -> Poll<(), io::Error> {
             let mut received = 0;
             while received < min {
-                received += try_nb!(recv_buf.read_from(state.stream()));
+                received += try_nb!(read_buf.read_from(state.stream()));
             }
             Ok(Async::Ready(()))
         }
 
         // Read, or continue reading, an RPC response message from the socket into the read buffer.
         // Every RPC response is prefixed with a 4 bytes length header.
-        if self.recv_buf.len() < 4 {
-            let needed = 4 - self.recv_buf.len();
+        if self.read_buf.len() < 4 {
+            let needed = 4 - self.read_buf.len();
             try_ready!(read_at_least(self, needed));
         }
 
-        let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
+        let msg_len = BigEndian::read_u32(&self.read_buf[..4]) as usize;
         if msg_len > self.options.max_message_length as usize {
             return Err(RpcError::invalid_rpc_header(format!(
                        "RPC response message is too long; length: {}, max length: {}",
                        msg_len, self.options.max_message_length)).into());
         }
-        if self.recv_buf.len() - 4 < msg_len {
-            let needed = msg_len + 4 - self.recv_buf.len();
+        if self.read_buf.len() - 4 < msg_len {
+            let needed = msg_len + 4 - self.read_buf.len();
             try_ready!(read_at_least(self, needed));
         }
 
         let pos = {
             self.response_header.clear();
-            let mut cis = CodedInputStream::from_bytes(&self.recv_buf[4..]);
+            let mut cis = CodedInputStream::from_bytes(&self.read_buf[4..]);
             cis.merge_message(&mut self.response_header)?;
             cis.pos() as usize
         };
 
-        self.recv_buf.consume(4 + pos);
+        self.read_buf.consume(4 + pos);
         trace!("{:?}: received header from server: {:?}", self, self.response_header);
         Ok(Async::Ready(msg_len - pos))
     }
@@ -515,13 +534,13 @@ impl Connection {
         }
 
         // We only expect a single response message to be in flight during negotiation.
-        if body_len != self.recv_buf.len() {
+        if body_len != self.read_buf.len() {
             return Err(Error::NegotiationError(
                     "detected multiple in-flight RPC responses during negotiation"))
         }
 
         let msg = {
-            let mut cis = CodedInputStream::from_bytes(&self.recv_buf[..]);
+            let mut cis = CodedInputStream::from_bytes(&self.read_buf[..]);
 
             if self.response_header.get_is_error() {
                 // All errors during SASL negotiation are fatal.
@@ -539,7 +558,7 @@ impl Connection {
             msg
         };
 
-        self.recv_buf.consume(body_len);
+        self.read_buf.consume(body_len);
         Ok(Async::Ready(msg))
     }
 
@@ -558,7 +577,7 @@ impl Connection {
         if self.response_header.get_is_error() {
             let error = RpcError::from(
                 parse_length_delimited_from::<rpc_header::ErrorStatusPB>(
-                    &mut CodedInputStream::from_bytes(&self.recv_buf[..body_len]))?);
+                    &mut CodedInputStream::from_bytes(&self.read_buf[..body_len]))?);
 
             // Remove the RPC from the read queue, and fail it. The message may not be
             // in the receive queue if it has already timed out or been cancelled.
@@ -578,7 +597,7 @@ impl Connection {
             //
             // The message may not be in the read queue if it has already been
             // cancelled.
-            CodedInputStream::from_bytes(&self.recv_buf[..body_len])
+            CodedInputStream::from_bytes(&self.read_buf[..body_len])
                              .merge_message(&mut *entry.get_mut().response)?;
 
             if !self.response_header.get_sidecar_offsets().is_empty() {
@@ -587,12 +606,12 @@ impl Connection {
 
             let rpc = entry.remove();
             rpc.complete();
-            if self.throttle < self.options.rpc_queue_len {
+            if self.throttle < self.options.max_rpcs_in_flight {
                 self.throttle += 1;
             }
         }
 
-        self.recv_buf.consume(body_len);
+        self.read_buf.consume(body_len);
         Ok(Async::Ready(()))
     }
 
@@ -622,10 +641,7 @@ impl Connection {
         }
 
         let now = Instant::now();
-
-        if let Some((call_id, mut rpc)) = self.send_queue.pop() {
-            let (call_id, mut rpc) = self.send_queue.pop().unwrap();
-
+        if let Async::Ready(Some(mut rpc)) = self.send_queue.poll().unwrap() {
             if rpc.cancelled() {
                 trace!("{:?}: cancelling {:?}", self, rpc);
                 rpc.fail(Error::Cancelled);
@@ -633,13 +649,9 @@ impl Connection {
                 trace!("{:?}: timing out {:?}", self, rpc);
                 rpc.fail(Error::TimedOut);
             } else {
-                if call_id > i32::MAX as usize {
-                    warn!("{:?}: call id overflowed", self);
-                    return Err(Error::ConnectionError);
-                }
-
+                let call_id = self.next_call_id()?;
                 self.request_header.clear();
-                self.request_header.set_call_id(call_id as i32);
+                self.request_header.set_call_id(call_id);
                 self.request_header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
                 self.request_header.mut_remote_method().mut_method_name().push_str(rpc.method_name);
                 self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
@@ -647,7 +659,7 @@ impl Connection {
 
                 trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
                 self.buffer_message(&*rpc.request)?;
-                self.recv_queue.insert(call_id, rpc);
+                self.recv_queue.insert(call_id as usize, rpc);
             }
             Ok(Async::Ready(()))
         } else {
@@ -673,12 +685,6 @@ impl Connection {
             }
         }
         Ok(Async::Ready(()))
-    }
-
-
-    /// Returns the number of queued RPCs.
-    fn queue_len(&self) -> usize {
-        self.send_queue.len() + self.recv_queue.len()
     }
 
     fn state_kind(&self) -> StateKind {
@@ -737,7 +743,7 @@ impl Sink for Connection {
             trace!("{:?}: rpc timed out before queue: {:?}", self, rpc);
             rpc.fail(Error::TimedOut);
             return Ok(AsyncSink::Ready);
-        } else if self.queue_len() >= self.options.rpc_queue_len as usize ||
+        } else if self.queue_len() >= self.options.max_rpcs_in_flight as usize ||
                   self.queue_len() >= self.throttle as usize {
             trace!("{:?}: connection not ready for rpc: {:?}", self, rpc);
             return Ok(AsyncSink::NotReady(rpc));

@@ -1,61 +1,40 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use std::fmt;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::hash::{Hash, Hasher};
 
-use shared::Shared;
-use Error;
+use fnv::FnvHasher;
+use futures::sync::mpsc;
+use futures::{Async, Poll, Sink, StartSend};
+use parking_lot::Mutex;
+use tokio::reactor::Remote;
+
+use Result;
 use rpc::Rpc;
 use rpc::connection::{Connection, ConnectionOptions};
 
-use futures::{Async, Future, Poll, Sink, StartSend};
-use tokio::reactor::{Handle, Timeout};
-
 pub struct Messenger {
-    handle: Handle,
-    options: Rc<ConnectionOptions>,
-    connections: HashMap<SocketAddr, Shared<Connection>>,
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    options: ConnectionOptions,
+    remotes: Box<[Remote]>,
+    connections: Mutex<HashMap<SocketAddr, mpsc::Sender<Rpc>>>,
 }
 
 impl Messenger {
-    fn new(handle: Handle, options: ConnectionOptions) -> Messenger {
+
+    pub fn new(remotes: &[Remote], options: ConnectionOptions) -> Messenger {
         Messenger {
-            handle: handle,
-            options: Rc::new(options),
-            connections: HashMap::new(),
+            inner: Arc::new(Inner {
+                options: options,
+                remotes: remotes.to_owned().into_boxed_slice(),
+                connections: Mutex::new(HashMap::new()),
+            }),
         }
     }
-
-    fn connection(&mut self, addr: SocketAddr) -> &mut Shared<Connection> {
-        let Messenger { ref mut handle, ref options, ref mut connections } = *self;
-        connections.entry(addr)
-                   .or_insert_with(|| {
-                       let connection = Shared::new(Connection::new(handle.clone(), addr, options.clone()));
-                       handle.spawn(connection.clone());
-                       connection
-                   })
-    }
-
-    /*
-    pub fn delayed_send(&mut self, delay: Duration, mut rpc: Rpc) {
-        debug_assert!(rpc.oneshot.is_some());
-        rpc.response.clear();
-
-        let deadline = rpc.deadline.clone();
-        if Instant::now() + delay > deadline {
-            return rpc.fail(Error::TimedOut);
-        }
-
-        let connection = self.connection(rpc.addr).clone();
-        let f = Timeout::new(delay, &self.handle)
-                        .unwrap()
-                        .map_err(|_| ())
-                        .and_then(|_| connection.send(rpc).map(|_| ()));
-
-        self.handle.spawn(f);
-    }
-    */
 }
 
 impl Sink for Messenger {
@@ -63,30 +42,41 @@ impl Sink for Messenger {
     type SinkError = ();
 
     fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
-        unimplemented!()
-        /*
-        info!("{:?}: start_send, rpc: {:?}", self, rpc);
-        debug_assert!(rpc.oneshot.is_some());
         rpc.response.clear();
-        self.connection(rpc.addr).start_send(rpc)
-        */
+        debug_assert!(rpc.oneshot.is_some());
+        info!("{:?}: start_send, rpc: {:?}", self, rpc);
+
+        let addr = rpc.addr;
+        let Inner { ref options, ref remotes, ref connections } = *self.inner;
+        connections.lock().entry(addr).or_insert_with(move || {
+            let idx = if remotes.len() == 1 {
+                0
+            } else {
+                let mut hasher = FnvHasher::default();
+                addr.hash(&mut hasher);
+                hasher.finish() % remotes.len() as u64
+            } as usize;
+
+            let options = options.clone();
+            let (send, recv) = mpsc::channel(options.max_rpcs_in_flight as usize);
+            let cxn_send = send.clone();
+            remotes[idx].spawn(move |handle| {
+                Connection::new(handle.clone(), addr, options, send, recv)
+            });
+            cxn_send
+        }).start_send(rpc).map_err(|_| panic!("connection dropped: {:?}", addr))
     }
 
     fn poll_complete(&mut self) -> Poll<(), ()> {
-        unimplemented!()
-        /*
-        for connection in self.connections.values_mut() {
-            try_ready!(connection.poll_complete());
-        }
         Ok(Async::Ready(()))
-        */
     }
 }
 
 
 impl fmt::Debug for Messenger {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Messenger {{ connections: {} }}", self.connections.len())
+        write!(f, "Messenger {{ reactors: {}, connections: {} }}",
+               self.inner.remotes.len(), self.inner.connections.lock().len())
     }
 }
 
@@ -119,7 +109,7 @@ mod tests {
         let mut core = Core::new().unwrap();
         let addr = cluster.master_addrs()[0];
 
-        let mut messenger = Messenger::new(core.handle(), ConnectionOptions::default());
+        let mut messenger = Messenger::new(&[core.remote()], ConnectionOptions::default());
         let mut rpc = master::ping(addr,
                                    Instant::now() + Duration::from_secs(5),
                                    kudu_pb::master::PingRequestPB::new());
@@ -145,8 +135,8 @@ mod tests {
         let addr = cluster.master_addrs()[0];
 
         let mut options = ConnectionOptions::default();
-        options.rpc_queue_len = 1;
-        let messenger = Messenger::new(core.handle(), options);
+        options.max_rpcs_in_flight = 1;
+        let messenger = Messenger::new(&[core.remote()], options);
 
         let (oneshots, rpcs): (Vec<_>, Vec<_>) = iter::repeat(0u32).take(100).map(|_| {
             let mut rpc = master::ping(addr,

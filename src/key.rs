@@ -295,7 +295,7 @@ fn is_cell_equal(a: &Row, b: &Row, idx: usize) -> bool {
         DataType::Int64 | DataType::Timestamp => a.get::<i64>(idx) == b.get::<i64>(idx),
         DataType::Binary | DataType::String => a.get::<&[u8]>(idx) == b.get::<&[u8]>(idx),
         DataType::Float => a.get::<f32>(idx) == b.get::<f32>(idx),
-        DataType::Double => return a.get::<f64>(idx) == b.get::<f64>(idx),
+        DataType::Double => a.get::<f64>(idx) == b.get::<f64>(idx),
     }
 }
 

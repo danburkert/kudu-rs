@@ -3,6 +3,7 @@
 extern crate byteorder;
 extern crate chrono;
 
+extern crate fnv;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
@@ -28,7 +29,6 @@ extern crate vec_map;
 #[macro_use] extern crate tokio_core as tokio;
 
 mod backoff;
-mod shared;
 mod bit_set;
 //mod client;
 mod dns;
