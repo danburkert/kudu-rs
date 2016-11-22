@@ -178,10 +178,12 @@ pub struct Connection {
 
     /// Queue of RPCs to send.
     send_queue: mpsc::Receiver<Rpc>,
-    send_queue_sender: mpsc::Sender<Rpc>,
 
     /// RPCs which have been sent and are awaiting response.
     recv_queue: HashMap<usize, Rpc>,
+
+    /// RPCs which should be retried after reconnecting.
+    retry_queue: Vec<Rpc>,
 
     /// RPC request header, kept internally to reduce memory allocations.
     request_header: rpc_header::RequestHeader,
@@ -221,7 +223,6 @@ impl Connection {
     pub fn new(handle: Handle,
                addr: SocketAddr,
                options: ConnectionOptions,
-               send: mpsc::Sender<Rpc>,
                recv: mpsc::Receiver<Rpc>) -> Connection {
         trace!("Creating new connection to {:?}", addr);
         let reset_backoff = Backoff::with_duration_range(options.backoff_initial,
@@ -235,8 +236,8 @@ impl Connection {
             addr: addr,
             handle: handle.clone(),
             send_queue: recv,
-            send_queue_sender: send,
             recv_queue: HashMap::new(),
+            retry_queue: Vec::new(),
             request_header: rpc_header::RequestHeader::new(),
             response_header: rpc_header::ResponseHeader::new(),
             read_buf: Buf::new(),
@@ -253,10 +254,6 @@ impl Connection {
 
     pub fn throttle(&mut self) {
         self.throttle = cmp::min(self.throttle, self.options.max_rpcs_in_flight) / 2;
-    }
-
-    fn sender(&self) -> mpsc::Sender<Rpc> {
-        self.send_queue_sender.clone()
     }
 
     pub fn next_call_id(&mut self) -> Result<i32> {
@@ -375,30 +372,8 @@ impl Connection {
         let write_buf_len = self.write_buf.len();
         self.write_buf.consume(write_buf_len);
 
-        let now = Instant::now();
-        let mut retries = Vec::new();
-        for (call_id, mut rpc) in self.recv_queue.drain() {
-            if rpc.cancelled() {
-                continue;
-            } else if rpc.timed_out(now) {
-                rpc.fail(Error::TimedOut);
-            } else if rpc.fail_fast() {
-                rpc.fail(error.clone());
-            } else {
-                retries.push((call_id, rpc));
-            }
-        }
-
+        self.retry_queue.extend(self.recv_queue.drain().map(|(_, rpc)| rpc));
         self.poll_reset()
-
-
-        // TODO:
-        /*
-        for (call_id, rpc) in retries {
-            self.send_queue.insert(call_id, rpc);
-        }
-        */
-        //trace!("{:?}: retrying rpcs: {:?}", self, self.send_queue);
     }
 
     /// Writes the message to the send buffer with a request header.
@@ -646,32 +621,36 @@ impl Connection {
             return Ok(Async::NotReady);
         }
 
-        let now = Instant::now();
-        if let Async::Ready(Some(mut rpc)) = self.send_queue.poll().unwrap() {
-            if rpc.cancelled() {
-                trace!("{:?}: cancelling {:?}", self, rpc);
-                rpc.fail(Error::Cancelled);
-            } else if rpc.timed_out(now) {
-                trace!("{:?}: timing out {:?}", self, rpc);
-                rpc.fail(Error::TimedOut);
-            } else {
-                let call_id = self.next_call_id()?;
-                self.request_header.clear();
-                self.request_header.set_call_id(call_id);
-                self.request_header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
-                self.request_header.mut_remote_method().mut_method_name().push_str(rpc.method_name);
-                self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
-                self.request_header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
-
-                trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
-                self.buffer_message(&*rpc.request)?;
-                self.recv_queue.insert(call_id as usize, rpc);
-            }
-            Ok(Async::Ready(()))
+        let mut rpc = if let Some(rpc) = self.retry_queue.pop() {
+            rpc
+        } else if let Async::Ready(Some(rpc)) = self.send_queue.poll().unwrap() {
+            rpc
         } else {
             // No more messages to send!
-            Ok(Async::NotReady)
+            return Ok(Async::NotReady);
+        };
+
+        let now = Instant::now();
+        if rpc.cancelled() {
+            trace!("{:?}: cancelling {:?}", self, rpc);
+            rpc.fail(Error::Cancelled);
+        } else if rpc.timed_out(now) {
+            trace!("{:?}: timing out {:?}", self, rpc);
+            rpc.fail(Error::TimedOut);
+        } else {
+            let call_id = self.next_call_id()?;
+            self.request_header.clear();
+            self.request_header.set_call_id(call_id);
+            self.request_header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
+            self.request_header.mut_remote_method().mut_method_name().push_str(rpc.method_name);
+            self.request_header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
+            self.request_header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
+
+            trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
+            self.buffer_message(&*rpc.request)?;
+            self.recv_queue.insert(call_id as usize, rpc);
         }
+        Ok(Async::Ready(()))
     }
 
     /// Flushes the write buffer to the socket.
@@ -732,59 +711,3 @@ impl Future for Connection {
         }
     }
 }
-
-/*
-impl Sink for Connection {
-    type SinkItem = Rpc;
-    type SinkError = ();
-
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
-        trace!("{:?}: start_send; rpc: {:?}, task: {:?}", self, rpc, futures::task::park());
-        let now = Instant::now();
-        if rpc.cancelled() {
-            trace!("{:?}: rpc cancelled before queue: {:?}", self, rpc);
-            rpc.fail(Error::Cancelled);
-            return Ok(AsyncSink::Ready);
-        } else if rpc.timed_out(now) {
-            trace!("{:?}: rpc timed out before queue: {:?}", self, rpc);
-            rpc.fail(Error::TimedOut);
-            return Ok(AsyncSink::Ready);
-        } else if self.queue_len() >= self.options.max_rpcs_in_flight as usize ||
-                  self.queue_len() >= self.throttle as usize {
-            trace!("{:?}: connection not ready for rpc: {:?}", self, rpc);
-            return Ok(AsyncSink::NotReady(rpc));
-        }
-
-        trace!("{:?}: queueing rpc: {:?}", self, rpc);
-
-        self.send_queue.push(rpc);
-
-        // If this is the only message in the queue, optimistically try to write it to the socket.
-        if self.state_kind() == StateKind::Connected &&
-           self.write_buf.is_empty() &&
-           self.send_queue.len() == 1 {
-            self.poll_write()
-                .unwrap_or_else(|error| {
-                    info!("{:?} error sending RPC: {}", self, error);
-                    self.reset(error)
-                });
-        }
-
-        Ok(AsyncSink::Ready)
-    }
-
-    fn poll_complete(&mut self) -> Poll<(), ()> {
-        if self.queue_len() == 0 {
-            return Ok(Async::Ready(()));
-        }
-
-        //self.tick();
-
-        if self.queue_len() == 0 {
-            Ok(Async::Ready(()))
-        } else {
-            Ok(Async::NotReady)
-        }
-    }
-}
-*/

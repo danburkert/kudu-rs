@@ -60,7 +60,7 @@ impl Sink for Messenger {
             let (send, recv) = mpsc::channel(options.max_rpcs_in_flight as usize);
             let cxn_send = send.clone();
             remotes[idx].spawn(move |handle| {
-                Connection::new(handle.clone(), addr, options, send, recv)
+                Connection::new(handle.clone(), addr, options, recv)
             });
             cxn_send
         }).start_send(rpc).map_err(|_| panic!("connection dropped: {:?}", addr))
@@ -86,15 +86,15 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use env_logger;
+    use futures::sync::oneshot;
+    use futures::{self, Future, Sink};
     use kudu_pb;
+    use tokio::reactor::Core;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use rpc::connection::ConnectionOptions;
     use rpc::{master, RpcResult};
     use super::*;
-    use tokio::reactor::Core;
-    use futures::{self, Future, Sink};
-    use futures::sync::oneshot;
 
     #[test]
     fn send_single() {
