@@ -1,4 +1,5 @@
 use std::cmp;
+use std::time::Duration;
 
 use rand::{self, Rng};
 
@@ -54,6 +55,10 @@ impl Backoff {
         let ms = cmp::min(self.max as u64, duration);
         self.retries += 1;
         ms
+    }
+
+    pub fn next_backoff(&mut self) -> Duration {
+        Duration::from_millis(self.next_backoff_ms())
     }
 }
 

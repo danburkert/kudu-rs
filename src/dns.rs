@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
+use futures_cpupool::{CpuFuture, CpuPool};
 use ifaces;
 use kudu_pb::common::HostPortPB;
 
 lazy_static! {
     static ref LOCAL_ADDRS: HashSet<IpAddr> = {
         let mut addrs = HashSet::new();
-
         match ifaces::Interface::get_all() {
             Ok(ifaces) => {
                 for iface in ifaces {
@@ -17,17 +17,43 @@ lazy_static! {
                     }
                 }
             },
-            Err(error) => {
-                warn!("failed to resolve local interface addresses: {}", error);
-            },
+            Err(error) => warn!("failed to resolve local interface addresses: {}", error),
         }
         addrs
     };
 }
 
-/// Resolves a sequence of hostnames into a set of socket addresses. If the hostname DNS lookup
-/// fails, it is filtered from the result. The results are passed to the provided callback upon
-/// completion.
+pub type ResolveFuture = CpuFuture<Vec<SocketAddr>, ()>;
+
+#[derive(Clone)]
+pub struct Resolver {
+    pool: CpuPool,
+}
+
+impl Resolver {
+    pub fn new() -> Resolver {
+        Resolver {
+            pool: CpuPool::new(4),
+        }
+    }
+
+    /// Resolves a sequence of hostnames into a collection of socket addresses. If the hostname DNS
+    /// lookup fails, it is filtered from the result.
+    pub fn resolve(&self, hostports: Vec<HostPortPB>) -> ResolveFuture {
+        self.pool.spawn_fn(move || {
+            let mut addrs = Vec::with_capacity(hostports.len());
+            for hostport in hostports {
+                match (hostport.get_host(), hostport.get_port() as u16).to_socket_addrs() {
+                    Ok(resolved_addrs) => addrs.extend(resolved_addrs),
+                    Err(error) => warn!("unable to resolve host '{}': {}",
+                                        hostport.get_host(), error),
+                }
+            }
+            Ok(addrs)
+        })
+    }
+}
+
 pub fn resolve_hosts(hostports: &[HostPortPB]) -> HashSet<SocketAddr> {
     let mut addrs = HashSet::new();
     for hostport in hostports {
@@ -64,11 +90,7 @@ fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
 
 /// Returns `true` if socket addr is for a local interface.
 pub fn is_local_addr(addr: &IpAddr) -> bool {
-    LOCAL_ADDRS.contains(addr) || match *addr {
-        // TODO: unwrapping will be unnecessary once 1.12 lands in stable.
-        IpAddr::V4(ref addr) => addr.is_loopback(),
-        IpAddr::V6(ref addr) => addr.is_loopback(),
-    }
+    LOCAL_ADDRS.contains(addr) || addr.is_loopback()
 }
 
 #[cfg(test)]

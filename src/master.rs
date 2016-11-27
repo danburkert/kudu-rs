@@ -7,26 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dns;
-use backoff::Backoff;
-use itertools::Itertools;
-use protobuf::Message;
-use queue_map::QueueMap;
-use rpc::{
-    Messenger,
-    Rpc,
-    RpcResult,
-    master
-};
-use util;
-use Error;
-use MasterError;
-use MasterErrorCode;
-use MasterId;
-use RaftRole;
-use Result;
-use Status;
-
 use futures::{Future, Poll};
 use futures::sync::oneshot;
 use parking_lot::Mutex;
@@ -46,6 +26,26 @@ use kudu_pb::master::{
     PingRequestPB, PingResponsePB,
 };
 use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
+
+use dns;
+use backoff::Backoff;
+use itertools::Itertools;
+use protobuf::Message;
+use queue_map::QueueMap;
+use rpc::{
+    Messenger,
+    Rpc,
+    RpcResult,
+    master
+};
+use util;
+use Error;
+use MasterError;
+use MasterErrorCode;
+use MasterId;
+use RaftRole;
+use Result;
+use Status;
 
 /// Maximum number of RPCs to queue in the master proxy during leader discovery. When the queue is
 /// full, additional attempts to send RPCs will immediately fail with `RpcError::Backoff`.
@@ -191,7 +191,7 @@ impl MasterProxy {
         if let Some(rpc) = rpc {
             // Warning: extreme hack. We can get 'false positive' timeout callbacks when we
             // transition from Unknown -> Known -> Unknown, because the queue resets the idx
-            // counter back to 0, so we may get the callback from a previous Unkown era. To
+            // counter back to 0, so we may get the callback from a previous Unknown era. To
             // properly fix this we either need to keep the timeout handle with the queued RPCs,
             // like in Connection, or keep a transition counter or something. Easier than all that
             // is to just check if the RPC is actually timed out.

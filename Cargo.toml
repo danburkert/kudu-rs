@@ -10,7 +10,8 @@ keywords = ["kudu", "database"]
 byteorder = "0.5"
 chrono = "0.2"
 fnv = "1"
-futures = { git = "https://github.com/alexcrichton/futures-rs" }
+futures = "0.1.6"
+futures-cpupool = "0.1"
 ieee754 = "0.2"
 ifaces = "0.0"
 itertools = "0.5"
@@ -24,7 +25,8 @@ quickcheck = { version = "0.3", optional = true }
 rand = "0.3.14"
 slab = "0.3"
 take_mut = "0.1"
-tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
+tokio-core = "0.1.1"
+tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
 uuid = "0.3"
 vec_map = "0.6"
 

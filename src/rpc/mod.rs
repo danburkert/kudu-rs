@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::result;
 use std::time::Instant;
 
-use futures::Async;
+use futures::{Async, Future, Poll};
 use futures::sync::oneshot;
 use protobuf::Message;
 
@@ -22,8 +22,8 @@ pub type RpcResult = result::Result<Rpc, RpcError>;
 
 #[derive(Debug)]
 pub struct RpcError {
-    rpc: Rpc,
-    error: Error,
+    pub rpc: Rpc,
+    pub error: Error,
 }
 
 impl error::Error for RpcError {
@@ -34,6 +34,23 @@ impl error::Error for RpcError {
 impl fmt::Display for RpcError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+pub struct RpcFuture {
+    inner: oneshot::Receiver<RpcResult>,
+}
+
+impl Future for RpcFuture {
+    type Item = Rpc;
+    type Error = RpcError;
+    fn poll(&mut self) -> Poll<Rpc, RpcError> {
+        match self.inner.poll() {
+            Ok(Async::Ready(Ok(rpc))) => Ok(Async::Ready(rpc)),
+            Ok(Async::Ready(Err(error))) => Err(error),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(..) => panic!("RPC dropped by connection"),
+        }
     }
 }
 
@@ -78,11 +95,13 @@ pub struct Rpc {
 
 impl Rpc {
 
-    pub fn oneshot(&mut self) -> oneshot::Receiver<RpcResult> {
+    pub fn future(&mut self) -> RpcFuture {
         assert!(self.oneshot.is_none());
         let (send, recv) = oneshot::channel();
         self.oneshot = Some(send);
-        recv
+        RpcFuture {
+            inner: recv,
+        }
     }
 
     fn complete(mut self) {

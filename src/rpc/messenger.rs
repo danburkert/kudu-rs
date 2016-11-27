@@ -13,6 +13,7 @@ use tokio::reactor::Remote;
 use rpc::Rpc;
 use rpc::connection::{Connection, ConnectionOptions};
 
+#[derive(Clone)]
 pub struct Messenger {
     inner: Arc<Inner>,
 }

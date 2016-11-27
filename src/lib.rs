@@ -2,8 +2,8 @@
 
 extern crate byteorder;
 extern crate chrono;
-
 extern crate fnv;
+extern crate futures_cpupool;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
@@ -14,6 +14,7 @@ extern crate protobuf;
 extern crate rand;
 extern crate slab;
 extern crate take_mut;
+extern crate tokio_timer;
 extern crate uuid;
 extern crate vec_map;
 
@@ -28,25 +29,28 @@ extern crate vec_map;
 #[macro_use] extern crate log;
 #[macro_use] extern crate tokio_core as tokio;
 
-mod backoff;
-mod bit_set;
 //mod client;
-mod dns;
-mod error;
-mod key;
 //mod master;
 //mod meta_cache;
+//mod table;
+//mod tablet;
+//mod tablet_server;
+//mod writer;
+mod backoff;
+mod bit_set;
+mod dns;
+mod error;
+mod io;
+mod key;
+mod master_new;
 mod partition;
 mod queue_map;
 mod row;
 mod rpc;
 mod schema;
-//mod table;
-//mod tablet;
-//mod tablet_server;
 mod util;
 mod value;
-//mod writer;
+mod list_masters;
 
 #[cfg(test)]
 mod mini_cluster;
