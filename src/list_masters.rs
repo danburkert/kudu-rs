@@ -1,42 +1,18 @@
-use std::fmt;
-use std::collections::HashSet;
-use std::marker::PhantomData;
-use std::mem;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
 
-use futures::sync::oneshot;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend};
+use futures::{Async, AsyncSink, Future, Poll, Sink};
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
-use kudu_pb::master::{ListMastersRequestPB, ListMastersResponsePB};
-use parking_lot::Mutex;
+use kudu_pb::master::ListMastersResponsePB;
 use tokio_timer;
 use take_mut;
 
-use Error;
-use MasterError;
-use MasterErrorCode;
-use MasterId;
-use Result;
-use Status;
 use backoff::Backoff;
-use dns;
 use io::Io;
-use itertools::Itertools;
-use protobuf::Message;
-use queue_map::QueueMap;
 use rpc::{
-    Messenger,
     Rpc,
     RpcError,
     RpcFuture,
-    RpcResult,
-    master
 };
-use util;
 
 pub struct ListMasters {
     io: Io,

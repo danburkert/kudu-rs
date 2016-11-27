@@ -4,6 +4,7 @@ use std::time::{UNIX_EPOCH, SystemTime};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use chrono;
+use futures::{Async, Future, Poll, Stream};
 
 use DataType;
 use Row;
@@ -81,11 +82,54 @@ pub fn dummy_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
 }
 
+/// Creates a new stream from a collection of futures, yielding items in order
+/// of completion.
+pub fn select_stream<F: Future>(futures: Vec<F>) -> SelectStream<F> {
+    SelectStream {
+        futures: futures,
+    }
+}
+
+/// Stream which yields items from a collection of futures in completion order.
+pub struct SelectStream<F: Future> {
+    futures: Vec<F>,
+}
+
+impl<F: Future> Stream for SelectStream<F> {
+    type Item = F::Item;
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.futures.is_empty() {
+            return Ok(Async::Ready(None));
+        }
+        let item = self.futures.iter_mut().enumerate().filter_map(|(i, f)| {
+            match f.poll() {
+                Ok(Async::NotReady) => None,
+                Ok(Async::Ready(e)) => Some((i, Ok(e))),
+                Err(e) => Some((i, Err(e))),
+            }
+        }).next();
+        match item {
+            Some((idx, res)) => {
+                self.futures.swap_remove(idx);
+                match res {
+                    Ok(item) => Ok(Async::Ready(Some(item))),
+                    Err(error) => Err(error),
+                }
+            },
+            None => Ok(Async::NotReady),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use std::time::{Duration, UNIX_EPOCH};
 
+    use futures::sync::oneshot;
+    use futures;
     use quickcheck::{quickcheck, TestResult};
 
     use schema;
@@ -113,5 +157,24 @@ mod tests {
         row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
         assert_eq!("Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z",
                    &format!("{:?}", row));
+    }
+
+    #[test]
+    fn test_select_stream() {
+        let (a_tx, a_rx) = oneshot::channel::<u32>();
+        let (b_tx, b_rx) = oneshot::channel::<u32>();
+        let (c_tx, c_rx) = oneshot::channel::<u32>();
+
+        let stream = select_stream(vec![a_rx, b_rx, c_rx]);
+
+        let mut spawn = futures::executor::spawn(stream);
+        b_tx.complete(99);
+        assert_eq!(Some(Ok(99)), spawn.wait_stream());
+
+        a_tx.complete(33);
+        c_tx.complete(33);
+        assert_eq!(Some(Ok(33)), spawn.wait_stream());
+        assert_eq!(Some(Ok(33)), spawn.wait_stream());
+        assert_eq!(None, spawn.wait_stream());
     }
 }

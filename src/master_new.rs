@@ -1,40 +1,13 @@
 use std::fmt;
 use std::collections::HashSet;
-use std::marker::PhantomData;
-use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
 
-use futures::sync::oneshot;
-use futures::{Async, Future, Poll, Sink, StartSend};
+use futures::{Async, Poll, Sink, StartSend};
 use parking_lot::Mutex;
-use tokio_timer;
 
-use Error;
-use MasterError;
-use MasterErrorCode;
-use MasterId;
-use RaftRole;
-use Result;
-use Status;
-use backoff::Backoff;
-use dns;
 use io::Io;
-use itertools::Itertools;
-use protobuf::Message;
-use queue_map::QueueMap;
-use rpc::{
-    Messenger,
-    Rpc,
-    RpcError,
-    RpcFuture,
-    RpcResult,
-    master
-};
-use util;
+use rpc::Rpc;
 
 pub struct MasterProxy {
     inner: Arc<Mutex<Leader>>,
@@ -69,7 +42,7 @@ impl Sink for MasterProxy {
     type SinkItem = Rpc;
     type SinkError = ();
 
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
+    fn start_send(&mut self, rpc: Rpc) -> StartSend<Rpc, ()> {
         info!("{:?}: start_send, rpc: {:?}", self, rpc);
         unimplemented!()
     }
