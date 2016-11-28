@@ -1,10 +1,13 @@
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use std::time::{UNIX_EPOCH, SystemTime};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use chrono;
 use futures::{Async, Future, Poll, Stream};
+use ifaces;
 
 use DataType;
 use Row;
@@ -82,6 +85,38 @@ pub fn dummy_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
 }
 
+lazy_static! {
+    static ref LOCAL_ADDRS: HashSet<IpAddr> = {
+        let mut addrs = HashSet::new();
+        match ifaces::Interface::get_all() {
+            Ok(ifaces) => {
+                for iface in ifaces {
+                    if let Some(addr) = iface.addr {
+                        addrs.insert(addr.ip());
+                    }
+                }
+            },
+            Err(error) => warn!("failed to resolve local interface addresses: {}", error),
+        }
+        addrs
+    };
+}
+
+/// Returns `true` if socket addr is for a local interface.
+pub fn is_local_addr(addr: &IpAddr) -> bool {
+    LOCAL_ADDRS.contains(addr) || addr.is_loopback()
+}
+
+
+pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
+    match (a, b) {
+        (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
+        (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
+        (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
+        (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
+    }
+}
+
 /// Creates a new stream from a collection of futures, yielding items in order
 /// of completion.
 pub fn select_stream<F: Future>(futures: Vec<F>) -> SelectStream<F> {
@@ -127,6 +162,7 @@ impl<F: Future> Stream for SelectStream<F> {
 mod tests {
 
     use std::time::{Duration, UNIX_EPOCH};
+    use std::net::ToSocketAddrs;
 
     use futures::sync::oneshot;
     use futures;
@@ -176,5 +212,13 @@ mod tests {
         assert_eq!(Some(Ok(33)), spawn.wait_stream());
         assert_eq!(Some(Ok(33)), spawn.wait_stream());
         assert_eq!(None, spawn.wait_stream());
+    }
+
+    #[test]
+    fn test_is_local_addr() {
+        let addr = "127.0.1.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
+        assert!(is_local_addr(&addr));
+        let addr = "127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
+        assert!(is_local_addr(&addr));
     }
 }

@@ -1,27 +1,10 @@
-use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use futures_cpupool::{CpuFuture, CpuPool};
-use ifaces;
 use kudu_pb::common::HostPortPB;
 
-lazy_static! {
-    static ref LOCAL_ADDRS: HashSet<IpAddr> = {
-        let mut addrs = HashSet::new();
-        match ifaces::Interface::get_all() {
-            Ok(ifaces) => {
-                for iface in ifaces {
-                    if let Some(addr) = iface.addr {
-                        addrs.insert(addr.ip());
-                    }
-                }
-            },
-            Err(error) => warn!("failed to resolve local interface addresses: {}", error),
-        }
-        addrs
-    };
-}
+use util;
 
 pub type ResolveFuture = CpuFuture<Vec<SocketAddr>, ()>;
 
@@ -74,36 +57,7 @@ pub fn resolve_hostports(hostports: &[(String, u16)]) -> Vec<SocketAddr> {
             Err(error) => warn!("unable to resolve hostname '{:?}': {}", host, error),
         }
     }
-    addrs.sort_by(cmp_socket_addrs);
+    addrs.sort_by(util::cmp_socket_addrs);
     addrs.dedup();
     addrs
-}
-
-fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
-    match (a, b) {
-        (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
-        (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
-        (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
-        (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
-    }
-}
-
-/// Returns `true` if socket addr is for a local interface.
-pub fn is_local_addr(addr: &IpAddr) -> bool {
-    LOCAL_ADDRS.contains(addr) || addr.is_loopback()
-}
-
-#[cfg(test)]
-mod tests {
-
-    use std::net::ToSocketAddrs;
-    use super::*;
-
-    #[test]
-    fn test_is_local_addr() {
-        let addr = "127.0.1.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
-        assert!(is_local_addr(&addr));
-        let addr = "127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
-        assert!(is_local_addr(&addr));
-    }
 }

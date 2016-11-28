@@ -6,9 +6,9 @@ use tokio_timer;
 
 #[derive(Clone)]
 pub struct Io {
-    messenger: rpc::Messenger,
-    resolver: dns::Resolver,
-    timer: tokio_timer::Timer,
+    pub messenger: rpc::Messenger,
+    pub resolver: dns::Resolver,
+    pub timer: tokio_timer::Timer,
 }
 
 impl Io {
