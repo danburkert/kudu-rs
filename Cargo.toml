@@ -9,6 +9,7 @@ keywords = ["kudu", "database"]
 [dependencies]
 byteorder = "0.5"
 chrono = "0.2"
+crossbeam = "0.2"
 fnv = "1"
 futures = "0.1.6"
 futures-cpupool = "0.1"

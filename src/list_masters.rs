@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use futures::{Async, Future, Poll, Sink, Stream};
+use futures::future::join_all;
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 use kudu_pb::master::{
     ListMastersResponsePB,
@@ -11,6 +12,7 @@ use kudu_pb::master::{
 use tokio_timer;
 
 use Error;
+use Result;
 use backoff::Backoff;
 use error::{MasterError, MasterErrorCode};
 use io::Io;
@@ -24,7 +26,7 @@ pub enum ListMastersResponse {
 fn list_masters(io: &Io,
                 addr: SocketAddr,
                 deadline: Instant)
-                -> Box<Future<Item=ListMastersResponse, Error=Error> + Send> {
+                -> impl Future<Item=ListMastersResponse, Error=Error> + Send {
     let messenger = io.messenger.clone();
     let resolver = io.resolver.clone();
     let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
@@ -32,8 +34,9 @@ fn list_masters(io: &Io,
     messenger.send(rpc)
              .then(move |_| future)
              .map_err(|error| error.error)
-             .and_then(move |mut rpc| {
-                 let response = rpc.mut_response::<ListMastersResponsePB>();
+             .then(|rpc| -> Result<ListMastersResponsePB> {
+                 // Transform the RPC into a ListMastersResponsePB.
+                 let mut response = rpc?.take_response::<ListMastersResponsePB>();
                  if response.has_error() {
                      // This can happen when the master is not yet initialized, e.g.:
                      // code: CATALOG_MANAGER_NOT_INITIALIZED
@@ -41,29 +44,48 @@ fn list_masters(io: &Io,
                      return Err(Error::Master(MasterError::new(MasterErrorCode::UnknownError,
                                                                response.take_error().into())));
                  }
-                 debug!("ListMasters RPC to master {} response: {:?}", addr, response);
-
-                 let mut responses = Vec::with_capacity(response.get_masters().len());
-                 for server_entry in response.mut_masters().iter_mut() {
-                     if server_entry.has_error()  {
-                         continue;
+                 Ok(response)
+             })
+             .map(move |mut response| {
+                 // Transform the ListMastersResponsePB into an iterator of futures containing the
+                 // role and resolved addresses of each replica.
+                 response.take_masters()
+                         .into_iter()
+                         .filter(|server_entry| !server_entry.has_error())
+                         .map(|mut server_entry| {
+                             let role = server_entry.get_role();
+                             let host_ports = server_entry.mut_registration()
+                                                          .take_rpc_addresses()
+                                                          .into_vec();
+                             (role, host_ports)
+                         })
+                        .map(move |(role, host_ports)| resolver.resolve(host_ports)
+                                                               .map(move |addrs| (role, addrs)))
+                        // TODO: collect isn't strictly necessary, but without it rustc hits the
+                        // monomorphization limit.
+                        .collect::<Vec<_>>()
+             })
+             .and_then(join_all) // Wait for all of the DNS resolutions.
+             .map(move |replicas| {
+                 // Transform the iterator of host, addrs pairs into a ListMastersResult.
+                 let mut leader = false;
+                 let mut replica_addrs: Vec<SocketAddr> = Vec::new();
+                 for (role, addrs) in replicas {
+                     if role == Role::LEADER && addrs.contains(&addr) {
+                         leader = true;
                      }
-                     let role = server_entry.get_role();
-                     let response = resolver.resolve(server_entry.mut_registration()
-                                                                 .take_rpc_addresses()
-                                                                 .into_vec())
-                                            .map(move |addrs| -> ListMastersResponse {
-                                                if role == Role::LEADER && addrs.contains(&addr) {
-                                                    ListMastersResponse::Leader(addr, addrs)
-                                                } else {
-                                                    ListMastersResponse::Replicas(addrs)
-                                                }
-                                            });
-                     responses.push(response);
+                     replica_addrs.extend(addrs);
                  }
+                 if leader {
+                     ListMastersResponse::Leader(addr, replica_addrs)
+                 } else {
+                     ListMastersResponse::Replicas(replica_addrs)
+                 }
+             })
+}
 
-                 Ok(CombineResponses::new(responses).map_err(|_| panic!()))
-             }).flatten().boxed()
+fn list_masters_with_retry(backoff: Backoff, timer: tokio_timer::Timer) {
+
 }
 
 /// Combines multiple futures containing `ListMastersResponse` into one.
@@ -103,8 +125,7 @@ struct FindLeaderMaster {
     io: Io,
     replicas: Vec<SocketAddr>,
     list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=Error> + Send>>,
-    retry: tokio_timer::Sleep,
-    backoff: Backoff,
+    backoff_stream: util::BackoffStream,
 }
 
 impl Future for FindLeaderMaster {

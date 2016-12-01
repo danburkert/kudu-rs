@@ -4,9 +4,10 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use futures_cpupool::{CpuFuture, CpuPool};
 use kudu_pb::common::HostPortPB;
 
+use Error;
 use util;
 
-pub type ResolveFuture = CpuFuture<Vec<SocketAddr>, ()>;
+pub type ResolveFuture = CpuFuture<Vec<SocketAddr>, Error>;
 
 #[derive(Clone)]
 pub struct Resolver {

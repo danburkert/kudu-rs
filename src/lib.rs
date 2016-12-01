@@ -1,7 +1,10 @@
 #![allow(dead_code)]
+#![feature(conservative_impl_trait)]
+#![feature(never_type)]
 
 extern crate byteorder;
 extern crate chrono;
+extern crate crossbeam;
 extern crate fnv;
 extern crate futures_cpupool;
 extern crate ieee754;

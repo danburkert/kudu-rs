@@ -2,15 +2,21 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::{UNIX_EPOCH, SystemTime};
 
 use chrono;
-use futures::{Async, Future, Poll, Stream};
+use crossbeam::sync::SegQueue;
+use futures::task::{EventSet, UnparkEvent, with_unpark_event};
+use futures::{Async, Future, IntoFuture, Poll, Stream};
 use ifaces;
+use slab::Slab;
+use tokio_timer;
 
 use DataType;
 use Row;
+use backoff::Backoff;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + duration.subsec_nanos() as u64 / 1000_000
@@ -119,41 +125,253 @@ pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
 
 /// Creates a new stream from a collection of futures, yielding items in order
 /// of completion.
-pub fn select_stream<F: Future>(futures: Vec<F>) -> SelectStream<F> {
+// TODO: wat is this type signature?
+pub fn select_stream<I>(futures: I) -> SelectStream<<<I as IntoIterator>::Item as IntoFuture>::Future>
+where I: IntoIterator,
+      I::Item: IntoFuture,
+      I::IntoIter: ExactSizeIterator {
+    let iter = futures.into_iter();
+    let mut slab = Slab::with_capacity(iter.len());
+    let event_set = SegQueueEventSet::new();
+    for f in iter {
+        let idx = match slab.insert(f.into_future()) {
+            Ok(idx) => idx,
+            _ => unreachable!(),
+        };
+        event_set.insert(idx);
+    }
     SelectStream {
-        futures: futures,
+        slab: slab,
+        event_set: Arc::new(event_set),
     }
 }
 
 /// Stream which yields items from a collection of futures in completion order.
-pub struct SelectStream<F: Future> {
-    futures: Vec<F>,
+#[derive(Debug)]
+pub struct SelectStream<F> where F: Future {
+    slab: Slab<F>,
+    event_set: Arc<SegQueueEventSet>,
 }
 
-impl<F: Future> Stream for SelectStream<F> {
+impl <F> SelectStream<F> where F: Future {
+    fn add(&mut self, f: F) {
+        if !self.slab.has_available() {
+            let len = self.slab.len();
+            self.slab.reserve_exact(if len < 4 { 8 - len } else { len / 2 });
+        }
+        let idx = match self.slab.insert(f) {
+            Ok(idx) => idx,
+            _ => unreachable!(),
+        };
+        self.event_set.insert(idx);
+    }
+}
+
+impl<F> Stream for SelectStream<F> where F: Future {
     type Item = F::Item;
     type Error = F::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.futures.is_empty() {
+        if self.slab.is_empty() {
+            assert!(self.event_set.0.try_pop().is_none());
             return Ok(Async::Ready(None));
         }
-        let item = self.futures.iter_mut().enumerate().filter_map(|(i, f)| {
-            match f.poll() {
-                Ok(Async::NotReady) => None,
-                Ok(Async::Ready(e)) => Some((i, Ok(e))),
-                Err(e) => Some((i, Err(e))),
+        let SelectStream { ref mut slab, ref event_set } = *self;
+        while let Some(idx) = event_set.0.try_pop() {
+            let event = UnparkEvent::new(event_set.clone(), idx);
+            let mut entry = slab.entry(idx).unwrap();
+            let poll = with_unpark_event(event, || entry.get_mut().poll());
+            let result = match poll {
+                Ok(Async::NotReady) => continue,
+                Ok(Async::Ready(item)) => Ok(Async::Ready(Some(item))),
+                Err(error) => Err(error),
+            };
+            entry.remove();
+            return result;
+        }
+        Ok(Async::NotReady)
+    }
+}
+
+#[derive(Debug)]
+pub struct MergeStream<S> where S: Stream {
+    slab: Slab<S>,
+    event_set: Arc<SegQueueEventSet>,
+}
+
+impl <S> MergeStream<S> where S: Stream {
+    fn add(&mut self, stream: S) {
+        if !self.slab.has_available() {
+            let len = self.slab.len();
+            self.slab.reserve_exact(if len < 4 { 8 - len } else { len / 2 });
+        }
+        let idx = match self.slab.insert(stream) {
+            Ok(idx) => idx,
+            _ => unreachable!(),
+        };
+        self.event_set.insert(idx);
+    }
+}
+
+impl<S> Stream for MergeStream<S> where S: Stream {
+    type Item = S::Item;
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.slab.is_empty() {
+            debug_assert!(self.event_set.0.try_pop().is_none());
+            return Ok(Async::Ready(None));
+        }
+        let MergeStream { ref mut slab, ref event_set } = *self;
+        while let Some(idx) = event_set.0.try_pop() {
+            let event = UnparkEvent::new(event_set.clone(), idx);
+            let mut entry = slab.entry(idx).unwrap();
+            let poll = with_unpark_event(event, || entry.get_mut().poll());
+            match poll {
+                Ok(Async::NotReady) => continue,
+                Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
+                Ok(Async::Ready(None)) => { entry.remove(); },
+                Err(error) => return Err(error),
             }
-        }).next();
-        match item {
-            Some((idx, res)) => {
-                self.futures.swap_remove(idx);
-                match res {
-                    Ok(item) => Ok(Async::Ready(Some(item))),
-                    Err(error) => Err(error),
-                }
-            },
-            None => Ok(Async::NotReady),
+        }
+        if slab.is_empty() {
+            debug_assert!(self.event_set.0.try_pop().is_none());
+            Ok(Async::Ready(None))
+        } else {
+            Ok(Async::NotReady)
+        }
+    }
+}
+
+/// Returns a stream which yields elements according to the backoff policy.
+pub fn backoff_stream(mut backoff: Backoff, timer: tokio_timer::Timer) -> BackoffStream {
+    let sleep = timer.sleep(backoff.next_backoff());
+    BackoffStream {
+        backoff: backoff,
+        timer: timer,
+        sleep: sleep,
+    }
+}
+/// Stream which yields elements according to a backoff policy.
+pub struct BackoffStream {
+    backoff: Backoff,
+    timer: tokio_timer::Timer,
+    sleep: tokio_timer::Sleep
+}
+impl Stream for BackoffStream {
+    type Item = ();
+    type Error = ();
+    fn poll(&mut self) -> Poll<Option<()>, ()> {
+        let _ = try_ready!(self.sleep.poll());
+        let backoff = self.backoff.next_backoff();
+        self.sleep = self.timer.sleep(backoff);
+        Ok(Async::Ready(Some(())))
+    }
+}
+
+pub fn retry_with_backoff<F, R>(retry: R,
+                                mut backoff: Backoff,
+                                timer: tokio_timer::Timer)
+                                -> RetryWithBackoff
+where R: FnMut() -> F,
+      F: Future
+{
+    let sleep = timer.sleep(backoff.next_backoff());
+    let f = retry();
+    RetryWithBackoff {
+        backoff: Backoff,
+        timer: timer,
+        sleep: sleep,
+        f: Some(f),
+    }
+}
+
+struct RetryWithBackoff<R, F>
+where R: FnMut() -> F,
+      F: Future
+{
+    backoff: Backoff,
+    timer: tokio_timer::Timer,
+    sleep: tokio_timer::Sleep,
+    f: Option<F>,
+}
+
+impl <R, F> Stream for RetryWithBackoff<R, F>
+where R: FnMut() -> F,
+      F: Future
+{
+    type Item = F::Item;
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<F::Item, F::Error> {
+        unimplemented!()
+    }
+}
+
+
+
+#[derive(Debug)]
+struct SegQueueEventSet(SegQueue<usize>);
+impl SegQueueEventSet {
+    fn new() -> SegQueueEventSet {
+        SegQueueEventSet(SegQueue::new())
+    }
+}
+impl EventSet for SegQueueEventSet {
+    fn insert(&self, id: usize) {
+        self.0.push(id);
+    }
+}
+
+pub fn retry_with_backoff<F, G, E>(mut g: G,
+                                   e: E,
+                                   backoff: Backoff,
+                                   timer: tokio_timer::Timer)
+                                   -> RetryWithBackoff<F, G, E>
+where F: Future,
+      G: FnMut() -> F,
+      E: FnMut(F::Error) {
+    let backoff = backoff_stream(backoff, timer);
+    let f = g();
+    RetryWithBackoff {
+        g: g,
+        f: f,
+        e: e,
+        backoff: backoff,
+    }
+}
+
+pub struct RetryWithBackoff<F, G, E>
+where F: Future,
+      G: FnMut() -> F,
+      E: FnMut(F::Error),
+{
+    g: G,
+    f: F,
+    e: E,
+    backoff: BackoffStream,
+}
+
+impl <F, G, E> Future for RetryWithBackoff<F, G, E>
+where F: Future,
+      G: FnMut() -> F,
+      E: FnMut(F::Error),
+{
+    type Item = F::Item;
+    type Error = !;
+    fn poll(&mut self) -> Poll<F::Item, !> {
+        loop {
+            match self.f.poll() {
+                Ok(Async::Ready(value)) => return Ok(Async::Ready(value)),
+                Ok(Async::NotReady) => (),
+                Err(error) => (self.e)(error),
+            }
+            match self.backoff.poll() {
+                Ok(Async::Ready(Some(()))) => self.f = (self.g)(),
+                Ok(Async::Ready(None)) => panic!("backoff timer ended"),
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(()) => panic!("backoff timer failed"),
+            }
         }
     }
 }
@@ -164,6 +382,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
     use std::net::ToSocketAddrs;
 
+    use env_logger;
     use futures::sync::oneshot;
     use futures;
     use quickcheck::{quickcheck, TestResult};
@@ -197,6 +416,7 @@ mod tests {
 
     #[test]
     fn test_select_stream() {
+        let _ = env_logger::init();
         let (a_tx, a_rx) = oneshot::channel::<u32>();
         let (b_tx, b_rx) = oneshot::channel::<u32>();
         let (c_tx, c_rx) = oneshot::channel::<u32>();

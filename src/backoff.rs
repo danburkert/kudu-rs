@@ -8,6 +8,7 @@ use rand::{self, Rng};
 /// See [Exponential Backoff in Distributed Systems]
 /// (http://dthain.blogspot.com/2009/02/exponential-backoff-in-distributed.html)
 /// for algorithm details.
+#[derive(Clone, Debug)]
 pub struct Backoff {
 
     /// Initial backoff duration.
