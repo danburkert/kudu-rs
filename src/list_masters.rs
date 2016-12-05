@@ -26,7 +26,7 @@ pub enum ListMastersResponse {
 fn list_masters(io: &Io,
                 addr: SocketAddr,
                 deadline: Instant)
-                -> impl Future<Item=ListMastersResponse, Error=Error> + Send {
+                -> Box<Future<Item=ListMastersResponse, Error=Error> + Send> {
     let messenger = io.messenger.clone();
     let resolver = io.resolver.clone();
     let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
@@ -82,56 +82,87 @@ fn list_masters(io: &Io,
                      ListMastersResponse::Replicas(replica_addrs)
                  }
              })
+             .boxed()
 }
 
-fn list_masters_with_retry(backoff: Backoff, timer: tokio_timer::Timer) {
-
-}
-
-/// Combines multiple futures containing `ListMastersResponse` into one.
-struct CombineResponses<F> where F: Future<Item=ListMastersResponse> {
-    responses: util::SelectStream<F>,
-    replicas: Vec<SocketAddr>,
-}
-impl <F> CombineResponses<F> where F: Future<Item=ListMastersResponse> {
-    fn new(responses: Vec<F>) -> CombineResponses<F> {
-        CombineResponses {
-            responses: util::select_stream(responses),
-            replicas: Vec::new(),
+fn list_masters_with_retry(mut io: Io,
+                           addr: SocketAddr,
+                           backoff: Backoff) -> Box<Future<Item=ListMastersResponse, Error=()> + Send> {
+    let timer = io.timer().clone();
+    util::retry_with_backoff(timer, backoff, move |deadline, cause| {
+        match cause {
+            util::RetryCause::Initial => (),
+            util::RetryCause::TimedOut => warn!("ListMasters RPC to {:?} timed out", addr),
+            util::RetryCause::Err(error) => warn!("ListMasters RPC to {:?} failed: {}", addr, error),
         }
-    }
+        list_masters(&io, addr, deadline)
+    }).boxed()
 }
-impl <F> Future for CombineResponses<F> where F: Future<Item=ListMastersResponse> {
-    type Item = ListMastersResponse;
-    type Error = F::Error;
-    fn poll(&mut self) -> Poll<ListMastersResponse, F::Error> {
-        match try_ready!(self.responses.poll()) {
-            Some(ListMastersResponse::Replicas(replicas)) => {
-                self.replicas.extend_from_slice(&replicas);
-                self.replicas.sort_by(util::cmp_socket_addrs);
-                self.replicas.dedup();
-                Ok(Async::NotReady)
-            },
-            Some(leader) => Ok(Async::Ready(leader)),
-            None => {
-                let replicas = mem::replace(&mut self.replicas, Vec::new());
-                Ok(Async::Ready(ListMastersResponse::Replicas(replicas)))
-            }
-        }
-    }
+
+pub fn find_leader_master(mut io: Io, replicas: Vec<SocketAddr>) -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>),
+                                                                               Error=Vec<SocketAddr>> + Send> {
+    let list_masters = util::select_stream(replicas.iter().cloned().map(|addr| {
+        list_masters_with_retry(io.clone(), addr, Backoff::with_duration_range(10, 10000))
+    }));
+
+    FindLeaderMaster {
+        io: io,
+        replicas: replicas,
+        list_masters: list_masters,
+    }.boxed()
 }
 
 struct FindLeaderMaster {
     io: Io,
     replicas: Vec<SocketAddr>,
-    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=Error> + Send>>,
-    backoff_stream: util::BackoffStream,
+    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=()> + Send>>,
 }
 
 impl Future for FindLeaderMaster {
-    type Item = SocketAddr;
-    type Error = ();
-    fn poll(&mut self) -> Poll<SocketAddr, ()> {
-        unimplemented!()
+    type Item = (SocketAddr, Vec<SocketAddr>);
+    type Error = Vec<SocketAddr>;
+    fn poll(&mut self) -> Poll<(SocketAddr, Vec<SocketAddr>), Vec<SocketAddr>> {
+        loop {
+            match self.list_masters.poll() {
+                Ok(Async::Ready(None)) => {
+                    let replicas = mem::replace(&mut self.replicas, Vec::new());
+                    return Err(replicas);
+                },
+                Ok(Async::Ready(Some(ListMastersResponse::Leader(addr, replicas)))) => {
+                    return Ok(Async::Ready((addr, replicas)));
+                },
+                Ok(Async::Ready(Some(ListMastersResponse::Replicas(addrs)))) => {
+                    for addr in addrs {
+                        if !self.replicas.contains(&addr) {
+                            self.replicas.push(addr);
+                            let stream = list_masters_with_retry(self.io.clone(),
+                                                                 addr,
+                                                                 Backoff::with_duration_range(10, 10000));
+                            self.list_masters.add(stream);
+                        }
+                    }
+                },
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(error) => unreachable!(),
+            }
+        }
     }
+}
+
+pub fn find_leader_master_with_retry(mut io: Io,
+                                     backoff: Backoff,
+                                     mut replicas: Vec<SocketAddr>)
+                                     -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=()> + Send> {
+    let timer = io.timer().clone();
+    Box::new(util::retry_with_backoff(timer, backoff, move |deadline, cause| {
+        match cause {
+            util::RetryCause::Initial => (),
+            util::RetryCause::TimedOut => trace!("FindLeaderMaster round timed out"),
+            util::RetryCause::Err(reps) => {
+                warn!("Unable to find a leader master among replicas {:?}", reps);
+                replicas = reps;
+            },
+        }
+        find_leader_master(io.clone(), replicas.clone())
+    }))
 }

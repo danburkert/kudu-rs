@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
+use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::{UNIX_EPOCH, SystemTime};
+use std::time::{UNIX_EPOCH, Instant, SystemTime};
 
 use chrono;
 use crossbeam::sync::SegQueue;
@@ -15,6 +16,7 @@ use slab::Slab;
 use tokio_timer;
 
 use DataType;
+use Error;
 use Row;
 use backoff::Backoff;
 
@@ -154,7 +156,7 @@ pub struct SelectStream<F> where F: Future {
 }
 
 impl <F> SelectStream<F> where F: Future {
-    fn add(&mut self, f: F) {
+    pub fn add(&mut self, f: F) {
         if !self.slab.has_available() {
             let len = self.slab.len();
             self.slab.reserve_exact(if len < 4 { 8 - len } else { len / 2 });
@@ -193,56 +195,6 @@ impl<F> Stream for SelectStream<F> where F: Future {
     }
 }
 
-#[derive(Debug)]
-pub struct MergeStream<S> where S: Stream {
-    slab: Slab<S>,
-    event_set: Arc<SegQueueEventSet>,
-}
-
-impl <S> MergeStream<S> where S: Stream {
-    fn add(&mut self, stream: S) {
-        if !self.slab.has_available() {
-            let len = self.slab.len();
-            self.slab.reserve_exact(if len < 4 { 8 - len } else { len / 2 });
-        }
-        let idx = match self.slab.insert(stream) {
-            Ok(idx) => idx,
-            _ => unreachable!(),
-        };
-        self.event_set.insert(idx);
-    }
-}
-
-impl<S> Stream for MergeStream<S> where S: Stream {
-    type Item = S::Item;
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.slab.is_empty() {
-            debug_assert!(self.event_set.0.try_pop().is_none());
-            return Ok(Async::Ready(None));
-        }
-        let MergeStream { ref mut slab, ref event_set } = *self;
-        while let Some(idx) = event_set.0.try_pop() {
-            let event = UnparkEvent::new(event_set.clone(), idx);
-            let mut entry = slab.entry(idx).unwrap();
-            let poll = with_unpark_event(event, || entry.get_mut().poll());
-            match poll {
-                Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
-                Ok(Async::Ready(None)) => { entry.remove(); },
-                Err(error) => return Err(error),
-            }
-        }
-        if slab.is_empty() {
-            debug_assert!(self.event_set.0.try_pop().is_none());
-            Ok(Async::Ready(None))
-        } else {
-            Ok(Async::NotReady)
-        }
-    }
-}
-
 /// Returns a stream which yields elements according to the backoff policy.
 pub fn backoff_stream(mut backoff: Backoff, timer: tokio_timer::Timer) -> BackoffStream {
     let sleep = timer.sleep(backoff.next_backoff());
@@ -269,46 +221,133 @@ impl Stream for BackoffStream {
     }
 }
 
-pub fn retry_with_backoff<F, R>(retry: R,
+pub fn retry_with_backoff<R, F>(timer: tokio_timer::Timer,
                                 mut backoff: Backoff,
-                                timer: tokio_timer::Timer)
-                                -> RetryWithBackoff
-where R: FnMut() -> F,
-      F: Future
+                                mut retry: R)
+                                -> RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
 {
-    let sleep = timer.sleep(backoff.next_backoff());
-    let f = retry();
+    let duration = backoff.next_backoff();
+    let future = retry(Instant::now() + duration, RetryCause::Initial);
+    let sleep = timer.sleep(duration);
     RetryWithBackoff {
-        backoff: Backoff,
+        backoff: backoff,
         timer: timer,
         sleep: sleep,
-        f: Some(f),
+        retry: retry,
+        try: Try::Future(future),
     }
 }
 
-struct RetryWithBackoff<R, F>
-where R: FnMut() -> F,
-      F: Future
+pub enum RetryCause<E> {
+    Initial,
+    TimedOut,
+    Err(E),
+}
+
+enum Try<F> where F: Future {
+    Future(F),
+    Err(F::Error),
+    None,
+}
+impl <F> Try<F> where F: Future {
+    fn take(&mut self) -> Result<F, F::Error> {
+        match mem::replace(self, Try::None) {
+            Try::Future(f) => Ok(f),
+            Try::Err(error) => Err(error),
+            Try::None => unreachable!(),
+        }
+    }
+}
+
+pub struct RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
 {
     backoff: Backoff,
     timer: tokio_timer::Timer,
     sleep: tokio_timer::Sleep,
-    f: Option<F>,
+    retry: R,
+    try: Try<F>,
 }
 
+impl <R, F> Future for RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
+{
+    type Item = F::Item;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<F::Item, ()> {
+        loop {
+            {
+                let poll = if let Try::Future(ref mut f) = self.try {
+                    f.poll()
+                } else {
+                    Ok(Async::NotReady)
+                };
+                match poll {
+                    Ok(Async::Ready(item)) => return Ok(Async::Ready(item)),
+                    Ok(Async::NotReady) => (),
+                    Err(error) => self.try = Try::Err(error),
+                }
+            }
+
+            // Unwrap here is unfortunate, but we really have no way to handle
+            // the timer being out of capacity.
+            match self.sleep.poll().unwrap() {
+                Async::Ready(()) => {
+                    let duration = self.backoff.next_backoff();
+
+                    let cause = match self.try.take() {
+                        Ok(_) => RetryCause::TimedOut,
+                        Err(error) => RetryCause::Err(error),
+                    };
+
+                    self.try = Try::Future((self.retry)(Instant::now() + duration, cause));
+                    self.sleep = self.timer.sleep(duration);
+                },
+                Async::NotReady => return Ok(Async::NotReady),
+            }
+        }
+    }
+}
+
+/*
 impl <R, F> Stream for RetryWithBackoff<R, F>
-where R: FnMut() -> F,
-      F: Future
+where R: FnMut(Instant, Option<Error>) -> F,
+      F: Future<Error=Error>,
 {
     type Item = F::Item;
     type Error = F::Error;
 
-    fn poll(&mut self) -> Poll<F::Item, F::Error> {
-        unimplemented!()
+    fn poll(&mut self) -> Poll<Option<F::Item>, F::Error> {
+        loop {
+            if let Some(ref mut f) = self.f {
+                if let Async::Ready(value) = f.poll()? {
+                    return Ok(Async::Ready(Some(value)));
+                }
+            }
+
+            // Unwrap here is unfortunate, but we really have no way to handle
+            // the timer being out of capacity.
+            match self.sleep.poll().unwrap() {
+                Async::Ready(()) => {
+                    let prev = self.f.take();
+                    let duration = self.backoff.next_backoff();
+                    self.f = Some((self.retry)(Instant::now() + duration));
+                    self.sleep = self.timer.sleep(duration);
+                    if prev.is_some() {
+                        return Err(Error::TimedOut);
+                    }
+                },
+                Async::NotReady => return Ok(Async::NotReady),
+            }
+        }
     }
 }
-
-
+*/
 
 #[derive(Debug)]
 struct SegQueueEventSet(SegQueue<usize>);
@@ -320,59 +359,6 @@ impl SegQueueEventSet {
 impl EventSet for SegQueueEventSet {
     fn insert(&self, id: usize) {
         self.0.push(id);
-    }
-}
-
-pub fn retry_with_backoff<F, G, E>(mut g: G,
-                                   e: E,
-                                   backoff: Backoff,
-                                   timer: tokio_timer::Timer)
-                                   -> RetryWithBackoff<F, G, E>
-where F: Future,
-      G: FnMut() -> F,
-      E: FnMut(F::Error) {
-    let backoff = backoff_stream(backoff, timer);
-    let f = g();
-    RetryWithBackoff {
-        g: g,
-        f: f,
-        e: e,
-        backoff: backoff,
-    }
-}
-
-pub struct RetryWithBackoff<F, G, E>
-where F: Future,
-      G: FnMut() -> F,
-      E: FnMut(F::Error),
-{
-    g: G,
-    f: F,
-    e: E,
-    backoff: BackoffStream,
-}
-
-impl <F, G, E> Future for RetryWithBackoff<F, G, E>
-where F: Future,
-      G: FnMut() -> F,
-      E: FnMut(F::Error),
-{
-    type Item = F::Item;
-    type Error = !;
-    fn poll(&mut self) -> Poll<F::Item, !> {
-        loop {
-            match self.f.poll() {
-                Ok(Async::Ready(value)) => return Ok(Async::Ready(value)),
-                Ok(Async::NotReady) => (),
-                Err(error) => (self.e)(error),
-            }
-            match self.backoff.poll() {
-                Ok(Async::Ready(Some(()))) => self.f = (self.g)(),
-                Ok(Async::Ready(None)) => panic!("backoff timer ended"),
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(()) => panic!("backoff timer failed"),
-            }
-        }
     }
 }
 

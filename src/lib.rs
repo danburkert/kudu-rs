@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-#![feature(conservative_impl_trait)]
-#![feature(never_type)]
 
 extern crate byteorder;
 extern crate chrono;
