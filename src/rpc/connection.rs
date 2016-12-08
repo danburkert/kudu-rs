@@ -553,7 +553,9 @@ impl Connection {
     fn poll_read_connected(&mut self) -> Poll<(), Error> {
         trace!("{:?}: poll_read_connected", self);
 
-        let body_len = try_ready!(self.poll_read_header());
+        let poll_read_header = self.poll_read_header();
+        trace!("{:?}: poll_read_header result: {:?}", self, poll_read_header);
+        let body_len = try_ready!(poll_read_header);
         let call_id = self.response_header.get_call_id() as usize;
         if self.response_header.get_is_error() {
             let error = RpcError::from(

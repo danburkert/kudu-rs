@@ -1,3 +1,4 @@
+#![feature(never_type)]
 #![allow(dead_code)]
 
 extern crate byteorder;
@@ -31,7 +32,7 @@ extern crate vec_map;
 #[macro_use] extern crate tokio_core as tokio;
 
 //mod client;
-//mod master;
+mod master;
 //mod meta_cache;
 //mod table;
 //mod tablet;

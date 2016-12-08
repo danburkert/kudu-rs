@@ -16,7 +16,6 @@ use slab::Slab;
 use tokio_timer;
 
 use DataType;
-use Error;
 use Row;
 use backoff::Backoff;
 
@@ -180,16 +179,17 @@ impl<F> Stream for SelectStream<F> where F: Future {
         }
         let SelectStream { ref mut slab, ref event_set } = *self;
         while let Some(idx) = event_set.0.try_pop() {
-            let event = UnparkEvent::new(event_set.clone(), idx);
-            let mut entry = slab.entry(idx).unwrap();
-            let poll = with_unpark_event(event, || entry.get_mut().poll());
-            let result = match poll {
-                Ok(Async::NotReady) => continue,
-                Ok(Async::Ready(item)) => Ok(Async::Ready(Some(item))),
-                Err(error) => Err(error),
-            };
-            entry.remove();
-            return result;
+            if let Some(mut entry) = slab.entry(idx) {
+                let event = UnparkEvent::new(event_set.clone(), idx);
+                let poll = with_unpark_event(event, || entry.get_mut().poll());
+                let result = match poll {
+                    Ok(Async::NotReady) => continue,
+                    Ok(Async::Ready(item)) => Ok(Async::Ready(Some(item))),
+                    Err(error) => Err(error),
+                };
+                entry.remove();
+                return result;
+            }
         }
         Ok(Async::NotReady)
     }
@@ -277,9 +277,9 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
 {
     type Item = F::Item;
-    type Error = ();
+    type Error = !;
 
-    fn poll(&mut self) -> Poll<F::Item, ()> {
+    fn poll(&mut self) -> Poll<F::Item, !> {
         loop {
             {
                 let poll = if let Try::Future(ref mut f) = self.try {
@@ -314,41 +314,6 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
     }
 }
 
-/*
-impl <R, F> Stream for RetryWithBackoff<R, F>
-where R: FnMut(Instant, Option<Error>) -> F,
-      F: Future<Error=Error>,
-{
-    type Item = F::Item;
-    type Error = F::Error;
-
-    fn poll(&mut self) -> Poll<Option<F::Item>, F::Error> {
-        loop {
-            if let Some(ref mut f) = self.f {
-                if let Async::Ready(value) = f.poll()? {
-                    return Ok(Async::Ready(Some(value)));
-                }
-            }
-
-            // Unwrap here is unfortunate, but we really have no way to handle
-            // the timer being out of capacity.
-            match self.sleep.poll().unwrap() {
-                Async::Ready(()) => {
-                    let prev = self.f.take();
-                    let duration = self.backoff.next_backoff();
-                    self.f = Some((self.retry)(Instant::now() + duration));
-                    self.sleep = self.timer.sleep(duration);
-                    if prev.is_some() {
-                        return Err(Error::TimedOut);
-                    }
-                },
-                Async::NotReady => return Ok(Async::NotReady),
-            }
-        }
-    }
-}
-*/
-
 #[derive(Debug)]
 struct SegQueueEventSet(SegQueue<usize>);
 impl SegQueueEventSet {
@@ -359,6 +324,69 @@ impl SegQueueEventSet {
 impl EventSet for SegQueueEventSet {
     fn insert(&self, id: usize) {
         self.0.push(id);
+    }
+}
+
+#[cfg(test)]
+pub use util::test_util::TestReactor;
+
+#[cfg(test)]
+mod test_util {
+
+    use std::sync::mpsc;
+    use std::thread;
+
+    use futures::sync::oneshot;
+    use tokio::reactor::{Core, Remote};
+
+    use io::Io;
+    use rpc::{ConnectionOptions, Messenger};
+
+    pub struct TestReactor {
+        pub io: Io,
+        shutdowns: Vec<oneshot::Sender<()>>,
+    }
+
+    pub fn spawn_core() -> (Remote, oneshot::Sender<()>) {
+        let (remote_send, remote_recv) = mpsc::channel();
+        let (send, recv) = oneshot::channel();
+
+        thread::spawn(move || {
+            let mut core = Core::new().unwrap();
+            remote_send.send(core.remote()).unwrap();
+            let _ = core.run(recv);
+        });
+
+        (remote_recv.recv().unwrap(), send)
+    }
+
+    impl TestReactor {
+
+        pub fn new(num_reactors: usize, options: ConnectionOptions) -> TestReactor {
+            let mut remotes = Vec::new();
+            let mut shutdowns = Vec::new();
+
+            for _ in 0..num_reactors {
+                let (remote, shutdown) = spawn_core();
+                remotes.push(remote);
+                shutdowns.push(shutdown);
+            }
+
+            TestReactor {
+                io: Io::new(Messenger::new(&remotes, options)),
+                shutdowns: shutdowns,
+            }
+        }
+
+        pub fn io(&self) -> &Io {
+            &self.io
+        }
+    }
+
+    impl Default for TestReactor {
+        fn default() -> TestReactor {
+            TestReactor::new(1, ConnectionOptions::default())
+        }
     }
 }
 

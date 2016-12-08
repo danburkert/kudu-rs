@@ -10,6 +10,7 @@ use futures::sync::oneshot;
 use protobuf::Message;
 
 pub use rpc::messenger::Messenger;
+pub use rpc::connection::ConnectionOptions;
 
 use Error;
 
@@ -96,7 +97,6 @@ pub struct Rpc {
 impl Rpc {
 
     pub fn future(&mut self) -> RpcFuture {
-        assert!(self.oneshot.is_none());
         let (send, recv) = oneshot::channel();
         self.oneshot = Some(send);
         RpcFuture {

@@ -9,7 +9,6 @@ use kudu_pb::master::{
     ListMastersResponsePB,
     ListMastersRequestPB,
 };
-use tokio_timer;
 
 use Error;
 use Result;
@@ -87,7 +86,7 @@ fn list_masters(io: &Io,
 
 fn list_masters_with_retry(mut io: Io,
                            addr: SocketAddr,
-                           backoff: Backoff) -> Box<Future<Item=ListMastersResponse, Error=()> + Send> {
+                           backoff: Backoff) -> Box<Future<Item=ListMastersResponse, Error=!> + Send> {
     let timer = io.timer().clone();
     util::retry_with_backoff(timer, backoff, move |deadline, cause| {
         match cause {
@@ -99,10 +98,11 @@ fn list_masters_with_retry(mut io: Io,
     }).boxed()
 }
 
-pub fn find_leader_master(mut io: Io, replicas: Vec<SocketAddr>) -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>),
-                                                                               Error=Vec<SocketAddr>> + Send> {
+pub fn find_leader_master(io: Io,
+                          replicas: Vec<SocketAddr>)
+                          -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=Vec<SocketAddr>> + Send> {
     let list_masters = util::select_stream(replicas.iter().cloned().map(|addr| {
-        list_masters_with_retry(io.clone(), addr, Backoff::with_duration_range(10, 10000))
+        list_masters_with_retry(io.clone(), addr, Backoff::with_duration_range(20, 10000))
     }));
 
     FindLeaderMaster {
@@ -115,7 +115,7 @@ pub fn find_leader_master(mut io: Io, replicas: Vec<SocketAddr>) -> Box<Future<I
 struct FindLeaderMaster {
     io: Io,
     replicas: Vec<SocketAddr>,
-    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=()> + Send>>,
+    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=!> + Send>>,
 }
 
 impl Future for FindLeaderMaster {
@@ -143,7 +143,7 @@ impl Future for FindLeaderMaster {
                     }
                 },
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(error) => unreachable!(),
+                Err(_) => unreachable!(),
             }
         }
     }
@@ -152,9 +152,9 @@ impl Future for FindLeaderMaster {
 pub fn find_leader_master_with_retry(mut io: Io,
                                      backoff: Backoff,
                                      mut replicas: Vec<SocketAddr>)
-                                     -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=()> + Send> {
+                                     -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=!> + Send> {
     let timer = io.timer().clone();
-    Box::new(util::retry_with_backoff(timer, backoff, move |deadline, cause| {
+    Box::new(util::retry_with_backoff(timer, backoff, move |_, cause| {
         match cause {
             util::RetryCause::Initial => (),
             util::RetryCause::TimedOut => trace!("FindLeaderMaster round timed out"),

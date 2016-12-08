@@ -13,7 +13,7 @@ pub struct Io {
 
 impl Io {
 
-    fn new(messenger: rpc::Messenger) -> Io {
+    pub fn new(messenger: rpc::Messenger) -> Io {
         Io {
             messenger: messenger,
             resolver: dns::Resolver::new(),

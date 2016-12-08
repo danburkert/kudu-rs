@@ -39,9 +39,9 @@ impl Messenger {
 
 impl Sink for Messenger {
     type SinkItem = Rpc;
-    type SinkError = ();
+    type SinkError = !;
 
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
+    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, !> {
         rpc.response.clear();
         debug_assert!(rpc.oneshot.is_some());
         info!("{:?}: start_send, rpc: {:?}", self, rpc);
@@ -67,7 +67,7 @@ impl Sink for Messenger {
         }).start_send(rpc).map_err(|_| panic!("connection dropped: {:?}", addr))
     }
 
-    fn poll_complete(&mut self) -> Poll<(), ()> {
+    fn poll_complete(&mut self) -> Poll<(), !> {
         Ok(Async::Ready(()))
     }
 }
@@ -84,16 +84,20 @@ impl fmt::Debug for Messenger {
 mod tests {
 
     use std::time::{Duration, Instant};
+    use std::iter;
 
     use env_logger;
-    use futures::{self, Sink};
+    use futures::{self, Future, Sink};
     use kudu_pb;
     use tokio::reactor::Core;
 
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use mini_cluster::{self, MiniCluster, MiniClusterConfig};
+    use rpc::RpcFuture;
     use rpc::connection::ConnectionOptions;
     use rpc::master;
     use super::*;
+    use util;
+    use Error;
 
     #[test]
     fn send_single() {
@@ -122,7 +126,6 @@ mod tests {
         result.unwrap();
     }
 
-    /*
     #[test]
     fn send_concurrent() {
         let _ = env_logger::init();
@@ -144,15 +147,14 @@ mod tests {
         }).collect();
         let oneshots: Vec<RpcFuture> = rpcs.iter_mut().map(|rpc| rpc.future()).collect();
 
-        let send = futures::lazy(move || messenger.send_all(futures::stream::iter::<_, Rpc, ()>(rpcs.into_iter().map(|rpc| Ok(rpc)))));
+        let send = futures::lazy(move || messenger.send_all(futures::stream::iter::<_, Rpc, !>(rpcs.into_iter().map(|rpc| Ok(rpc)))));
         let recv = futures::future::join_all(oneshots)
-                                    .map_err(|error| panic!("error: {:?}", error));
+                                   .map_err(|error| panic!("error: {:?}", error));
 
         let (_, results) = core.run(send.join(recv)).unwrap();
 
         assert_eq!(100, results.len());
     }
-    */
 
     /*
     #[test]
@@ -240,51 +242,58 @@ mod tests {
         assert!(elapsed > Duration::from_millis(75), "expected: 100ms, elapsed: {:?}", elapsed);
         assert!(elapsed < Duration::from_millis(125), "expected: 100ms, elapsed: {:?}", elapsed);
     }
+    */
 
     /// Tests that a connection will fail an RPC after a failure to connect.
     #[test]
     fn test_connection_error() {
         let _ = env_logger::init();
-        let messenger = Messenger::new().unwrap();
+        let mut core = Core::new().unwrap();
+        let mut messenger = Messenger::new(&[core.remote()], ConnectionOptions::default());
+        let mut rpc = master::ping(mini_cluster::get_unbound_address(),
+                                   Instant::now() + Duration::from_secs(5),
+                                   kudu_pb::master::PingRequestPB::new());
+        let oneshot = rpc.future();
 
-        let rpc = master::ping(mini_cluster::get_unbound_address(),
-                               Instant::now() + Duration::from_millis(100),
-                               kudu_pb::master::PingRequestPB::new());
+        let f = futures::lazy(move || {
+            assert!(messenger.start_send(rpc).unwrap().is_ready());
+            oneshot
+        });
 
-        let (result, _) = messenger.send_sync(rpc);
-        assert_eq!(Err(Error::ConnectionError), result);
+        let result = core.run(f);
+        result.unwrap();
     }
 
-    /// Tests that a connection will fail an RPC after a failure to connect.
+    /// Tests that a connection will fail an RPC after connecting to the server succesfully, and
+    /// the server becomes unreachable.
     #[test]
     fn connection_hangup() {
         let _ = env_logger::init();
+        let mut test_reactor = util::TestReactor::default();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_tservers(0)
                                                              .log_rpc_negotiation_trace(true)
                                                              .log_rpc_trace(true));
-        let messenger = Messenger::new().unwrap();
+
+        let messenger = test_reactor.io.messenger();
         let mut rpc = master::ping(cluster.master_addrs()[0],
                                    Instant::now() + Duration::from_secs(5),
                                    kudu_pb::master::PingRequestPB::new());
-
-        let (send, recv) = sync_channel::<(Result<()>, Rpc)>(0);
-        rpc.callback = Some(retry_channel_callback(messenger.clone(), send));
-        messenger.send(rpc);
-
-        let (result, _) = recv.recv().unwrap();
-
-        assert_eq!(Ok(()), result);
+        let oneshot = rpc.future();
+        messenger.send(rpc).wait();
+        oneshot.wait().unwrap();
 
         let master = cluster.master_addrs()[0];
+        info!("stopping master {}", master);
         cluster.stop_node(master);
 
-        let rpc = master::ping(cluster.master_addrs()[0],
-                               Instant::now() + Duration::from_secs(5),
-                               kudu_pb::master::PingRequestPB::new());
+        let mut rpc = master::ping(cluster.master_addrs()[0],
+                                   Instant::now() + Duration::from_secs(5),
+                                   kudu_pb::master::PingRequestPB::new());
+        let oneshot = rpc.future();
+        messenger.send(rpc).wait();
+        let error = oneshot.wait().unwrap_err();
 
-        let (result, _) = messenger.send_sync(rpc);
-        assert_eq!(Err(Error::ConnectionError), result);
+        assert_eq!(error.error, Error::ConnectionError);
     }
-    */
 }
