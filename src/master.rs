@@ -405,6 +405,7 @@ mod tests {
     fn master_cleanup() {
     }
 
+    /*
     /// Tests that RPCs are timed out when the leader is unavailable.
     #[test]
     fn timeout() {
@@ -432,6 +433,7 @@ mod tests {
         assert!(elapsed > Duration::from_millis(100), "expected: 100ms, elapsed: {:?}", elapsed);
         assert!(elapsed < Duration::from_millis(150), "expected: 100ms, elapsed: {:?}", elapsed);
     }
+    */
 
     /// Tests that the `MasterProxy` will discover and reroute RPCs to a new leader when the
     /// current leader becomes unreachable.

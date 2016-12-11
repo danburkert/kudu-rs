@@ -10,7 +10,7 @@ use std::time::{UNIX_EPOCH, Instant, SystemTime};
 use chrono;
 use crossbeam::sync::SegQueue;
 use futures::task::{EventSet, UnparkEvent, with_unpark_event};
-use futures::{Async, Future, IntoFuture, Poll, Stream};
+use futures::{Async, AsyncSink, Future, IntoFuture, Poll, Sink, Stream};
 use ifaces;
 use slab::Slab;
 use tokio_timer;
@@ -149,6 +149,7 @@ where I: IntoIterator,
 
 /// Stream which yields items from a collection of futures in completion order.
 #[derive(Debug)]
+#[must_use = "streams do nothing unless polled"]
 pub struct SelectStream<F> where F: Future {
     slab: Slab<F>,
     event_set: Arc<SegQueueEventSet>,
@@ -205,6 +206,7 @@ pub fn backoff_stream(mut backoff: Backoff, timer: tokio_timer::Timer) -> Backof
     }
 }
 /// Stream which yields elements according to a backoff policy.
+#[must_use = "streams do nothing unless polled"]
 pub struct BackoffStream {
     backoff: Backoff,
     timer: tokio_timer::Timer,
@@ -261,6 +263,7 @@ impl <F> Try<F> where F: Future {
     }
 }
 
+#[must_use = "futures do nothing unless polled"]
 pub struct RetryWithBackoff<R, F>
 where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
@@ -311,6 +314,137 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
                 Async::NotReady => return Ok(Async::NotReady),
             }
         }
+    }
+}
+
+fn forward<M, K>(stream: M, sink: K) -> Forward<M, K>
+where M: Stream<Error=()>,
+      K: Sink<SinkItem=M::Item, SinkError=()>
+{
+    Forward {
+        stream: stream,
+        sink: sink,
+        buffered: None,
+    }
+}
+
+/// Like `futures::Forward`, but does less.
+#[must_use = "futures do nothing unless polled"]
+pub struct Forward<M, K>
+where M: Stream<Error=()>,
+      K: Sink<SinkItem=M::Item, SinkError=()> {
+    stream: M,
+    sink: K,
+    buffered: Option<M::Item>,
+}
+
+impl<M, K> Forward<M, K>
+where M: Stream<Error=()>,
+      K: Sink<SinkItem=M::Item, SinkError=()>
+{
+    fn try_start_send(&mut self, item: M::Item) -> Poll<(), K::SinkError> {
+        debug_assert!(self.buffered.is_none());
+        if let AsyncSink::NotReady(item) = self.sink.start_send(item)? {
+            self.buffered = Some(item);
+            return Ok(Async::NotReady)
+        }
+        Ok(Async::Ready(()))
+    }
+}
+
+impl<M, K> Future for Forward<M, K>
+    where M: Stream<Error=()>,
+          K: Sink<SinkItem=M::Item, SinkError=()>
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), M::Error> {
+        // If we've got an item buffered already, we need to write it to the
+        // sink before we can do anything else
+        if let Some(item) = self.buffered.take() {
+            try_ready!(self.try_start_send(item))
+        }
+
+        loop {
+            match self.stream.poll()? {
+                Async::Ready(Some(item)) => try_ready!(self.try_start_send(item)),
+                Async::Ready(None) => {
+                    try_ready!(self.sink.poll_complete());
+                    return Ok(Async::Ready(()))
+                },
+                Async::NotReady => {
+                    try_ready!(self.sink.poll_complete());
+                    return Ok(Async::NotReady)
+                },
+            }
+        }
+    }
+}
+
+/// The status of a `tail_fn` loop.
+pub enum Tail<T, S> {
+    /// Indicates that the loop has completed with output `T`.
+    Done(T),
+
+    /// Indicates that the loop function should be called again with input
+    /// state `S`.
+    Loop(S),
+}
+
+/// TODO: remove once `futures::TailFn` is released.
+pub struct TailFn<A, F> {
+    future: A,
+    func: F,
+}
+
+/// TODO: use `futures::tail_fn` once it's released.
+pub fn tail_fn<S, T, I, A, F>(initial_state: S, mut func: F) -> TailFn<A, F>
+    where F: FnMut(S) -> I,
+          A: Future<Item = Tail<T, S>>,
+          I: IntoFuture<Future = A, Item = A::Item, Error = A::Error>
+{
+    TailFn {
+        future: func(initial_state).into_future(),
+        func: func,
+    }
+}
+
+impl<S, T, I, A, F> Future for TailFn<A, F>
+    where F: FnMut(S) -> I,
+          A: Future<Item = Tail<T, S>>,
+          I: IntoFuture<Future = A, Item = A::Item, Error = A::Error>
+{
+    type Item = T;
+    type Error = A::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            match try_ready!(self.future.poll()) {
+                Tail::Done(x) => return Ok(Async::Ready(x)),
+                Tail::Loop(s) => self.future = (self.func)(s).into_future(),
+            }
+        }
+    }
+}
+
+/// TODO: replace with `futures::PollFn`.
+#[must_use = "futures do nothing unless polled"]
+pub struct PollFn<F> {
+    inner: F,
+}
+
+/// TODO: replace with `futures::poll_fn`.
+pub fn poll_fn<T, E, F>(f: F) -> PollFn<F> where F: FnMut() -> Poll<T, E> {
+    PollFn { inner: f }
+}
+
+impl<T, E, F> Future for PollFn<F> where F: FnMut() -> Poll<T, E> {
+    type Item = T;
+    type Error = E;
+
+    fn poll(&mut self) -> Poll<T, E> {
+        (self.inner)()
     }
 }
 

@@ -9,13 +9,13 @@ use futures::{Async, Future, Poll};
 use futures::sync::oneshot;
 use protobuf::Message;
 
-pub use rpc::messenger::Messenger;
+//pub use rpc::messenger::Messenger;
 pub use rpc::connection::ConnectionOptions;
 
 use Error;
 
 mod connection;
-mod messenger;
+//mod messenger;
 pub mod master;
 pub mod tablet_server;
 
@@ -91,7 +91,6 @@ pub struct Rpc {
     pub response: Box<Message>,
     pub sidecars: Vec<Vec<u8>>,
     pub oneshot: Option<oneshot::Sender<RpcResult>>,
-    pub fail_fast: bool,
 }
 
 impl Rpc {
@@ -145,10 +144,6 @@ impl Rpc {
     /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
     pub fn timed_out(&self, now: Instant) -> bool {
         self.deadline <= now
-    }
-
-    pub fn fail_fast(&self) -> bool {
-        self.fail_fast
     }
 }
 

@@ -149,12 +149,8 @@ impl MetaCache {
         }
     }
 
-    pub fn entry<F>(&self,
-                    partition_key: Vec<u8>,
-                    deadline: Instant,
-                    cb: F)
-    where F: FnOnce(Result<Entry>) + Send + 'static {
-        self.extract(partition_key, deadline, backoff(), |entry| entry.clone(), cb);
+    pub fn poll_entry(&self, partition_key: <u8>) -> Poll<Entry, Error> {
+
     }
 
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {

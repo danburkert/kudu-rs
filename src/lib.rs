@@ -32,7 +32,7 @@ extern crate vec_map;
 #[macro_use] extern crate tokio_core as tokio;
 
 //mod client;
-mod master;
+//mod master;
 //mod meta_cache;
 //mod table;
 //mod tablet;
@@ -42,9 +42,8 @@ mod backoff;
 mod bit_set;
 mod dns;
 mod error;
-mod io;
+//mod io;
 mod key;
-mod master_new;
 mod partition;
 mod queue_map;
 mod row;
@@ -52,7 +51,7 @@ mod rpc;
 mod schema;
 mod util;
 mod value;
-mod list_masters;
+//mod list_masters;
 
 #[cfg(test)]
 mod mini_cluster;
