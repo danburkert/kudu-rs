@@ -6,12 +6,18 @@ use std::hash::{Hash, Hasher};
 
 use fnv::FnvHasher;
 use futures::sync::mpsc;
-use futures::{Async, Poll, Sink, StartSend};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use parking_lot::Mutex;
 use tokio::reactor::Remote;
 
+use Error;
 use rpc::Rpc;
-use rpc::connection::{Connection, ConnectionOptions};
+use rpc::connection::{
+    ConnectionOptions,
+    connect,
+    forward,
+};
+use util;
 
 #[derive(Clone)]
 pub struct Messenger {
@@ -44,11 +50,12 @@ impl Sink for Messenger {
     fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, !> {
         rpc.response.clear();
         debug_assert!(rpc.oneshot.is_some());
-        info!("{:?}: start_send, rpc: {:?}", self, rpc);
+        trace!("{:?}: start_send, rpc: {:?}", self, rpc);
 
         let addr = rpc.addr;
         let Inner { ref options, ref remotes, ref connections } = *self.inner;
-        connections.lock().entry(addr).or_insert_with(move || {
+        let mut connections = connections.lock();
+        let start_send = connections.entry(addr).or_insert_with(move || {
             let idx = if remotes.len() == 1 {
                 0
             } else {
@@ -59,12 +66,21 @@ impl Sink for Messenger {
 
             let options = options.clone();
             let (send, recv) = mpsc::channel(options.max_rpcs_in_flight as usize);
-            let cxn_send = send.clone();
+
             remotes[idx].spawn(move |handle| {
-                Connection::new(handle.clone(), addr, options, recv)
+                connect(&addr, handle, options)
+                    .map_err(move |error| warn!("unable to connect to {}: {}", addr, error))
+                    .and_then(move |connection| forward(recv, connection))
             });
-            cxn_send
-        }).start_send(rpc).map_err(|_| panic!("connection dropped: {:?}", addr))
+            send
+        }).start_send(rpc);
+        match start_send {
+            Ok(async_sink) => Ok(async_sink),
+            Err(..) => {
+                connections.remove(&addr);
+                Ok(AsyncSink::Ready)
+            },
+        }
     }
 
     fn poll_complete(&mut self) -> Poll<(), !> {

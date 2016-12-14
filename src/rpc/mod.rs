@@ -9,13 +9,13 @@ use futures::{Async, Future, Poll};
 use futures::sync::oneshot;
 use protobuf::Message;
 
-//pub use rpc::messenger::Messenger;
+pub use rpc::messenger::Messenger;
 pub use rpc::connection::ConnectionOptions;
 
 use Error;
 
 mod connection;
-//mod messenger;
+mod messenger;
 pub mod master;
 pub mod tablet_server;
 
@@ -38,6 +38,7 @@ impl fmt::Display for RpcError {
     }
 }
 
+#[must_use = "futures do nothing unless polled"]
 pub struct RpcFuture {
     inner: oneshot::Receiver<RpcResult>,
 }
@@ -81,6 +82,7 @@ impl Future for RpcFuture {
 /// fail-fast, it will be retried to the same destination until it either fails, or it times out.
 /// Fail-fast RPCs are useful for situations where the RPC could be retried against an alternate
 /// remote server.
+#[must_use = "rpcs must not be dropped"]
 pub struct Rpc {
     pub addr: SocketAddr,
     pub service_name: &'static str,
@@ -123,9 +125,9 @@ impl Rpc {
         self.response.as_any_mut().downcast_mut::<T>().unwrap()
     }
 
-    pub fn take_response<T>(self) -> T where T: Any {
-        *self.response.into_any().downcast::<T>().unwrap()
-    }
+    //pub fn take_response<T>(self) -> T where T: Any {
+        //*self.response.into_any().downcast::<T>().unwrap()
+    //}
 
     pub fn mut_response<T>(&mut self) -> &mut T where T: Any {
         self.response.as_any_mut().downcast_mut::<T>().unwrap()
@@ -145,6 +147,15 @@ impl Rpc {
     pub fn timed_out(&self, now: Instant) -> bool {
         self.deadline <= now
     }
+}
+
+impl Drop for Rpc {
+    fn drop(&mut self) {
+        if self.oneshot.is_some() {
+            panic!("dropping RPC: {:?}", self);
+        }
+    }
+
 }
 
 impl fmt::Debug for Rpc {

@@ -1,4 +1,4 @@
-#![feature(never_type)]
+#![feature(never_type, conservative_impl_trait)]
 #![allow(dead_code)]
 
 extern crate byteorder;
@@ -42,7 +42,7 @@ mod backoff;
 mod bit_set;
 mod dns;
 mod error;
-//mod io;
+mod io;
 mod key;
 mod partition;
 mod queue_map;

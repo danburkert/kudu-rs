@@ -317,71 +317,6 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
     }
 }
 
-fn forward<M, K>(stream: M, sink: K) -> Forward<M, K>
-where M: Stream<Error=()>,
-      K: Sink<SinkItem=M::Item, SinkError=()>
-{
-    Forward {
-        stream: stream,
-        sink: sink,
-        buffered: None,
-    }
-}
-
-/// Like `futures::Forward`, but does less.
-#[must_use = "futures do nothing unless polled"]
-pub struct Forward<M, K>
-where M: Stream<Error=()>,
-      K: Sink<SinkItem=M::Item, SinkError=()> {
-    stream: M,
-    sink: K,
-    buffered: Option<M::Item>,
-}
-
-impl<M, K> Forward<M, K>
-where M: Stream<Error=()>,
-      K: Sink<SinkItem=M::Item, SinkError=()>
-{
-    fn try_start_send(&mut self, item: M::Item) -> Poll<(), K::SinkError> {
-        debug_assert!(self.buffered.is_none());
-        if let AsyncSink::NotReady(item) = self.sink.start_send(item)? {
-            self.buffered = Some(item);
-            return Ok(Async::NotReady)
-        }
-        Ok(Async::Ready(()))
-    }
-}
-
-impl<M, K> Future for Forward<M, K>
-    where M: Stream<Error=()>,
-          K: Sink<SinkItem=M::Item, SinkError=()>
-{
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), M::Error> {
-        // If we've got an item buffered already, we need to write it to the
-        // sink before we can do anything else
-        if let Some(item) = self.buffered.take() {
-            try_ready!(self.try_start_send(item))
-        }
-
-        loop {
-            match self.stream.poll()? {
-                Async::Ready(Some(item)) => try_ready!(self.try_start_send(item)),
-                Async::Ready(None) => {
-                    try_ready!(self.sink.poll_complete());
-                    return Ok(Async::Ready(()))
-                },
-                Async::NotReady => {
-                    try_ready!(self.sink.poll_complete());
-                    return Ok(Async::NotReady)
-                },
-            }
-        }
-    }
-}
-
 /// The status of a `tail_fn` loop.
 pub enum Tail<T, S> {
     /// Indicates that the loop has completed with output `T`.
@@ -393,6 +328,7 @@ pub enum Tail<T, S> {
 }
 
 /// TODO: remove once `futures::TailFn` is released.
+#[must_use = "futures do nothing unless polled"]
 pub struct TailFn<A, F> {
     future: A,
     func: F,

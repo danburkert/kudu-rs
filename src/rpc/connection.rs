@@ -4,11 +4,12 @@ use std::collections::hash_map::Entry;
 use std::fmt;
 use std::io::Write;
 use std::mem;
-use std::net::SocketAddr;
+use std::net::{Shutdown, SocketAddr};
 use std::time::Instant;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-use futures::{Async, AsyncSink, BoxFuture, Future, Poll, Sink, StartSend};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::sync::mpsc;
 use kudu_pb::rpc_header::{self, SaslMessagePB_SaslState as SaslState};
 use netbuf::Buf;
 use protobuf::rt::ProtobufVarint;
@@ -40,6 +41,16 @@ pub struct ConnectionOptions {
     pub nodelay: bool,
 }
 
+impl Default for ConnectionOptions {
+    fn default() -> ConnectionOptions {
+        ConnectionOptions {
+            max_rpcs_in_flight: 32,
+            max_message_length: 5 * 1024 * 1024,
+            nodelay: true,
+        }
+    }
+}
+
 /// Writes the header and message to the buffer.
 ///
 /// Does not flush the buffer.
@@ -61,6 +72,7 @@ fn read_at_least(stream: &mut TcpStream, buf: &mut Buf, min: usize) -> Poll<(), 
     while received < min {
         let n = try_nb!(buf.read_from(stream));
         if n == 0 {
+            warn!("remote server hung up (read 0)");
             return Err(Error::ConnectionError);
         }
         received += n;
@@ -117,17 +129,18 @@ fn poll_flush(buf: &mut Buf, stream: &mut TcpStream) -> Poll<(), Error> {
     while !buf.is_empty() {
         let n = try_nb!(buf.write_to(stream));
         if n == 0 {
+            warn!("remote server hung up (write 0)");
             return Err(Error::ConnectionError);
         }
     }
     Ok(Async::Ready(()))
 }
 
-pub fn connect(addr: SocketAddr,
-               handle: Handle,
+pub fn connect(addr: &SocketAddr,
+               handle: &Handle,
                options: ConnectionOptions)
-               -> BoxFuture<Connection, Error> {
-    TcpStream::connect(&addr, &handle)
+               -> impl Future<Item=Connection, Error=Error> {
+    TcpStream::connect(&addr, handle)
               .map_err(Error::from)
               .and_then(move |stream| -> Result<Negotiate> {
                   stream.set_nodelay(options.nodelay)?;
@@ -147,7 +160,7 @@ pub fn connect(addr: SocketAddr,
                   };
                   connection.buffer_connection_context()?;
                   Ok(connection)
-              }).boxed()
+              })
 }
 
 pub struct Connection {
@@ -216,8 +229,8 @@ impl Connection {
     /// Returns:
     ///     * Ok(Async::NotReady) if a message is not ready to be read from the socket.
     ///     * Err(..) if a fatal error occurs. The caller should reset the connection.
-    fn poll_read(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: poll_read", self);
+    fn poll_recv(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_recv", self);
 
         loop {
             let (header, body) =
@@ -258,6 +271,15 @@ impl Connection {
         }
     }
 
+    fn shutdown(&mut self, error: Error) {
+        debug!("{:?}: shutting down: {:?}", self, error);
+        let _ = self.stream.shutdown(Shutdown::Both);
+
+        for (_, rpc) in self.recv_queue.drain() {
+            rpc.fail(error.clone());
+        }
+    }
+
     fn poll_flush(&mut self) -> Poll<(), Error> {
         poll_flush(&mut self.write_buf, &mut self.stream)
     }
@@ -265,18 +287,32 @@ impl Connection {
 
 impl Sink for Connection {
     type SinkItem = Rpc;
-    type SinkError = Error;
+    type SinkError = ();
 
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, Error> {
+    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
         trace!("{:?}: start_send", self);
 
+        // We have to be very careful not to drop the rpc prematurely on failure. This macro makes
+        // it easy to call a potentially failing method and automatically fail the RPC and
+        // shut down the connection on failure.
+        macro_rules! try_shutdown {
+            ($cxn:ident, $rpc:ident, $e:expr) => (match $e {
+                Ok(val) => val,
+                Err(error) => {
+                    $rpc.fail(error.clone());
+                    $cxn.shutdown(error);
+                    return Err(())
+                }
+            })
+        }
+
         // Attempt to clear out the recv_queue before sending.
-        self.poll_read()?;
+        try_shutdown!(self, rpc, self.poll_recv());
 
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then stop sending messages until the buffer clears.
         if self.write_buf.len() > 8 * 1024 {
-            self.poll_flush()?;
+            try_shutdown!(self, rpc, self.poll_flush());
             if self.write_buf.len() > 8 * 1024 {
                 return Ok(AsyncSink::NotReady(rpc));
             }
@@ -286,7 +322,7 @@ impl Sink for Connection {
         if self.recv_queue.len() >= self.throttle as usize {
             // Flush to avoid a situation where the connection is throttled due to buffered
             // messages.
-            self.poll_flush()?;
+            try_shutdown!(self, rpc, self.poll_flush());
             return Ok(AsyncSink::NotReady(rpc));
         }
 
@@ -298,7 +334,7 @@ impl Sink for Connection {
             trace!("{:?}: timing out {:?}", self, rpc);
             rpc.fail(Error::TimedOut);
         } else {
-            let call_id = self.next_call_id()?;
+            let call_id = try_shutdown!(self, rpc, self.next_call_id());
             let mut header = rpc_header::RequestHeader::new();
             header.set_call_id(call_id);
             header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
@@ -307,20 +343,21 @@ impl Sink for Connection {
             header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
 
             trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
-            buffer_message(&header, &*rpc.request, &mut self.write_buf)?;
+            try_shutdown!(self, rpc, buffer_message(&header, &*rpc.request, &mut self.write_buf));
             self.recv_queue.insert(call_id as usize, rpc);
         }
 
         // Attempt to send buffered RPCs.
-        self.poll_flush()?;
+        self.poll_flush().map_err(|error| self.shutdown(error))?;
 
         Ok(AsyncSink::Ready)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Error> {
+    fn poll_complete(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll_complete", self);
-        self.poll_flush()?;
-        self.poll_read()?;
+        self.poll_flush()
+            .and_then(|_| self.poll_recv())
+            .map_err(|error| self.shutdown(error))?;
 
         if self.recv_queue.is_empty() {
             Ok(Async::Ready(()))
@@ -405,7 +442,7 @@ impl Negotiate {
     /// Reads a negotiation message from the socket.
     ///
     /// If an error is returned, the connection should be torn down.
-    fn poll_read(&mut self) -> Poll<rpc_header::SaslMessagePB, Error> {
+    fn poll_recv(&mut self) -> Poll<rpc_header::SaslMessagePB, Error> {
         let (header, body) = try_ready!(poll_read_message(&self.options,
                                                           self.stream.as_mut().unwrap(),
                                                           &mut self.buf));
@@ -443,12 +480,13 @@ impl Future for Negotiate {
     type Item = (ConnectionOptions, TcpStream);
     type Error = Error;
     fn poll(&mut self) -> Poll<(ConnectionOptions, TcpStream), Error> {
+        trace!("{:?}: poll", self);
         loop {
             // Flush buffered negotiation messages.
             try_ready!(poll_flush(&mut self.buf, self.stream.as_mut().unwrap()));
 
             // Read and handle the negotiation response message.
-            let msg = try_ready!(self.poll_read());
+            let msg = try_ready!(self.poll_recv());
             match msg.get_state() {
                 SaslState::NEGOTIATE => {
                     if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
@@ -472,6 +510,81 @@ impl fmt::Debug for Negotiate {
         match self.stream.as_ref().unwrap().peer_addr() {
             Ok(addr) => write!(f, "Negotiate {{ addr: {}, buf: {} }}", addr, self.buf.len()),
             Err(error) => write!(f, "Negotiate {{ addr: {}, buf: {} }}", error, self.buf.len()),
+        }
+    }
+}
+
+
+pub fn forward(channel: mpsc::Receiver<Rpc>, connection: Connection) -> Forward {
+    Forward {
+        channel: channel,
+        connection: connection,
+        buffered: None,
+    }
+}
+
+/// Like `futures::Forward`, but specific to an mpsc channel of RPCs forwarding to a connection.
+#[must_use = "futures do nothing unless polled"]
+pub struct Forward {
+    channel: mpsc::Receiver<Rpc>,
+    connection: Connection,
+    buffered: Option<Rpc>,
+}
+
+impl Forward {
+    fn try_start_send(&mut self, rpc: Rpc) -> Poll<(), ()> {
+        debug_assert!(self.buffered.is_none());
+        if let AsyncSink::NotReady(rpc) = self.connection.start_send(rpc)? {
+            self.buffered = Some(rpc);
+            return Ok(Async::NotReady)
+        }
+        Ok(Async::Ready(()))
+    }
+
+    fn shutdown(&mut self, error: &Error) {
+        trace!("shutting down {:?}", self.connection);
+        self.channel.close();
+        while let Ok(Async::Ready(Some(rpc))) = self.channel.poll() {
+            rpc.fail(error.clone())
+        }
+    }
+}
+
+impl Future for Forward {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        // On failure, we need to shutdown and clear the queued RPCs.
+        macro_rules! try_ready_shutdown {
+            ($e:expr) => (match $e {
+                Ok($crate::Async::Ready(t)) => t,
+                Ok($crate::Async::NotReady) => return Ok($crate::Async::NotReady),
+                Err(e) => {
+                    self.shutdown(&e);
+                    return Err(From::from(e))
+                },
+            })
+        }
+
+        // If we've got an RPC buffered already, we need to send it to the
+        // connection before we can do anything else
+        if let Some(rpc) = self.buffered.take() {
+            try_ready!(self.try_start_send(rpc))
+        }
+
+        loop {
+            match self.channel.poll()? {
+                Async::Ready(Some(rpc)) => try_ready!(self.try_start_send(rpc)),
+                Async::Ready(None) => {
+                    try_ready!(self.connection.poll_complete());
+                    return Ok(Async::Ready(()))
+                },
+                Async::NotReady => {
+                    try_ready!(self.connection.poll_complete());
+                    return Ok(Async::NotReady)
+                },
+            }
         }
     }
 }
