@@ -14,6 +14,7 @@ use Error;
 use rpc::Rpc;
 use rpc::connection::{
     ConnectionOptions,
+    RpcReceiver,
     connect,
     forward,
 };
@@ -68,9 +69,10 @@ impl Sink for Messenger {
             let (send, recv) = mpsc::channel(options.max_rpcs_in_flight as usize);
 
             remotes[idx].spawn(move |handle| {
+                let receiver = RpcReceiver { receiver: recv };
                 connect(&addr, handle, options)
                     .map_err(move |error| warn!("unable to connect to {}: {}", addr, error))
-                    .and_then(move |connection| forward(recv, connection))
+                    .and_then(move |connection| forward(receiver, connection))
             });
             send
         }).start_send(rpc);
@@ -277,7 +279,7 @@ mod tests {
         });
 
         let result = core.run(f);
-        result.unwrap();
+        assert!(result.is_err());
     }
 
     /// Tests that a connection will fail an RPC after connecting to the server succesfully, and

@@ -515,7 +515,7 @@ impl fmt::Debug for Negotiate {
 }
 
 
-pub fn forward(channel: mpsc::Receiver<Rpc>, connection: Connection) -> Forward {
+pub fn forward(channel: RpcReceiver, connection: Connection) -> Forward {
     Forward {
         channel: channel,
         connection: connection,
@@ -526,7 +526,7 @@ pub fn forward(channel: mpsc::Receiver<Rpc>, connection: Connection) -> Forward 
 /// Like `futures::Forward`, but specific to an mpsc channel of RPCs forwarding to a connection.
 #[must_use = "futures do nothing unless polled"]
 pub struct Forward {
-    channel: mpsc::Receiver<Rpc>,
+    channel: RpcReceiver,
     connection: Connection,
     buffered: Option<Rpc>,
 }
@@ -539,14 +539,6 @@ impl Forward {
             return Ok(Async::NotReady)
         }
         Ok(Async::Ready(()))
-    }
-
-    fn shutdown(&mut self, error: &Error) {
-        trace!("shutting down {:?}", self.connection);
-        self.channel.close();
-        while let Ok(Async::Ready(Some(rpc))) = self.channel.poll() {
-            rpc.fail(error.clone())
-        }
     }
 }
 
@@ -585,6 +577,28 @@ impl Future for Forward {
                     return Ok(Async::NotReady)
                 },
             }
+        }
+    }
+}
+
+pub struct RpcReceiver {
+    pub receiver: mpsc::Receiver<Rpc>,
+}
+
+impl Stream for RpcReceiver {
+    type Item = Rpc;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Rpc>, ()> {
+        self.receiver.poll()
+    }
+}
+
+impl Drop for RpcReceiver {
+    fn drop(&mut self) {
+        self.receiver.close();
+        while let Ok(Async::Ready(Some(rpc))) = self.receiver.poll() {
+            rpc.fail(Error::ConnectionError)
         }
     }
 }
