@@ -8,14 +8,14 @@ use std::net::{Shutdown, SocketAddr};
 use std::time::Instant;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::{IntoFuture, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use futures::sync::mpsc;
 use kudu_pb::rpc_header::{self, SaslMessagePB_SaslState as SaslState};
 use netbuf::Buf;
 use protobuf::rt::ProtobufVarint;
 use protobuf::{parse_length_delimited_from_bytes, Clear, CodedInputStream, Message};
 use tokio::net::TcpStream;
-use tokio::reactor::Handle;
+use tokio::reactor::{Remote, Handle};
 
 use Error;
 use Result;
@@ -136,33 +136,6 @@ fn poll_flush(buf: &mut Buf, stream: &mut TcpStream) -> Poll<(), Error> {
     Ok(Async::Ready(()))
 }
 
-pub fn connect(addr: &SocketAddr,
-               handle: &Handle,
-               options: ConnectionOptions)
-               -> impl Future<Item=Connection, Error=Error> {
-    TcpStream::connect(&addr, handle)
-              .map_err(Error::from)
-              .and_then(move |stream| -> Result<Negotiate> {
-                  stream.set_nodelay(options.nodelay)?;
-                  negotiate(options, stream)
-              })
-              .flatten()
-              .and_then(|(options, stream)| -> Result<Connection> {
-                  let throttle = options.max_rpcs_in_flight;
-                  let mut connection = Connection {
-                      options: options,
-                      recv_queue: HashMap::new(),
-                      stream: stream,
-                      read_buf: Buf::new(),
-                      write_buf: Buf::new(),
-                      throttle: throttle,
-                      next_call_id: 0,
-                  };
-                  connection.buffer_connection_context()?;
-                  Ok(connection)
-              })
-}
-
 pub struct Connection {
     /// The connection options.
     options: ConnectionOptions,
@@ -187,6 +160,41 @@ pub struct Connection {
 }
 
 impl Connection {
+
+    pub fn spawn<F, R>(reactor: &Remote, addr: SocketAddr, options: ConnectionOptions, f: F)
+    where F: FnOnce(Result<Connection>) -> R + Send + 'static,
+          R: IntoFuture<Item=(), Error=()> + 'static,
+          R::Future: 'static
+    {
+        reactor.spawn(move |handle| Connection::new(&addr, handle, options).then(f))
+    }
+
+    pub fn new(addr: &SocketAddr,
+               handle: &Handle,
+               options: ConnectionOptions)
+               -> Box<Future<Item=Connection, Error=Error> + Send> {
+        TcpStream::connect(addr, handle)
+                  .map_err(Error::from)
+                  .and_then(move |stream| -> Result<Negotiate> {
+                      stream.set_nodelay(options.nodelay)?;
+                      negotiate(options, stream)
+                  })
+                  .flatten()
+                  .and_then(|(options, stream)| -> Result<Connection> {
+                      let throttle = options.max_rpcs_in_flight;
+                      let mut connection = Connection {
+                          options: options,
+                          recv_queue: HashMap::new(),
+                          stream: stream,
+                          read_buf: Buf::new(),
+                          write_buf: Buf::new(),
+                          throttle: throttle,
+                          next_call_id: 0,
+                      };
+                      connection.buffer_connection_context()?;
+                      Ok(connection)
+                  }).boxed()
+    }
 
     pub fn throttle(&mut self) {
         self.throttle = cmp::min(self.throttle, self.options.max_rpcs_in_flight) / 2;
@@ -271,7 +279,7 @@ impl Connection {
         }
     }
 
-    fn shutdown(&mut self, error: Error) {
+    fn shutdown(&mut self, error: &Error) {
         debug!("{:?}: shutting down: {:?}", self, error);
         let _ = self.stream.shutdown(Shutdown::Both);
 
@@ -287,9 +295,9 @@ impl Connection {
 
 impl Sink for Connection {
     type SinkItem = Rpc;
-    type SinkError = ();
+    type SinkError = Error;
 
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, ()> {
+    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, Error> {
         trace!("{:?}: start_send", self);
 
         // We have to be very careful not to drop the rpc prematurely on failure. This macro makes
@@ -300,8 +308,8 @@ impl Sink for Connection {
                 Ok(val) => val,
                 Err(error) => {
                     $rpc.fail(error.clone());
-                    $cxn.shutdown(error);
-                    return Err(())
+                    $cxn.shutdown(&error);
+                    return Err(error);
                 }
             })
         }
@@ -348,16 +356,20 @@ impl Sink for Connection {
         }
 
         // Attempt to send buffered RPCs.
-        self.poll_flush().map_err(|error| self.shutdown(error))?;
+        if let Err(error) = self.poll_flush() {
+            self.shutdown(&error);
+            return Err(error);
+        }
 
         Ok(AsyncSink::Ready)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), ()> {
+    fn poll_complete(&mut self) -> Poll<(), Error> {
         trace!("{:?}: poll_complete", self);
-        self.poll_flush()
-            .and_then(|_| self.poll_recv())
-            .map_err(|error| self.shutdown(error))?;
+        if let Err(error) = self.poll_flush().and_then(|_| self.poll_recv()) {
+            self.shutdown(&error);
+            return Err(error)
+        }
 
         if self.recv_queue.is_empty() {
             Ok(Async::Ready(()))
@@ -534,7 +546,10 @@ pub struct Forward {
 impl Forward {
     fn try_start_send(&mut self, rpc: Rpc) -> Poll<(), ()> {
         debug_assert!(self.buffered.is_none());
-        if let AsyncSink::NotReady(rpc) = self.connection.start_send(rpc)? {
+        let start_send = self.connection.start_send(rpc).map_err(|error| {
+            trace!("{:?}: forward error: {:?}", self.connection, error)
+        })?;
+        if let AsyncSink::NotReady(rpc) = start_send {
             self.buffered = Some(rpc);
             return Ok(Async::NotReady)
         }
@@ -547,18 +562,6 @@ impl Future for Forward {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
-        // On failure, we need to shutdown and clear the queued RPCs.
-        macro_rules! try_ready_shutdown {
-            ($e:expr) => (match $e {
-                Ok($crate::Async::Ready(t)) => t,
-                Ok($crate::Async::NotReady) => return Ok($crate::Async::NotReady),
-                Err(e) => {
-                    self.shutdown(&e);
-                    return Err(From::from(e))
-                },
-            })
-        }
-
         // If we've got an RPC buffered already, we need to send it to the
         // connection before we can do anything else
         if let Some(rpc) = self.buffered.take() {
@@ -569,11 +572,15 @@ impl Future for Forward {
             match self.channel.poll()? {
                 Async::Ready(Some(rpc)) => try_ready!(self.try_start_send(rpc)),
                 Async::Ready(None) => {
-                    try_ready!(self.connection.poll_complete());
+                    try_ready!(self.connection.poll_complete().map_err(|error| {
+                        trace!("{:?}: forward error: {:?}", self.connection, error)
+                    }));
                     return Ok(Async::Ready(()))
                 },
                 Async::NotReady => {
-                    try_ready!(self.connection.poll_complete());
+                    try_ready!(self.connection.poll_complete().map_err(|error| {
+                        trace!("{:?}: forward error: {:?}", self.connection, error)
+                    }));
                     return Ok(Async::NotReady)
                 },
             }

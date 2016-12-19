@@ -6,19 +6,17 @@ use std::hash::{Hash, Hasher};
 
 use fnv::FnvHasher;
 use futures::sync::mpsc;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend};
 use parking_lot::Mutex;
 use tokio::reactor::Remote;
 
-use Error;
 use rpc::Rpc;
 use rpc::connection::{
+    Connection,
     ConnectionOptions,
     RpcReceiver,
-    connect,
     forward,
 };
-use util;
 
 #[derive(Clone)]
 pub struct Messenger {
@@ -70,7 +68,8 @@ impl Sink for Messenger {
 
             remotes[idx].spawn(move |handle| {
                 let receiver = RpcReceiver { receiver: recv };
-                connect(&addr, handle, options)
+                // TODO: convert to spawn
+                Connection::new(&addr, handle, options)
                     .map_err(move |error| warn!("unable to connect to {}: {}", addr, error))
                     .and_then(move |connection| forward(receiver, connection))
             });

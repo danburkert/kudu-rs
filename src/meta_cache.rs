@@ -149,8 +149,8 @@ impl MetaCache {
         }
     }
 
-    pub fn poll_entry(&self, partition_key: <u8>) -> Poll<Entry, Error> {
-
+    pub fn poll_entry(&self, partition_key: &[u8]) -> Poll<Entry, Error> {
+        unimplemented!()
     }
 
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {

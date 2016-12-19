@@ -11,6 +11,7 @@ use protobuf::Message;
 
 pub use rpc::messenger::Messenger;
 pub use rpc::connection::ConnectionOptions;
+pub use rpc::connection::Connection;
 
 use Error;
 
@@ -125,9 +126,9 @@ impl Rpc {
         self.response.as_any_mut().downcast_mut::<T>().unwrap()
     }
 
-    //pub fn take_response<T>(self) -> T where T: Any {
-        //*self.response.into_any().downcast::<T>().unwrap()
-    //}
+    pub fn take_response<T>(self) -> T where T: Any {
+        *self.response.into_any().downcast::<T>().unwrap()
+    }
 
     pub fn mut_response<T>(&mut self) -> &mut T where T: Any {
         self.response.as_any_mut().downcast_mut::<T>().unwrap()
@@ -147,15 +148,6 @@ impl Rpc {
     pub fn timed_out(&self, now: Instant) -> bool {
         self.deadline <= now
     }
-}
-
-impl Drop for Rpc {
-    fn drop(&mut self) {
-        if self.oneshot.is_some() {
-            panic!("dropping RPC: {:?}", self);
-        }
-    }
-
 }
 
 impl fmt::Debug for Rpc {

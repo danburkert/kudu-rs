@@ -10,6 +10,7 @@ use Schema;
 use TabletId;
 use TabletServerId;
 use dns;
+use util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tablet {
@@ -97,7 +98,7 @@ impl Replica {
         }
         let resolved_rpc_addrs = dns::resolve_hostports(&rpc_addrs);
         let role = RaftRole::from_pb(pb.get_role());
-        let is_local = resolved_rpc_addrs.iter().any(|addr| dns::is_local_addr(&addr.ip()));
+        let is_local = resolved_rpc_addrs.iter().any(|addr| util::is_local_addr(&addr.ip()));
         Ok(Replica {
             id: id,
             rpc_addrs: rpc_addrs,

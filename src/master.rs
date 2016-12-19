@@ -24,7 +24,7 @@ use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
 
 use backoff::Backoff;
 use io::Io;
-use list_masters::find_leader_master_with_retry;
+use list_masters::find_leader_master;
 use protobuf::Message;
 use rpc::{
     Rpc,
@@ -80,9 +80,9 @@ impl MasterProxy {
     /// instance to handle scheduling and sending RPCs.
     pub fn new(replicas: Vec<SocketAddr>, io: Io) -> MasterProxy {
         assert!(replicas.len() > 0);
-        let find_leader = find_leader_master_with_retry(io.clone(),
-                                                        Backoff::with_duration_range(1_000, 60_000),
-                                                        replicas);
+        let find_leader = find_leader_master(io.clone(),
+                                             Backoff::with_duration_range(1_000, 60_000),
+                                             replicas);
         MasterProxy {
             leader: Arc::new(Mutex::new(Leader::Unknown(find_leader))),
             io: io,
@@ -130,9 +130,7 @@ impl MasterProxy {
         let future = match *lock {
             Leader::Known(leader, ref mut replicas) if leader == stale_leader => {
                 let replicas = mem::replace(replicas, Vec::new());
-                find_leader_master_with_retry(self.io.clone(),
-                                              Backoff::with_duration_range(1_000, 60_000),
-                                              replicas)
+                find_leader_master(self.io.clone(), Backoff::with_duration_range(1_000, 60_000), replicas)
             },
             _ => return,
         };
@@ -197,7 +195,7 @@ impl <Resp> Future for MasterProxyFuture<Resp> where Resp: MasterResponse {
                 let mut rpc = self.rpc.take().unwrap();
                 rpc.addr = leader;
 
-                if let AsyncSink::NotReady(rpc) = self.proxy.io.messenger().start_send(rpc).unwrap() {
+                if let AsyncSink::NotReady(rpc) = self.proxy.io.messenger.start_send(rpc).unwrap() {
                     self.rpc = Some(rpc);
                     return Ok(Async::NotReady);
                 }
@@ -208,16 +206,16 @@ impl <Resp> Future for MasterProxyFuture<Resp> where Resp: MasterResponse {
                 Ok(Async::Ready(mut rpc)) => match rpc.mut_response::<Resp>().error() {
                     Some(ref error) if error.code() == MasterErrorCode::NotTheLeader ||
                                        error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
+                        // When the master is not the leader, reset the cache and resend.
                         self.proxy.reset_leader(rpc.addr);
                         self.future = rpc.future();
                         self.rpc = Some(rpc);
-                        // Loop.
                     },
                     Some(error) => return Err(Error::from(MasterError::from(error))),
                     None => return Ok(Async::Ready(rpc.take_response::<Resp>())),
                 },
                 Err(RpcError { mut rpc, error }) => if error.is_network_error() {
-                    // On connection error, reset the leader cache and resend.
+                    // On connection error, reset the cache and resend.
                     self.proxy.reset_leader(rpc.addr);
                     self.future = rpc.future();
                     self.rpc = Some(rpc);

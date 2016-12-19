@@ -60,6 +60,7 @@ pub enum Error {
     Cancelled,
 
     /// The connection encountered an error or hangup.
+    // TODO: split into ConnectionReset and ConnectionHangup
     ConnectionError,
 
     NegotiationError(&'static str),
@@ -69,6 +70,8 @@ pub enum Error {
 }
 
 impl Error {
+    // TODO: change to should retry:
+    // Retry on ConnectionHangup, and ServerTooBusy
     pub fn is_network_error(&self) -> bool {
         match *self {
             Error::Io(_) | Error::ConnectionError => true,
