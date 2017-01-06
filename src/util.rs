@@ -10,7 +10,7 @@ use std::time::{UNIX_EPOCH, Instant, SystemTime};
 use chrono;
 use crossbeam::sync::SegQueue;
 use futures::task::{EventSet, UnparkEvent, with_unpark_event};
-use futures::{Async, AsyncSink, Future, IntoFuture, Poll, Sink, Stream};
+use futures::{Async, Future, IntoFuture, Poll, Stream};
 use ifaces;
 use slab::Slab;
 use tokio_timer;
@@ -394,6 +394,42 @@ impl SegQueueEventSet {
 impl EventSet for SegQueueEventSet {
     fn insert(&self, id: usize) {
         self.0.push(id);
+    }
+}
+
+
+#[must_use = "futures do nothing unless polled"]
+pub struct Find<S, P> {
+    stream: S,
+    pred: P,
+}
+
+pub fn find<S, P>(stream: S, predicate: P) -> Find<S, P>
+where S: Stream,
+      P: FnMut(&S::Item) -> bool
+{
+    Find {
+        stream: stream,
+        pred: predicate,
+    }
+}
+
+impl<S, P> Future for Find<S, P>
+where S: Stream,
+      P: FnMut(&S::Item) -> bool
+{
+    type Item = Option<S::Item>;
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Option<S::Item>, Self::Error> {
+        loop {
+            match try_ready!(self.stream.poll()) {
+                Some(item) => if (self.pred)(&item) {
+                    return Ok(Async::Ready(Some(item)))
+                },
+                None => return Ok(Async::Ready(None)),
+            }
+        }
     }
 }
 

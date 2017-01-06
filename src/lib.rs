@@ -33,16 +33,17 @@ extern crate vec_map;
 
 //mod client;
 //mod master;
+mod master2;
 //mod meta_cache;
 //mod table;
-mod tablet;
+//mod tablet;
 //mod tablet_server;
 //mod writer;
 mod backoff;
 mod bit_set;
 mod dns;
 mod error;
-mod io;
+//mod io;
 mod key;
 mod partition;
 mod queue_map;
@@ -69,7 +70,10 @@ pub use value::Value;
 //pub use writer::*;
 
 use std::fmt;
+use std::io;
+use std::net;
 use std::str;
+use std::vec;
 
 use uuid::Uuid;
 
@@ -300,6 +304,27 @@ impl RaftRole {
             kudu_pb::consensus_metadata::RaftPeerPB_Role::LEARNER => RaftRole::Learner,
             kudu_pb::consensus_metadata::RaftPeerPB_Role::NON_PARTICIPANT => RaftRole::NonParticipant,
         }
+    }
+}
+
+pub struct HostPort {
+    pub host: String,
+    pub port: u16,
+}
+
+impl HostPort {
+    pub fn from_pb(mut pb: kudu_pb::common::HostPortPB) -> HostPort {
+        HostPort {
+            host: pb.take_host(),
+            port: pb.get_port() as u16,
+        }
+    }
+}
+
+impl net::ToSocketAddrs for HostPort {
+    type Iter = vec::IntoIter<net::SocketAddr>;
+    fn to_socket_addrs(&self) -> io::Result<std::vec::IntoIter<net::SocketAddr>> {
+        (&self.host[..], self.port).to_socket_addrs()
     }
 }
 

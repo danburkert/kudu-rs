@@ -2,9 +2,11 @@ use std::mem;
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use futures::{Async, Future, Poll, Sink, Stream};
+use futures::stream::futures_unordered;
 use futures::future::join_all;
+use futures::{Async, Future, Poll, Sink, Stream};
 use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
+use kudu_pb::wire_protocol::ServerEntryPB;
 use kudu_pb::master::{
     ListMastersResponsePB,
     ListMastersRequestPB,
@@ -15,15 +17,21 @@ use tokio_timer;
 use Error;
 use Result;
 use backoff::Backoff;
-use error::{MasterError, MasterErrorCode};
-use rpc::master;
-use util;
 use dns::Resolver;
+use error::{MasterError, MasterErrorCode};
 use rpc::Connection;
 use rpc::ConnectionOptions;
+use rpc::master;
+use util;
+use rpc::Rpc;
 
 pub enum ListMastersResponse {
-    Leader(SocketAddr, Vec<SocketAddr>),
+
+    /// The connection to the discovered leader master, along with the full set of replica
+    /// addresses (including the leader).
+    Leader(Connection, Vec<SocketAddr>),
+
+    /// The discovered set of the replica addresses.
     Replicas(Vec<SocketAddr>),
 }
 
@@ -31,58 +39,67 @@ fn list_masters(handle: &Handle,
                 resolver: Resolver,
                 addr: SocketAddr,
                 deadline: Instant)
-                -> Box<Future<Item=ListMastersResponse, Error=Error>> {
+                -> impl Future<Item=ListMastersResponse, Error=Error> + 'static {
     let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
-    let future = rpc.future();
+    let future = rpc.future().map_err(|error| error.error);
     Box::new(Connection::new(&addr, handle, ConnectionOptions::default())
-               .and_then(|connection| connection.send(rpc))
-               .then(move |_| future)
-               .map_err(|error| error.error)
-               .then(|rpc| -> Result<ListMastersResponsePB> {
-                   // Transform the RPC into a ListMastersResponsePB.
-                   let mut response = rpc?.take_response::<ListMastersResponsePB>();
-                   if response.has_error() {
-                       // This can happen when the master is not yet initialized, e.g.:
-                       // code: CATALOG_MANAGER_NOT_INITIALIZED
-                       // status {code: SERVICE_UNAVAILABLE message: "catalog manager has not been initialized"}
-                       return Err(Error::Master(MasterError::new(MasterErrorCode::UnknownError,
-                                                               response.take_error().into())));
-                   }
-                   Ok(response)
-               })
-               .map(move |mut response| {
-                   // Transform the ListMastersResponsePB into an iterator of futures containing the
-                   // role and resolved addresses of each replica.
-                   response.take_masters()
-                           .into_iter()
-                           .filter(|server_entry| !server_entry.has_error())
-                           .map(|mut server_entry| {
-                               let role = server_entry.get_role();
-                               let host_ports = server_entry.mut_registration()
-                                                           .take_rpc_addresses()
-                                                           .into_vec();
-                               (role, host_ports)
-                           })
-                           .map(move |(role, host_ports)| resolver.resolve(host_ports)
-                                                               .map(move |addrs| (role, addrs)))
-               })
-               .and_then(join_all) // Wait for all of the DNS resolutions.
-               .map(move |replicas| {
-                   // Transform the iterator of host, addrs pairs into a ListMastersResult.
-                   let mut leader = false;
-                   let mut replica_addrs: Vec<SocketAddr> = Vec::new();
-                   for (role, addrs) in replicas {
-                       if role == Role::LEADER && addrs.contains(&addr) {
-                           leader = true;
-                       }
-                       replica_addrs.extend(addrs);
-                   }
-                   if leader {
-                       ListMastersResponse::Leader(addr, replica_addrs)
-                   } else {
-                       ListMastersResponse::Replicas(replica_addrs)
-                   }
-               }))
+        .and_then(move |connection| connection.send(rpc))
+        .and_then(move |connection| {
+            future.map(Rpc::take_response::<ListMastersResponsePB>)
+                  // Check if the response contains an error. This can happen when the master is
+                  // not yet initialized, e.g.:
+                  //     code: CATALOG_MANAGER_NOT_INITIALIZED
+                  //     status {code: SERVICE_UNAVAILABLE
+                  //             message: "catalog manager has not been initialized"}
+                  .and_then(|mut response: ListMastersResponsePB| -> Result<ListMastersResponsePB> {
+                      if response.has_error() {
+                          Err(Error::Master(MasterError::new(MasterErrorCode::UnknownError,
+                                                             response.take_error().into())))
+                      } else {
+                          Ok(response)
+                      }
+                  })
+                  // Transform the list masters response PB into a future which will resolve to a
+                  // vec containing the role and socket addrs for each replica.
+                  .and_then(move |mut response: ListMastersResponsePB| {
+                      let mut v = Vec::new();
+
+                      for mut master in response.take_masters().into_iter() {
+                          if master.has_error() {
+                              trace!("ListMastersResponsePB ServerEntryPB error: {:?}",
+                                     master.get_error());
+                              continue;
+                          }
+
+                          let role = master.get_role();
+                          let addrs = resolver.resolve_all(master.take_registration()
+                                                                 .take_rpc_addresses()
+                                                                 .into_vec());
+                          v.push(addrs.map(move |addrs| (role, addrs)));
+                      }
+
+                      join_all(v)
+                  })
+                  // Aggregate the replica addresses, and deterimine if this connection is to the
+                  // leader.
+                  .map(move |masters| {
+                      let mut is_leader = false;
+                      let mut replicas = Vec::new();
+
+                      for (role, addrs) in masters {
+                          if role == Role::LEADER && addrs.contains(&addr) {
+                              is_leader = true;
+                          }
+                          replicas.extend(addrs);
+                      }
+
+                      if is_leader {
+                          ListMastersResponse::Leader(connection, replicas)
+                      } else {
+                          ListMastersResponse::Replicas(replicas)
+                      }
+                  })
+        }))
 }
 
 fn list_masters_with_retry(handle: Handle,
@@ -104,7 +121,8 @@ fn try_find_leader_master(handle: Handle,
                           resolver: Resolver,
                           timer: tokio_timer::Timer,
                           replicas: Vec<SocketAddr>)
-                          -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=Vec<SocketAddr>>> {
+                          -> Box<Future<Item=(Connection, Vec<SocketAddr>),
+                                        Error=Vec<SocketAddr>>> {
     let list_masters = util::select_stream(replicas.iter().cloned().map(|addr| {
         list_masters_with_retry(handle.clone(),
                                 resolver.clone(),
@@ -131,9 +149,9 @@ struct FindLeaderMaster {
 }
 
 impl Future for FindLeaderMaster {
-    type Item = (SocketAddr, Vec<SocketAddr>);
+    type Item = (Connection, Vec<SocketAddr>);
     type Error = Vec<SocketAddr>;
-    fn poll(&mut self) -> Poll<(SocketAddr, Vec<SocketAddr>), Vec<SocketAddr>> {
+    fn poll(&mut self) -> Poll<(Connection, Vec<SocketAddr>), Vec<SocketAddr>> {
         loop {
             match self.list_masters.poll() {
                 Ok(Async::Ready(None)) => {
@@ -168,8 +186,8 @@ pub fn find_leader_master(reactor: Handle,
                           timer: tokio_timer::Timer,
                           backoff: Backoff,
                           mut replicas: Vec<SocketAddr>)
-                          -> Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=!>> {
-    Box::new(util::retry_with_backoff(timer.clone(), backoff, move |_, cause| {
+                          -> impl Future<Item=(Connection, Vec<SocketAddr>), Error=!> + 'static {
+    util::retry_with_backoff(timer.clone(), backoff, move |_, cause| {
         match cause {
             util::RetryCause::Initial => (),
             util::RetryCause::TimedOut => trace!("FindLeaderMaster round timed out"),
@@ -179,5 +197,5 @@ pub fn find_leader_master(reactor: Handle,
             },
         }
         try_find_leader_master(reactor.clone(), resolver.clone(), timer.clone(), replicas.clone())
-    }))
+    })
 }

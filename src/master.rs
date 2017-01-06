@@ -23,7 +23,6 @@ use kudu_pb::master::{
 use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
 
 use backoff::Backoff;
-use io::Io;
 use list_masters::find_leader_master;
 use protobuf::Message;
 use rpc::{
@@ -273,17 +272,17 @@ impl Master {
 
         // TODO: check bounds on port casts.
         let rpc_addrs = master.mut_registration()
-                                     .take_rpc_addresses()
-                                     .into_iter()
-                                     .map(|mut host_port| (host_port.take_host(),
-                                                           host_port.get_port() as u16))
-                                     .collect::<Vec<_>>();
+                              .take_rpc_addresses()
+                              .into_iter()
+                              .map(|mut host_port| (host_port.take_host(),
+                                                    host_port.get_port() as u16))
+                              .collect::<Vec<_>>();
         let http_addrs = master.mut_registration()
-                                      .take_http_addresses()
-                                      .into_iter()
-                                      .map(|mut host_port| (host_port.take_host(),
-                                                            host_port.get_port() as u16))
-                                      .collect::<Vec<_>>();
+                               .take_http_addresses()
+                               .into_iter()
+                               .map(|mut host_port| (host_port.take_host(),
+                                                     host_port.get_port() as u16))
+                               .collect::<Vec<_>>();
 
         let role = RaftRole::from_pb(master.get_role());
 
