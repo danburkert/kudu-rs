@@ -1,61 +1,19 @@
 use std::any::Any;
-use std::error;
 use std::fmt;
-use std::net::SocketAddr;
-use std::result;
 use std::time::Instant;
 
-use futures::{Async, Future, Poll};
-use futures::sync::oneshot;
 use protobuf::Message;
 
-pub use rpc::messenger::Messenger;
+//pub use rpc::messenger::Messenger;
 pub use rpc::connection::ConnectionOptions;
 pub use rpc::connection::Connection;
 
 use Error;
 
 mod connection;
-mod messenger;
+//mod messenger;
 pub mod master;
 pub mod tablet_server;
-
-pub type RpcResult = result::Result<Rpc, RpcError>;
-
-#[derive(Debug)]
-pub struct RpcError {
-    pub rpc: Rpc,
-    pub error: Error,
-}
-
-impl error::Error for RpcError {
-    fn description(&self) -> &str { self.error.description() }
-    fn cause(&self) -> Option<&error::Error> { self.error.cause() }
-}
-
-impl fmt::Display for RpcError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
-    }
-}
-
-#[must_use = "futures do nothing unless polled"]
-pub struct RpcFuture {
-    inner: oneshot::Receiver<RpcResult>,
-}
-
-impl Future for RpcFuture {
-    type Item = Rpc;
-    type Error = RpcError;
-    fn poll(&mut self) -> Poll<Rpc, RpcError> {
-        match self.inner.poll() {
-            Ok(Async::Ready(Ok(rpc))) => Ok(Async::Ready(rpc)),
-            Ok(Async::Ready(Err(error))) => Err(error),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(..) => panic!("RPC dropped by connection"),
-        }
-    }
-}
 
 /// An `Rpc` contains all the state necessary to execute and retry an operation on a remote Kudu
 /// server.
@@ -85,74 +43,91 @@ impl Future for RpcFuture {
 /// remote server.
 #[must_use = "rpcs must not be dropped"]
 pub struct Rpc {
-    pub addr: SocketAddr,
-    pub service_name: &'static str,
-    pub method_name: &'static str,
-    pub deadline: Instant,
-    pub required_feature_flags: Vec<u32>,
-    pub request: Box<Message>,
-    pub response: Box<Message>,
-    pub sidecars: Vec<Vec<u8>>,
-    pub oneshot: Option<oneshot::Sender<RpcResult>>,
+    service: &'static str,
+    method: &'static str,
+    required_feature_flags: &'static [u32],
+    deadline: Instant,
+    request: Box<Message>,
+    response: Box<Message>,
+    sidecars: Vec<Vec<u8>>,
+    error: Option<Error>,
 }
 
 impl Rpc {
 
-    pub fn future(&mut self) -> RpcFuture {
-        let (send, recv) = oneshot::channel();
-        self.oneshot = Some(send);
-        RpcFuture {
-            inner: recv,
+    pub fn new(service: &'static str,
+               method: &'static str,
+               required_feature_flags: &'static [u32],
+               deadline: Instant,
+               request: Box<Message>,
+               response: Box<Message>) -> Rpc {
+        Rpc {
+            service: service,
+            method: method,
+            required_feature_flags: required_feature_flags,
+            deadline: deadline,
+            request: request,
+            response: response,
+            sidecars: Vec::new(),
+            error: None,
         }
     }
 
-    fn complete(mut self) {
-        if let Some(oneshot) = self.oneshot.take() {
-            oneshot.complete(Ok(self))
+    fn fail(&mut self, error: Error) {
+        self.error = Some(error);
+    }
+
+    fn clear(&mut self) {
+        self.error = None;
+        self.response.clear();
+        self.sidecars.clear();
+    }
+
+    pub fn result<T>(&self) -> Result<&T, &Error> where T: Any {
+        if let Some(ref error) = self.error {
+            Err(error)
+        } else {
+            Ok(self.response.as_any().downcast_ref::<T>().unwrap())
         }
     }
 
-    pub fn fail(mut self, error: Error) {
-        if let Some(oneshot) = self.oneshot.take() {
-            oneshot.complete(Err(RpcError { rpc: self, error: error }))
+    pub fn take_result<T>(mut self) -> Result<T, Error> where T: Any {
+        if let Some(error) = self.error.take() {
+            Err(error)
+        } else {
+            Ok(*self.response.into_any().downcast::<T>().unwrap())
         }
-    }
-
-    pub fn response<T>(&self) -> &T where T: Any {
-        self.response.as_any().downcast_ref::<T>().unwrap()
-    }
-
-    pub fn response_mut<T>(&mut self) -> &mut T where T: Any {
-        self.response.as_any_mut().downcast_mut::<T>().unwrap()
-    }
-
-    pub fn take_response<T>(self) -> T where T: Any {
-        *self.response.into_any().downcast::<T>().unwrap()
-    }
-
-    pub fn mut_response<T>(&mut self) -> &mut T where T: Any {
-        self.response.as_any_mut().downcast_mut::<T>().unwrap()
-    }
-
-    /// Returns `true` if this RPC has been requested to be cancelled.
-    pub fn cancelled(&mut self) -> bool {
-        self.oneshot.as_mut().map_or(false, |f| {
-            match f.poll_cancel().unwrap() {
-                Async::Ready(_) => true,
-                Async::NotReady => false,
-            }
-        })
     }
 
     /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
-    pub fn timed_out(&self, now: Instant) -> bool {
+    fn timed_out(&self, now: Instant) -> bool {
         self.deadline <= now
+    }
+
+    pub fn service(&self) -> &'static str {
+        self.service
+    }
+
+    pub fn method(&self) -> &'static str {
+        self.method
+    }
+
+    pub fn required_feature_flags(&self) -> &'static [u32] {
+        self.required_feature_flags
+    }
+
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    fn response_mut(&mut self) -> &mut Message {
+        &mut *self.response
     }
 }
 
 impl fmt::Debug for Rpc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Rpc {{ {}::{}, addr: {}, deadline: {:?} }}",
-               self.service_name, self.method_name, self.addr, self.deadline)
+        write!(f, "Rpc {{ {}::{}, deadline: {:?} }}",
+               self.service, self.method, self.deadline)
     }
 }

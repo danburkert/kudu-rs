@@ -1,6 +1,5 @@
 use std::cmp;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fmt;
 use std::io::Write;
 use std::mem;
@@ -9,8 +8,7 @@ use std::time::Instant;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use futures::{IntoFuture, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use futures::sync::mpsc;
-use kudu_pb::rpc_header::{self, SaslMessagePB_SaslState as SaslState};
+use kudu_pb::rpc_header::{self, ErrorStatusPB, SaslMessagePB_SaslState as SaslState};
 use netbuf::Buf;
 use protobuf::rt::ProtobufVarint;
 use protobuf::{parse_length_delimited_from_bytes, Clear, CodedInputStream, Message};
@@ -122,9 +120,12 @@ fn poll_read_message<'a>(options: &ConnectionOptions,
 /// Flushes a buffer to a TCP socket.
 ///
 /// Returns:
-///     * Ok(Async::Ready(..)) if the entire write buffer is flushed to the socket.
-///     * Ok(Async::NotReady) if the socket is not ready for the entire write.
-///     * Err(..) on fatal error. The caller should reset the connection.
+///     * `Ok(Async::Ready(..))`
+///         The entire write buffer is flushed to the socket.
+///     * `Ok(Async::NotReady)`
+///         The socket is not ready for the entire write.
+///     * `Err(..)`
+///         Fatal error. The caller should reset the connection.
 fn poll_flush(buf: &mut Buf, stream: &mut TcpStream) -> Poll<(), Error> {
     while !buf.is_empty() {
         let n = try_nb!(buf.write_to(stream));
@@ -142,6 +143,9 @@ pub struct Connection {
 
     /// RPCs which have been sent and are awaiting response.
     recv_queue: HashMap<usize, Rpc>,
+
+    /// RPCs which have failed, but haven't yet been returned by `poll()`.
+    failed_rpcs: Vec<Rpc>,
 
     stream: TcpStream,
 
@@ -185,6 +189,7 @@ impl Connection {
                       let mut connection = Connection {
                           options: options,
                           recv_queue: HashMap::new(),
+                          failed_rpcs: Vec::new(),
                           stream: stream,
                           read_buf: Buf::new(),
                           write_buf: Buf::new(),
@@ -200,15 +205,12 @@ impl Connection {
         self.throttle = cmp::min(self.throttle, self.options.max_rpcs_in_flight) / 2;
     }
 
-    pub fn next_call_id(&mut self) -> Result<i32> {
-        let call_id = self.next_call_id;
-        if let Some(next) = self.next_call_id.checked_add(1) {
-            self.next_call_id = next;
-            Ok(call_id)
-        } else {
-            warn!("{:?}: call id overflowed", self);
-            Err(Error::ConnectionError)
-        }
+    pub fn next_call_id(&mut self) -> i32 {
+        // Wrap back to 0 on overflow. The server will probably complain about this, but there
+        // isn't much we can do other than shut down the connection anyway.
+        let next = self.next_call_id.checked_add(1).unwrap_or(0);
+        self.next_call_id = next;
+        next
     }
 
     /// Writes a session context message to the send buffer.
@@ -226,70 +228,22 @@ impl Connection {
         buffer_message(&header, &message, &mut self.write_buf)
     }
 
-
-    /// Reads RPC response messsages from the socket, and completes the corresponding `Rpc` in the
-    /// receive queue.
-    ///
-    /// This method will attempt to read messages form the socket even if there are no in-flight
-    /// RPCs, because reading from the socket is the only way to determine if the remote server has
-    /// closed the socket (indicated by a 0-length read).
-    ///
-    /// Returns:
-    ///     * Ok(Async::NotReady) if a message is not ready to be read from the socket.
-    ///     * Err(..) if a fatal error occurs. The caller should reset the connection.
-    fn poll_recv(&mut self) -> Poll<(), Error> {
-        trace!("{:?}: poll_recv", self);
-
-        loop {
-            let (header, body) =
-                try_ready!(poll_read_message(&self.options, &mut self.stream, &mut self.read_buf));
-            let call_id = header.get_call_id() as usize;
-
-            if header.get_is_error() {
-                // Remove the RPC from the read queue, and fail it. The message may not be
-                // in the receive queue if it has already timed out or been cancelled.
-                let error = RpcError::from(parse_length_delimited_from_bytes::<rpc_header::ErrorStatusPB>(&body[..])?);
-                if let Some(rpc) = self.recv_queue.remove(&call_id) {
-                    rpc.fail(Error::Rpc(error.clone()));
-                }
-                // If the message is fatal, then return an error in order to have the
-                // connection torn down.
-                if error.is_fatal() {
-                    return Err(Error::Rpc(error))
-                }
-            } else if let Entry::Occupied(mut entry) = self.recv_queue.entry(call_id) {
-                // Use the entry API so that the RPC is not removed from the read queue if the protobuf
-                // decode step fails. Since it isn't removed, it will be failed when the connection
-                // transitions to the reset state.
-                //
-                // The message may not be in the read queue if it has already been
-                // cancelled.
-                CodedInputStream::from_bytes(&body[..])
-                                 .merge_message(&mut *entry.get_mut().response)?;
-
-                if !header.get_sidecar_offsets().is_empty() {
-                    panic!("sidecar decoding not implemented");
-                }
-
-                entry.remove().complete();
-                if self.throttle < self.options.max_rpcs_in_flight {
-                    self.throttle += 1;
-                }
-            }
-        }
-    }
-
-    fn shutdown(&mut self, error: &Error) {
-        debug!("{:?}: shutting down: {:?}", self, error);
-        let _ = self.stream.shutdown(Shutdown::Both);
-
-        for (_, rpc) in self.recv_queue.drain() {
-            rpc.fail(error.clone());
-        }
-    }
-
     fn poll_flush(&mut self) -> Poll<(), Error> {
         poll_flush(&mut self.write_buf, &mut self.stream)
+    }
+
+    fn fail_rpc(&mut self, mut rpc: Rpc, error: Error) {
+        rpc.fail(error);
+        self.failed_rpcs.push(rpc);
+    }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
+        self.failed_rpcs.extend(self.recv_queue.drain().map(|kv| {
+            let mut rpc = kv.1;
+            rpc.fail(Error::ConnectionError);
+            rpc
+        }));
     }
 }
 
@@ -297,30 +251,34 @@ impl Sink for Connection {
     type SinkItem = Rpc;
     type SinkError = Error;
 
+    /// Attempt to send an RPC to a remote server. The RPC may only be buffered by the connection;
+    /// the caller should call `poll_complete` after calling this method one or more times to
+    /// ensure that the RPC is dispatched to the remote server.
+    ///
+    /// Returns:
+    ///     * `Ok(AsyncSink::Ready)`
+    ///         The RPC has been successfully buffered.
+    ///     * `Ok(AsyncSink::NotReady)`
+    ///         The connection has insufficient capacity to send an additional RPC.
+    ///     * `Err(..)`
+    ///         The connection has been shutdown and no further RPCs may be sent. The RPC can be
+    ///         retrieved via `poll`.
     fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, Error> {
         trace!("{:?}: start_send", self);
+        rpc.clear();
 
-        // We have to be very careful not to drop the rpc prematurely on failure. This macro makes
-        // it easy to call a potentially failing method and automatically fail the RPC and
-        // shut down the connection on failure.
-        macro_rules! try_shutdown {
-            ($cxn:ident, $rpc:ident, $e:expr) => (match $e {
-                Ok(val) => val,
-                Err(error) => {
-                    $rpc.fail(error.clone());
-                    $cxn.shutdown(&error);
-                    return Err(error);
-                }
-            })
-        }
-
-        // Attempt to clear out the recv_queue before sending.
-        try_shutdown!(self, rpc, self.poll_recv());
+        // Internally, this method avoids using the try/try_ready/? operators since the RPC needs
+        // to be added to the `failed_rpcs` buffer on error, so that it can be returned during a
+        // subsequent call to `poll`.
 
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then stop sending messages until the buffer clears.
         if self.write_buf.len() > 8 * 1024 {
-            try_shutdown!(self, rpc, self.poll_flush());
+            if let Err(error) = self.poll_flush() {
+                self.shutdown();
+                self.fail_rpc(rpc, Error::ConnectionError);
+                return Err(error);
+            }
             if self.write_buf.len() > 8 * 1024 {
                 return Ok(AsyncSink::NotReady(rpc));
             }
@@ -328,37 +286,36 @@ impl Sink for Connection {
 
         // Check if the connection is throttled.
         if self.recv_queue.len() >= self.throttle as usize {
-            // Flush to avoid a situation where the connection is throttled due to buffered
-            // messages.
-            try_shutdown!(self, rpc, self.poll_flush());
+            // Flush to avoid a situation where the connection is throttled due
+            // to buffered messages.
+            if let Err(error) = self.poll_flush() {
+                self.shutdown();
+                self.fail_rpc(rpc, Error::ConnectionError);
+                return Err(error);
+            }
             return Ok(AsyncSink::NotReady(rpc));
         }
 
         let now = Instant::now();
-        if rpc.cancelled() {
-            trace!("{:?}: cancelling {:?}", self, rpc);
-            rpc.fail(Error::Cancelled);
-        } else if rpc.timed_out(now) {
+        if rpc.timed_out(now) {
             trace!("{:?}: timing out {:?}", self, rpc);
-            rpc.fail(Error::TimedOut);
+            self.fail_rpc(rpc, Error::TimedOut);
         } else {
-            let call_id = try_shutdown!(self, rpc, self.next_call_id());
+            let call_id = self.next_call_id();
             let mut header = rpc_header::RequestHeader::new();
             header.set_call_id(call_id);
-            header.mut_remote_method().mut_service_name().push_str(rpc.service_name);
-            header.mut_remote_method().mut_method_name().push_str(rpc.method_name);
-            header.set_timeout_millis(duration_to_ms(&rpc.deadline.duration_since(now)) as u32);
+            header.mut_remote_method().mut_service_name().push_str(rpc.service());
+            header.mut_remote_method().mut_method_name().push_str(rpc.method());
+            header.set_timeout_millis(duration_to_ms(&rpc.deadline().duration_since(now)) as u32);
             header.mut_required_feature_flags().extend_from_slice(&rpc.required_feature_flags);
 
             trace!("{:?}: sending rpc to server; call ID: {}, rpc: {:?}", self, call_id, rpc);
-            try_shutdown!(self, rpc, buffer_message(&header, &*rpc.request, &mut self.write_buf));
+            if let Err(error) = buffer_message(&header, &*rpc.request, &mut self.write_buf) {
+                self.shutdown();
+                self.fail_rpc(rpc, error);
+                return Err(Error::ConnectionError);
+            }
             self.recv_queue.insert(call_id as usize, rpc);
-        }
-
-        // Attempt to send buffered RPCs.
-        if let Err(error) = self.poll_flush() {
-            self.shutdown(&error);
-            return Err(error);
         }
 
         Ok(AsyncSink::Ready)
@@ -366,9 +323,9 @@ impl Sink for Connection {
 
     fn poll_complete(&mut self) -> Poll<(), Error> {
         trace!("{:?}: poll_complete", self);
-        if let Err(error) = self.poll_flush().and_then(|_| self.poll_recv()) {
-            self.shutdown(&error);
-            return Err(error)
+        if let Err(error) = self.poll_flush() {
+            self.shutdown();
+            return Err(error);
         }
 
         if self.recv_queue.is_empty() {
@@ -376,6 +333,104 @@ impl Sink for Connection {
         } else {
             Ok(Async::NotReady)
         }
+    }
+}
+
+impl Stream for Connection {
+    type Item = Rpc;
+    type Error = !;
+
+    /// Reads an RPC messsage from the socket.
+    ///
+    /// Returns:
+    ///     * `Ok(Async::Ready(Some(rpc))`
+    ///         a completed RPC is ready.
+    ///     * `Ok(Async::Ready(None))`
+    ///         no RPCs are currently in flight.
+    ///     * `Ok(Async::NotReady)`
+    ///         RPC(s) are in flight, but not currently available.
+    fn poll(&mut self) -> Poll<Option<Rpc>, !> {
+        trace!("{:?}: poll", self);
+
+        if let Some(failed) = self.failed_rpcs.pop() {
+            return Ok(Async::Ready(Some(failed)));
+        }
+
+        /// Shuts down the connection, and returns a failed RPC, if there are any.
+        fn shutdown_and_return(cxn: &mut Connection) -> Poll<Option<Rpc>, !> {
+            cxn.shutdown();
+            if let Some(failed) = cxn.failed_rpcs.pop() {
+                return Ok(Async::Ready(Some(failed)));
+            } else {
+                return Ok(Async::NotReady);
+            }
+        }
+
+        // Parse the next header and body from the socket.
+        let (header, body) = match poll_read_message(&self.options,
+                                                     &mut self.stream,
+                                                     &mut self.read_buf) {
+            Ok(Async::Ready((header, body))) => (header, body),
+            Ok(Async::NotReady) => if self.recv_queue.is_empty() {
+                return Ok(Async::Ready(None));
+            } else {
+                return Ok(Async::NotReady);
+            },
+            Err(error) => {
+                trace!("{:?}: error reading message: {:?}", self, error);
+                return shutdown_and_return(self);
+            },
+        };
+
+        // Retrieve the RPC corresponding to the message from the receive queue.
+        let call_id = header.get_call_id() as usize;
+        let mut rpc = match self.recv_queue.remove(&call_id) {
+            Some(rpc) => rpc,
+            None => {
+                warn!("{:?}: received response for non-existent request; header: {:?}",
+                      self, header);
+                return shutdown_and_return(self);
+            },
+        };
+
+        if header.get_is_error() {
+            // If the RPC is an error, then parse the cause and fail it.
+            let error = match parse_length_delimited_from_bytes::<ErrorStatusPB>(&body[..]) {
+                Ok(pb) => pb,
+                Err(error) => {
+                    warn!("{:?}: unable to parse error body; header: {:?}, error: {:?}",
+                          self, header, error);
+                    return shutdown_and_return(self);
+                },
+            };
+            let error = RpcError::from(error);
+
+            // If the error is fatal, shut down the connection.
+            if error.is_fatal() {
+                self.shutdown();
+            }
+
+            rpc.fail(Error::from(error));
+        } else {
+            // Parse the response.
+
+            if !header.get_sidecar_offsets().is_empty() {
+                panic!("sidecar decoding not implemented");
+            }
+
+            if let Err(error) = CodedInputStream::from_bytes(&body[..]).merge_message(rpc.response_mut()) {
+                warn!("{:?}: unable to parse response body; header: {:?}, error: {:?}",
+                      self, header, error);
+                rpc.fail(Error::from(error));
+                self.shutdown();
+            };
+        }
+
+        if self.throttle < self.options.max_rpcs_in_flight {
+            self.throttle += 1;
+        }
+
+        Ok(Async::Ready(Some(rpc)))
     }
 }
 
@@ -522,90 +577,6 @@ impl fmt::Debug for Negotiate {
         match self.stream.as_ref().unwrap().peer_addr() {
             Ok(addr) => write!(f, "Negotiate {{ addr: {}, buf: {} }}", addr, self.buf.len()),
             Err(error) => write!(f, "Negotiate {{ addr: {}, buf: {} }}", error, self.buf.len()),
-        }
-    }
-}
-
-
-pub fn forward(channel: RpcReceiver, connection: Connection) -> Forward {
-    Forward {
-        channel: channel,
-        connection: connection,
-        buffered: None,
-    }
-}
-
-/// Like `futures::Forward`, but specific to an mpsc channel of RPCs forwarding to a connection.
-#[must_use = "futures do nothing unless polled"]
-pub struct Forward {
-    channel: RpcReceiver,
-    connection: Connection,
-    buffered: Option<Rpc>,
-}
-
-impl Forward {
-    fn try_start_send(&mut self, rpc: Rpc) -> Poll<(), ()> {
-        debug_assert!(self.buffered.is_none());
-        let start_send = self.connection.start_send(rpc).map_err(|error| {
-            trace!("{:?}: forward error: {:?}", self.connection, error)
-        })?;
-        if let AsyncSink::NotReady(rpc) = start_send {
-            self.buffered = Some(rpc);
-            return Ok(Async::NotReady)
-        }
-        Ok(Async::Ready(()))
-    }
-}
-
-impl Future for Forward {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        // If we've got an RPC buffered already, we need to send it to the
-        // connection before we can do anything else
-        if let Some(rpc) = self.buffered.take() {
-            try_ready!(self.try_start_send(rpc))
-        }
-
-        loop {
-            match self.channel.poll()? {
-                Async::Ready(Some(rpc)) => try_ready!(self.try_start_send(rpc)),
-                Async::Ready(None) => {
-                    try_ready!(self.connection.poll_complete().map_err(|error| {
-                        trace!("{:?}: forward error: {:?}", self.connection, error)
-                    }));
-                    return Ok(Async::Ready(()))
-                },
-                Async::NotReady => {
-                    try_ready!(self.connection.poll_complete().map_err(|error| {
-                        trace!("{:?}: forward error: {:?}", self.connection, error)
-                    }));
-                    return Ok(Async::NotReady)
-                },
-            }
-        }
-    }
-}
-
-pub struct RpcReceiver {
-    pub receiver: mpsc::Receiver<Rpc>,
-}
-
-impl Stream for RpcReceiver {
-    type Item = Rpc;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Option<Rpc>, ()> {
-        self.receiver.poll()
-    }
-}
-
-impl Drop for RpcReceiver {
-    fn drop(&mut self) {
-        self.receiver.close();
-        while let Ok(Async::Ready(Some(rpc))) = self.receiver.poll() {
-            rpc.fail(Error::ConnectionError)
         }
     }
 }

@@ -14,8 +14,6 @@ use rpc::Rpc;
 use rpc::connection::{
     Connection,
     ConnectionOptions,
-    RpcReceiver,
-    forward,
 };
 
 #[derive(Clone)]
@@ -48,7 +46,6 @@ impl Sink for Messenger {
 
     fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, !> {
         rpc.response.clear();
-        debug_assert!(rpc.oneshot.is_some());
         trace!("{:?}: start_send, rpc: {:?}", self, rpc);
 
         let addr = rpc.addr;
@@ -66,6 +63,7 @@ impl Sink for Messenger {
             let options = options.clone();
             let (send, recv) = mpsc::channel(options.max_rpcs_in_flight as usize);
 
+            /*
             remotes[idx].spawn(move |handle| {
                 let receiver = RpcReceiver { receiver: recv };
                 // TODO: convert to spawn
@@ -73,6 +71,7 @@ impl Sink for Messenger {
                     .map_err(move |error| warn!("unable to connect to {}: {}", addr, error))
                     .and_then(move |connection| forward(receiver, connection))
             });
+            */
             send
         }).start_send(rpc);
         match start_send {

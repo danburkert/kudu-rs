@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::time::Instant;
 
 use kudu_pb::master::{
@@ -24,18 +23,13 @@ const SERVICE_NAME: &'static str = "kudu.master.MasterService";
 // If/when Rust gets a snake -> camel ident converter the 2nd param can be dropped.
 macro_rules! rpc {
     ($fn_name:ident, $rpc_name:ident, $request_type:ident, $response_type:ident) => {
-        pub fn $fn_name(addr: SocketAddr, deadline: Instant, request: $request_type) -> Rpc {
-            Rpc {
-                addr: addr,
-                service_name: SERVICE_NAME,
-                method_name: stringify!($rpc_name),
-                deadline: deadline,
-                required_feature_flags: Vec::new(),
-                request: Box::new(request),
-                response: Box::new($response_type::new()),
-                sidecars: Vec::new(),
-                oneshot: None,
-            }
+        pub fn $fn_name(deadline: Instant, request: $request_type) -> Rpc {
+            Rpc::new(SERVICE_NAME,
+                     stringify!($rpc_name),
+                     &[],
+                     deadline,
+                     Box::new(request),
+                     Box::new($response_type::new()))
         }
     };
 }

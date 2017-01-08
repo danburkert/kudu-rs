@@ -7,7 +7,7 @@ description = "Rust client for Apache Kudu"
 keywords = ["kudu", "database"]
 
 [dependencies]
-byteorder = "0.5"
+byteorder = "1"
 chrono = "0.2"
 crossbeam = "0.2"
 fnv = "1"

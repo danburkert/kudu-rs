@@ -23,7 +23,7 @@ use rpc::Connection;
 use rpc::ConnectionOptions;
 use rpc::master;
 use util;
-use rpc::Rpc;
+use rpc::{Rpc, RpcFuture};
 
 pub enum ListMastersResponse {
 
@@ -39,9 +39,9 @@ fn list_masters(handle: &Handle,
                 resolver: Resolver,
                 addr: SocketAddr,
                 deadline: Instant)
-                -> impl Future<Item=ListMastersResponse, Error=Error> + 'static {
+                -> Box<Future<Item=ListMastersResponse, Error=Error> + 'static> {
     let mut rpc = master::list_masters(addr, deadline, ListMastersRequestPB::new());
-    let future = rpc.future().map_err(|error| error.error);
+    let future: RpcFuture = unimplemented!(); /*rpc.future().map_err(|error| error.error);*/
     Box::new(Connection::new(&addr, handle, ConnectionOptions::default())
         .and_then(move |connection| connection.send(rpc))
         .and_then(move |connection| {

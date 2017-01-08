@@ -33,7 +33,7 @@ extern crate vec_map;
 
 //mod client;
 //mod master;
-mod master2;
+//mod master2;
 //mod meta_cache;
 //mod table;
 //mod tablet;
@@ -52,7 +52,7 @@ mod rpc;
 mod schema;
 mod util;
 mod value;
-mod list_masters;
+//mod list_masters;
 
 #[cfg(test)]
 mod mini_cluster;

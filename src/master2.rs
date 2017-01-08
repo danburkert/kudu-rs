@@ -32,7 +32,7 @@ use protobuf::Message;
 use rpc::{
     Connection,
     Rpc,
-    RpcError,
+    FailedRpc,
     RpcFuture,
     RpcResult,
     master
