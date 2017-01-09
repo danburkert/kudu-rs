@@ -22,21 +22,23 @@ use rpc::ConnectionOptions;
 use rpc::master;
 use util;
 
-pub enum ListMastersResponse {
+pub enum ListMastersResponse<S> where S: Send {
 
     /// The connection to the discovered leader master, along with the full set of replica
     /// addresses (including the leader).
-    Leader(Connection, Vec<SocketAddr>),
+    Leader(Connection<S>, Vec<SocketAddr>),
 
     /// The discovered set of the replica addresses.
     Replicas(Vec<SocketAddr>),
 }
 
-fn list_masters(handle: &Handle,
-                resolver: Resolver,
-                addr: SocketAddr,
-                deadline: Instant)
-                -> Box<Future<Item=ListMastersResponse, Error=Error> + 'static> {
+fn list_masters<S>(handle: &Handle,
+                   resolver: Resolver,
+                   addr: SocketAddr,
+                   deadline: Instant)
+                   -> Box<Future<Item=ListMastersResponse<S>, Error=Error> + 'static>
+where S: Send + 'static
+{
     let rpc = master::list_masters(deadline, ListMastersRequestPB::new());
     Box::new(Connection::new(&addr, handle, ConnectionOptions::default())
         .and_then(move |connection| connection.send(rpc))
@@ -104,11 +106,13 @@ fn list_masters(handle: &Handle,
     )
 }
 
-fn list_masters_with_retry(handle: Handle,
-                           resolver: Resolver,
-                           timer: tokio_timer::Timer,
-                           addr: SocketAddr,
-                           backoff: Backoff) -> Box<Future<Item=ListMastersResponse, Error=!>> {
+fn list_masters_with_retry<S>(handle: Handle,
+                              resolver: Resolver,
+                              timer: tokio_timer::Timer,
+                              addr: SocketAddr,
+                              backoff: Backoff) -> Box<Future<Item=ListMastersResponse<S>, Error=!>>
+where S: Send + 'static
+{
     Box::new(util::retry_with_backoff(timer, backoff, move |deadline, cause| {
         match cause {
             util::RetryCause::Initial => (),
@@ -119,12 +123,14 @@ fn list_masters_with_retry(handle: Handle,
     }))
 }
 
-fn try_find_leader_master(handle: Handle,
-                          resolver: Resolver,
-                          timer: tokio_timer::Timer,
-                          replicas: Vec<SocketAddr>)
-                          -> Box<Future<Item=(Connection, Vec<SocketAddr>),
-                                        Error=Vec<SocketAddr>>> {
+fn try_find_leader_master<S>(handle: Handle,
+                             resolver: Resolver,
+                             timer: tokio_timer::Timer,
+                             replicas: Vec<SocketAddr>)
+                             -> Box<Future<Item=(Connection<S>, Vec<SocketAddr>),
+                                           Error=Vec<SocketAddr>>>
+where S: Send + 'static
+{
     let list_masters = util::select_stream(replicas.iter().cloned().map(|addr| {
         list_masters_with_retry(handle.clone(),
                                 resolver.clone(),
@@ -142,18 +148,18 @@ fn try_find_leader_master(handle: Handle,
     })
 }
 
-struct FindLeaderMaster {
+struct FindLeaderMaster<S> where S: Send + 'static {
     handle: Handle,
     resolver: Resolver,
     timer: tokio_timer::Timer,
     replicas: Vec<SocketAddr>,
-    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse, Error=!>>>,
+    list_masters: util::SelectStream<Box<Future<Item=ListMastersResponse<S>, Error=!>>>,
 }
 
-impl Future for FindLeaderMaster {
-    type Item = (Connection, Vec<SocketAddr>);
+impl <S> Future for FindLeaderMaster<S> where S: Send {
+    type Item = (Connection<S>, Vec<SocketAddr>);
     type Error = Vec<SocketAddr>;
-    fn poll(&mut self) -> Poll<(Connection, Vec<SocketAddr>), Vec<SocketAddr>> {
+    fn poll(&mut self) -> Poll<(Connection<S>, Vec<SocketAddr>), Vec<SocketAddr>> {
         loop {
             match self.list_masters.poll() {
                 Ok(Async::Ready(None)) => {
@@ -183,13 +189,15 @@ impl Future for FindLeaderMaster {
     }
 }
 
-pub fn find_leader_master(reactor: Handle,
-                          resolver: Resolver,
-                          timer: tokio_timer::Timer,
-                          backoff: Backoff,
-                          mut replicas: Vec<SocketAddr>)
-                          -> impl Future<Item=(Connection, Vec<SocketAddr>), Error=!> + 'static {
-    util::retry_with_backoff(timer.clone(), backoff, move |_, cause| {
+pub fn find_leader_master<S>(reactor: Handle,
+                             resolver: Resolver,
+                             timer: tokio_timer::Timer,
+                             backoff: Backoff,
+                             mut replicas: Vec<SocketAddr>)
+                             -> Box<Future<Item=(Connection<S>, Vec<SocketAddr>), Error=!>>
+where S: Send + 'static
+{
+    Box::new(util::retry_with_backoff(timer.clone(), backoff, move |_, cause| {
         match cause {
             util::RetryCause::Initial => (),
             util::RetryCause::TimedOut => trace!("FindLeaderMaster round timed out"),
@@ -199,5 +207,5 @@ pub fn find_leader_master(reactor: Handle,
             },
         }
         try_find_leader_master(reactor.clone(), resolver.clone(), timer.clone(), replicas.clone())
-    })
+    }))
 }

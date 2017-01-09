@@ -7,13 +7,13 @@ use std::net::{Shutdown, SocketAddr};
 use std::time::Instant;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-use futures::{IntoFuture, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use kudu_pb::rpc_header::{self, ErrorStatusPB, SaslMessagePB_SaslState as SaslState};
 use netbuf::Buf;
 use protobuf::rt::ProtobufVarint;
 use protobuf::{parse_length_delimited_from_bytes, Clear, CodedInputStream, Message};
 use tokio::net::TcpStream;
-use tokio::reactor::{Remote, Handle};
+use tokio::reactor::Handle;
 
 use Error;
 use Result;
@@ -137,15 +137,15 @@ fn poll_flush(buf: &mut Buf, stream: &mut TcpStream) -> Poll<(), Error> {
     Ok(Async::Ready(()))
 }
 
-pub struct Connection {
+pub struct Connection<S> {
     /// The connection options.
     options: ConnectionOptions,
 
     /// RPCs which have been sent and are awaiting response.
-    recv_queue: HashMap<usize, Rpc>,
+    recv_queue: HashMap<usize, Rpc<S>>,
 
     /// RPCs which have failed, but haven't yet been returned by `poll()`.
-    failed_rpcs: Vec<Rpc>,
+    failed_rpcs: Vec<Rpc<S>>,
 
     stream: TcpStream,
 
@@ -163,20 +163,12 @@ pub struct Connection {
     next_call_id: i32,
 }
 
-impl Connection {
-
-    pub fn spawn<F, R>(reactor: &Remote, addr: SocketAddr, options: ConnectionOptions, f: F)
-    where F: FnOnce(Result<Connection>) -> R + Send + 'static,
-          R: IntoFuture<Item=(), Error=()> + 'static,
-          R::Future: 'static
-    {
-        reactor.spawn(move |handle| Connection::new(&addr, handle, options).then(f))
-    }
+impl <S> Connection<S> {
 
     pub fn new(addr: &SocketAddr,
                handle: &Handle,
                options: ConnectionOptions)
-               -> Box<Future<Item=Connection, Error=Error> + Send> {
+               -> Box<Future<Item=Connection<S>, Error=Error> + Send> where S: Send + 'static {
         TcpStream::connect(addr, handle)
                   .map_err(Error::from)
                   .and_then(move |stream| -> Result<Negotiate> {
@@ -184,7 +176,7 @@ impl Connection {
                       negotiate(options, stream)
                   })
                   .flatten()
-                  .and_then(|(options, stream)| -> Result<Connection> {
+                  .and_then(|(options, stream)| -> Result<Connection<S>> {
                       let throttle = options.max_rpcs_in_flight;
                       let mut connection = Connection {
                           options: options,
@@ -232,7 +224,7 @@ impl Connection {
         poll_flush(&mut self.write_buf, &mut self.stream)
     }
 
-    fn fail_rpc(&mut self, mut rpc: Rpc, error: Error) {
+    fn fail_rpc(&mut self, mut rpc: Rpc<S>, error: Error) {
         rpc.fail(error);
         self.failed_rpcs.push(rpc);
     }
@@ -247,8 +239,8 @@ impl Connection {
     }
 }
 
-impl Sink for Connection {
-    type SinkItem = Rpc;
+impl <S> Sink for Connection<S> {
+    type SinkItem = Rpc<S>;
     type SinkError = Error;
 
     /// Attempt to send an RPC to a remote server. The RPC may only be buffered by the connection;
@@ -263,7 +255,7 @@ impl Sink for Connection {
     ///     * `Err(..)`
     ///         The connection has been shutdown and no further RPCs may be sent. The RPC can be
     ///         retrieved via `poll`.
-    fn start_send(&mut self, rpc: Rpc) -> StartSend<Rpc, Error> {
+    fn start_send(&mut self, rpc: Rpc<S>) -> StartSend<Rpc<S>, Error> {
         trace!("{:?}: start_send", self);
 
         // Internally, this method avoids using the try/try_ready/? operators since the RPC needs
@@ -335,8 +327,8 @@ impl Sink for Connection {
     }
 }
 
-impl Stream for Connection {
-    type Item = Rpc;
+impl <S> Stream for Connection<S> {
+    type Item = Rpc<S>;
     type Error = !;
 
     /// Reads an RPC messsage from the socket.
@@ -348,7 +340,7 @@ impl Stream for Connection {
     ///         no RPCs are currently in flight.
     ///     * `Ok(Async::NotReady)`
     ///         RPC(s) are in flight, but not currently available.
-    fn poll(&mut self) -> Poll<Option<Rpc>, !> {
+    fn poll(&mut self) -> Poll<Option<Rpc<S>>, !> {
         trace!("{:?}: poll", self);
 
         if let Some(failed) = self.failed_rpcs.pop() {
@@ -356,7 +348,7 @@ impl Stream for Connection {
         }
 
         /// Shuts down the connection, and returns a failed RPC, if there are any.
-        fn shutdown_and_return(cxn: &mut Connection) -> Poll<Option<Rpc>, !> {
+        fn shutdown_and_return<U>(cxn: &mut Connection<U>) -> Poll<Option<Rpc<U>>, !> {
             cxn.shutdown();
             if let Some(failed) = cxn.failed_rpcs.pop() {
                 return Ok(Async::Ready(Some(failed)));
@@ -433,7 +425,7 @@ impl Stream for Connection {
     }
 }
 
-impl fmt::Debug for Connection {
+impl <S> fmt::Debug for Connection<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.stream.peer_addr() {
             Ok(addr) => write!(f, "Connection {{ addr: {}, in-flight: {}, buf (tx/rx): {}/{} }}",

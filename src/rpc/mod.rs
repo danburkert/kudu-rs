@@ -30,7 +30,7 @@ pub mod tablet_server;
 /// response is received from the wire, it is deserialized into the response message, and the `Rpc`
 /// is completed.
 #[must_use = "rpcs must not be dropped"]
-pub struct Rpc {
+pub struct Rpc<S> {
     service: &'static str,
     method: &'static str,
     required_feature_flags: &'static [u32],
@@ -38,16 +38,17 @@ pub struct Rpc {
     request: Box<Message>,
     deadline: Instant,
     result: Option<Result<Box<Message>, Error>>,
+    state: Option<S>,
 }
 
-impl Rpc {
+impl <S> Rpc<S> {
 
     pub fn new(service: &'static str,
                method: &'static str,
                required_feature_flags: &'static [u32],
                response: fn() -> Box<Message>,
                deadline: Instant,
-               request: Box<Message>) -> Rpc {
+               request: Box<Message>) -> Rpc<S> {
         Rpc {
             service: service,
             method: method,
@@ -56,6 +57,7 @@ impl Rpc {
             deadline: deadline,
             request: request,
             result: None,
+            state: None,
         }
     }
 
@@ -87,6 +89,22 @@ impl Rpc {
         }
     }
 
+    pub fn state(&self) -> Option<&S> {
+        self.state.as_ref()
+    }
+
+    pub fn state_mut(&mut self) -> Option<&mut S> {
+        self.state.as_mut()
+    }
+
+    pub fn take_state(&mut self) -> Option<S> {
+        self.state.take()
+    }
+
+    pub fn set_state(&mut self, state: S) {
+        self.state = Some(state);
+    }
+
     /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
     fn timed_out(&self, now: Instant) -> bool {
         self.deadline <= now
@@ -109,7 +127,7 @@ impl Rpc {
     }
 }
 
-impl fmt::Debug for Rpc {
+impl <S> fmt::Debug for Rpc<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Rpc {{ {}::{}, deadline: {:?} }}",
                self.service, self.method, self.deadline)
