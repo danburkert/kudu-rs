@@ -52,7 +52,7 @@ mod rpc;
 mod schema;
 mod util;
 mod value;
-//mod list_masters;
+mod list_masters;
 
 #[cfg(test)]
 mod mini_cluster;
