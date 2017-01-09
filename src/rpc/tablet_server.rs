@@ -10,6 +10,8 @@ use kudu_pb::tserver::{
 use kudu_pb::tserver_service::{
     ChecksumRequestPB, ChecksumResponsePB,
 };
+use protobuf::Message;
+
 use rpc::Rpc;
 
 const SERVICE_NAME: &'static str = "kudu.tserver.TabletServerService";
@@ -19,12 +21,15 @@ const SERVICE_NAME: &'static str = "kudu.tserver.TabletServerService";
 macro_rules! rpc {
     ($fn_name:ident, $rpc_name:ident, $request_type:ident, $response_type:ident) => {
         pub fn $fn_name(deadline: Instant, request: $request_type) -> Rpc {
+            fn response() -> Box<Message> {
+                Box::new($response_type::new())
+            }
             Rpc::new(SERVICE_NAME,
                      stringify!($rpc_name),
                      &[],
+                     response,
                      deadline,
-                     Box::new(request),
-                     Box::new($response_type::new()))
+                     Box::new(request))
         }
     };
 }

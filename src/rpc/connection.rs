@@ -263,9 +263,8 @@ impl Sink for Connection {
     ///     * `Err(..)`
     ///         The connection has been shutdown and no further RPCs may be sent. The RPC can be
     ///         retrieved via `poll`.
-    fn start_send(&mut self, mut rpc: Rpc) -> StartSend<Rpc, Error> {
+    fn start_send(&mut self, rpc: Rpc) -> StartSend<Rpc, Error> {
         trace!("{:?}: start_send", self);
-        rpc.clear();
 
         // Internally, this method avoids using the try/try_ready/? operators since the RPC needs
         // to be added to the `failed_rpcs` buffer on error, so that it can be returned during a
@@ -418,7 +417,7 @@ impl Stream for Connection {
                 panic!("sidecar decoding not implemented");
             }
 
-            if let Err(error) = CodedInputStream::from_bytes(&body[..]).merge_message(rpc.response_mut()) {
+            if let Err(error) = CodedInputStream::from_bytes(&body[..]).merge_message(rpc.complete()) {
                 warn!("{:?}: unable to parse response body; header: {:?}, error: {:?}",
                       self, header, error);
                 rpc.fail(Error::from(error));
