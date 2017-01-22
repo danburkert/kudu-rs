@@ -33,7 +33,7 @@ extern crate vec_map;
 
 //mod client;
 //mod master;
-//mod master2;
+mod master2;
 //mod meta_cache;
 //mod table;
 //mod tablet;
@@ -137,7 +137,7 @@ impl DataType {
             kudu_pb::common::DataType::DOUBLE => Ok(DataType::Double),
             kudu_pb::common::DataType::BINARY => Ok(DataType::Binary),
             kudu_pb::common::DataType::STRING => Ok(DataType::String),
-            _ => Err(Error::VersionMismatch("unknown data type".to_string())),
+            _ => Err(Error::Serialization("unknown data type".to_string())),
         }
     }
 
@@ -206,7 +206,7 @@ impl EncodingType {
             kudu_pb::common::EncodingType::RLE => Ok(EncodingType::RunLength),
             kudu_pb::common::EncodingType::DICT_ENCODING => Ok(EncodingType::Dictionary),
             kudu_pb::common::EncodingType::BIT_SHUFFLE => Ok(EncodingType::BitShuffle),
-            _ => Err(Error::VersionMismatch("unknown encoding type".to_string())),
+            _ => Err(Error::Serialization("unknown encoding type".to_string())),
         }
     }
 
@@ -267,7 +267,7 @@ impl CompressionType {
             kudu_pb::common::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
             kudu_pb::common::CompressionType::LZ4 => Ok(CompressionType::Lz4),
             kudu_pb::common::CompressionType::ZLIB => Ok(CompressionType::Zlib),
-            _ => Err(Error::VersionMismatch("unknown compression type".to_string())),
+            _ => Err(Error::Serialization("unknown compression type".to_string())),
         }
     }
 }

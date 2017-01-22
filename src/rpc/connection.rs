@@ -2,6 +2,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
+use std::io;
 use std::mem;
 use std::net::{Shutdown, SocketAddr};
 use std::time::Instant;
@@ -70,8 +71,8 @@ fn read_at_least(stream: &mut TcpStream, buf: &mut Buf, min: usize) -> Poll<(), 
     while received < min {
         let n = try_nb!(buf.read_from(stream));
         if n == 0 {
-            warn!("remote server hung up (read 0)");
-            return Err(Error::ConnectionError);
+            return Err(Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                  "remote server hung up (read 0)")));
         }
         received += n;
     }
@@ -130,8 +131,8 @@ fn poll_flush(buf: &mut Buf, stream: &mut TcpStream) -> Poll<(), Error> {
     while !buf.is_empty() {
         let n = try_nb!(buf.write_to(stream));
         if n == 0 {
-            warn!("remote server hung up (write 0)");
-            return Err(Error::ConnectionError);
+            return Err(Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                  "remote server hung up (read 0)")));
         }
     }
     Ok(Async::Ready(()))
@@ -161,6 +162,8 @@ pub struct Connection<S> {
 
     /// The next call id.
     next_call_id: i32,
+
+    is_shutdown: bool,
 }
 
 impl <S> Connection<S> {
@@ -187,6 +190,7 @@ impl <S> Connection<S> {
                           write_buf: Buf::new(),
                           throttle: throttle,
                           next_call_id: 0,
+                          is_shutdown: false,
                       };
                       connection.buffer_connection_context()?;
                       Ok(connection)
@@ -229,13 +233,21 @@ impl <S> Connection<S> {
         self.failed_rpcs.push(rpc);
     }
 
-    fn shutdown(&mut self) {
+    /// Shutdown the connection. In flight RPCs will be failed with an IO error and
+    /// returned in subsequent calls to `poll`.
+    pub fn shutdown(&mut self) {
+        self.is_shutdown = true;
         let _ = self.stream.shutdown(Shutdown::Both);
         self.failed_rpcs.extend(self.recv_queue.drain().map(|kv| {
             let mut rpc = kv.1;
-            rpc.fail(Error::ConnectionError);
+            rpc.fail(Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                "connection shutdown")));
             rpc
         }));
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        self.is_shutdown
     }
 }
 
@@ -267,7 +279,8 @@ impl <S> Sink for Connection<S> {
         if self.write_buf.len() > 8 * 1024 {
             if let Err(error) = self.poll_flush() {
                 self.shutdown();
-                self.fail_rpc(rpc, Error::ConnectionError);
+                self.fail_rpc(rpc, Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                              "connection shutdown")));
                 return Err(error);
             }
             if self.write_buf.len() > 8 * 1024 {
@@ -281,7 +294,8 @@ impl <S> Sink for Connection<S> {
             // to buffered messages.
             if let Err(error) = self.poll_flush() {
                 self.shutdown();
-                self.fail_rpc(rpc, Error::ConnectionError);
+                self.fail_rpc(rpc, Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                              "connection shutdown")));
                 return Err(error);
             }
             return Ok(AsyncSink::NotReady(rpc));
@@ -304,7 +318,8 @@ impl <S> Sink for Connection<S> {
             if let Err(error) = buffer_message(&header, &*rpc.request, &mut self.write_buf) {
                 self.shutdown();
                 self.fail_rpc(rpc, error);
-                return Err(Error::ConnectionError);
+                return Err(Error::from(io::Error::new(io::ErrorKind::ConnectionAborted,
+                                                      "connection shutdown")));
             }
             self.recv_queue.insert(call_id as usize, rpc);
         }
@@ -338,6 +353,8 @@ impl <S> Stream for Connection<S> {
     ///         a completed RPC is ready.
     ///     * `Ok(Async::Ready(None))`
     ///         no RPCs are currently in flight.
+    ///
+    ///         TODO: should Ready(None) only be returned when the connection is shutdown?
     ///     * `Ok(Async::NotReady)`
     ///         RPC(s) are in flight, but not currently available.
     fn poll(&mut self) -> Poll<Option<Rpc<S>>, !> {
@@ -353,7 +370,7 @@ impl <S> Stream for Connection<S> {
             if let Some(failed) = cxn.failed_rpcs.pop() {
                 return Ok(Async::Ready(Some(failed)));
             } else {
-                return Ok(Async::NotReady);
+                return Ok(Async::Ready(None));
             }
         }
 
@@ -362,11 +379,7 @@ impl <S> Stream for Connection<S> {
                                                      &mut self.stream,
                                                      &mut self.read_buf) {
             Ok(Async::Ready((header, body))) => (header, body),
-            Ok(Async::NotReady) => if self.recv_queue.is_empty() {
-                return Ok(Async::Ready(None));
-            } else {
-                return Ok(Async::NotReady);
-            },
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
             Err(error) => {
                 trace!("{:?}: error reading message: {:?}", self, error);
                 return shutdown_and_return(self);

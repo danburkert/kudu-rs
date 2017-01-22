@@ -3,8 +3,9 @@ use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use std::any::Any;
 
-use futures::{Async, AsyncSink, Future, Poll, Sink};
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use parking_lot::Mutex;
 use kudu_pb::master::{
     AlterTableRequestPB, AlterTableResponsePB,
@@ -32,10 +33,7 @@ use protobuf::Message;
 use rpc::{
     Connection,
     Rpc,
-    FailedRpc,
-    RpcFuture,
-    RpcResult,
-    master
+    master,
 };
 use util;
 use Error;
@@ -47,19 +45,27 @@ use Result;
 use Status;
 
 pub struct MasterProxy {
-    sender: mpsc::Sender<Rpc>,
+    sender: mpsc::Sender<Rpc<RpcState>>,
+}
+
+struct RpcState {
+    send: oneshot::Sender<Result<Box<Message>>>,
+
+    /// Method-specific function which inspects the RPC response message and
+    /// lifts out the master error, if it exists.
+    master_error: fn(Box<Message>) -> Result<Box<Message>>,
 }
 
 enum Leader {
     /// The known leader.
-    Known(Connection, Vec<SocketAddr>),
+    Known(Connection<RpcState>, Vec<SocketAddr>),
     /// The leader is unknown, RPCs must be queued until the leader is discovered.
-    Unknown(Box<Future<Item=(Connection, Vec<SocketAddr>), Error=!>>),
+    Unknown(Box<Future<Item=(Connection<RpcState>, Vec<SocketAddr>), Error=!>>),
 }
 
 impl Leader {
 
-    fn poll_cxn(&mut self) -> Poll<&mut Connection, !> {
+    fn poll_cxn(&mut self) -> Poll<&mut Connection<RpcState>, !> {
         loop {
             let (cxn, replicas) = match *self {
                 Leader::Known(ref mut cxn, ..) => return Ok(Async::Ready(cxn)),
@@ -69,66 +75,99 @@ impl Leader {
         }
     }
 
-    fn reset(&mut self, reactor: &Handle, resolver: &Resolver, timer: &tokio_timer::Timer) {
-        let replicas = match *self {
-            Leader::Known(_, ref mut replicas) => mem::replace(replicas, Vec::new()),
-            Leader::Unknown(..) => return,
-        };
-
-        let leader = find_leader_master(reactor.clone(),
-                                        resolver.clone(),
-                                        timer.clone(),
-                                        Backoff::with_duration_range(1_000, 60_000),
-                                        replicas);
-
-        *self = Leader::Unknown(Box::new(leader));
-    }
 }
 
 struct MasterProxyTask {
     reactor: Handle,
     resolver: Resolver,
     timer: tokio_timer::Timer,
-    in_flight: util::SelectStream<RpcFuture>,
-    recv: mpsc::Receiver<Rpc>,
     leader: Leader,
+    queue: mpsc::Receiver<Rpc<RpcState>>,
+    retry: Vec<Rpc<RpcState>>,
 }
 
-struct InFlightRpc {
-    send: oneshot::Sender<RpcResult>,
-    recv: oneshot::Receiver<RpcResult>,
-    handler: fn(&RpcResult) -> Result<()>,
+/// Returns `true` if the RPC should be retried as a result of the error.
+fn should_retry(error: &Error) -> bool {
+    match *error {
+        Error::Io(..) => true,
+        Error::InvalidArgument(..) => false,
+        Error::Rpc(ref error) => error.is_fatal(),
+        Error::Master(ref error) => error.code() == MasterErrorCode::NotTheLeader ||
+                                    error.code() == MasterErrorCode::CatalogManagerNotInitialized,
+        Error::Serialization(..) => false,
+        Error::TimedOut => false,
+        Error::TabletServer(..) |
+            Error::NegotiationError(..) |
+            Error::NoRangePartition => unreachable!(),
+    }
+}
+
+/// Returns `true` if the error should cause the leader cache to be reset.
+fn should_reset(error: &Error) -> bool {
+    match *error {
+        Error::Master(ref error) => error.code() == MasterErrorCode::NotTheLeader ||
+                                    error.code() == MasterErrorCode::CatalogManagerNotInitialized,
+        _ => false,
+    }
 }
 
 impl MasterProxyTask {
 
-    fn try_poll(&mut self) -> Poll<(), Error> {
+    fn try_poll(&mut self) -> Poll<(), ()> {
         let MasterProxyTask {
             ref reactor,
             ref resolver,
             ref timer,
-            ref mut in_flight,
-            ref mut recv,
-            ref mut leader
+            ref mut leader,
+            ref mut queue,
+            ref mut retry,
         } = *self;
 
         // Unwrap the leader connection.
-        let cxn = match leader.poll_cxn() {
-            Ok(Async::Ready(cxn)) => cxn,
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err(..) => unreachable!(),
-        };
+        let cxn = try_ready!(leader.poll_cxn().map_err(|_| ()));
 
-        // Step 1: Write queued RPCs to the connection.
+        // Step 1: Complete in-flight RPCs.
+        loop {
+            match cxn.poll().unwrap() {
+                Async::Ready(Some(mut rpc)) => {
+                    let state = rpc.take_state().unwrap();
+                    let result = rpc.take_result().and_then(state.master_error);
+                    match result {
+                        Ok(msg) => state.send.complete(Ok(msg)),
+                        Err(error) => {
+                            if cxn.is_shutdown {
+                                // The connection was shutdown as a result of the error.
+                                rpc.set_state(state);
+                                self.retries.push(rpc);
+                            } else if should_reset(&error) {
+                                cxn.shutdown();
+                                rpc.set_state(state);
+                                self.retries.push(rpc);
+                            } else {
+                                state.send.complete(Err(error));
+                            }
+                        },
+                    }
+                },
+                Async::Ready(None) => return Err(()),
+                Async::NotReady => break,
+            }
+        }
 
-        // Step 2: Crank the connection.
-        cxn.poll_complete()?;
+        // Step 2: Send queued RPCs to the connection.
+        /*
+        while let Some(rpc) = queue.poll().unwrap() {
+            if let AsyncSink::NotReady(rpc) = cxn.start_send(rpc)? {
+                assert!(retry.clone().start_send(rpc).unwrap().is_ready());
+                break;
+            }
+        }
+        */
 
-        // Step 3: Complete finished RPCs.
-
-        //while let Async::Ready(rpc) = in_flight.poll()
-
-
+        // Step 3: Flush sent RPCs.
+        /*
+        cxn.poll_complete()
+        */
         unimplemented!()
     }
 }
@@ -138,17 +177,45 @@ impl Future for MasterProxyTask {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
+        /*
+        if let Err(error) = self.try_poll() {
+            // Reset the leader connection.
+            let replicas = match self.leader {
+                Leader::Known(ref mut cxn, ref mut replicas) => {
+                    cxn.shutdown();
+                    while let Ok(Async::Ready(Some(mut rpc))) = cxn.poll() {
+                        let state = rpc.take_state().unwrap();
+                        let result = rpc.take_result().and_then(state.master_error);
 
+                        match result {
+                            Ok(msg) => state.send.complete(Ok(msg)),
+                            Err(error) => if should_reset(&error) {
+                                assert!(retry.clone().start_send(rpc).unwrap().is_ready());
+                            } else {
+                                state.send.complete(Err(error));
+                            },
+                        }
+                    }
+                    mem::replace(replicas, Vec::new());
+                },
+                Leader::Unknown(..) => return,
+            };
 
-        unimplemented!()
-
-
+            let leader = find_leader_master(reactor.clone(),
+                                            resolver.clone(),
+                                            timer.clone(),
+                                            Backoff::with_duration_range(1_000, 60_000),
+                                            replicas);
+            self.leader = leader;
+        }
+        */
+        Ok(Async::NotReady)
     }
 }
 
 
 
-pub trait MasterResponse: Message {
+pub trait MasterResponse: Message + Any {
     fn error(&mut self) -> Option<MasterError>;
 }
 macro_rules! impl_master_response {

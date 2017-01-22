@@ -45,7 +45,8 @@ where S: Send + 'static
         .and_then(move |connection| connection.into_future().map_err(|_| unreachable!()))
         .and_then(move |(rpc, connection)| {
             rpc.unwrap()
-               .take_result::<ListMastersResponsePB>()
+               .take_result()
+               .map(|msg| *msg.into_any().downcast::<ListMastersResponsePB>().unwrap())
                // Check if the response contains an error. This can happen when the master is
                // not yet initialized, e.g.:
                //     code: CATALOG_MANAGER_NOT_INITIALIZED

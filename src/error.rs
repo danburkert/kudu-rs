@@ -47,37 +47,13 @@ pub enum Error {
     /// An error serializing, deserializing, encoding, or decoding data.
     Serialization(String),
 
-    /// An error due to a version mismatch between the client and server.
-    VersionMismatch(String),
-
-    /// The send queue is full.
-    Backoff,
-
-    /// The operation timed out. Includes zero or more errors which resulted in retries.
+    /// The operation timed out.
     TimedOut,
-
-    /// The operation was cancelled.
-    Cancelled,
-
-    /// The connection encountered an error or hangup.
-    // TODO: split into ConnectionReset and ConnectionHangup
-    ConnectionError,
 
     NegotiationError(&'static str),
 
     /// An operation failed because the range partition did not exist.
     NoRangePartition,
-}
-
-impl Error {
-    // TODO: change to should retry:
-    // Retry on ConnectionHangup, and ServerTooBusy
-    pub fn is_network_error(&self) -> bool {
-        match *self {
-            Error::Io(_) | Error::ConnectionError => true,
-            _ => false,
-        }
-    }
 }
 
 impl Clone for Error {
@@ -93,11 +69,7 @@ impl Clone for Error {
                 Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
             },
             Error::Serialization(ref error) => Error::Serialization(error.clone()),
-            Error::VersionMismatch(ref error) => Error::VersionMismatch(error.clone()),
-            Error::Backoff => Error::Backoff,
             Error::TimedOut => Error::TimedOut,
-            Error::Cancelled => Error::Cancelled,
-            Error::ConnectionError => Error::ConnectionError,
             Error::NegotiationError(error) => Error::NegotiationError(error),
             Error::NoRangePartition => Error::NoRangePartition,
         }
@@ -113,11 +85,7 @@ impl PartialEq for Error {
             (&Error::TabletServer(ref a), &Error::TabletServer(ref b)) => a == b,
             (&Error::Io(ref a), &Error::Io(ref b)) => a.raw_os_error().unwrap() == b.raw_os_error().unwrap(),
             (&Error::Serialization(ref a), &Error::Serialization(ref b)) => a == b,
-            (&Error::VersionMismatch(ref a), &Error::VersionMismatch(ref b)) => a == b,
-            (&Error::Backoff, &Error::Backoff) => true,
             (&Error::TimedOut, &Error::TimedOut) => true,
-            (&Error::Cancelled, &Error::Cancelled) => true,
-            (&Error::ConnectionError, &Error::ConnectionError) => true,
             (&Error::NegotiationError(ref a), &Error::NegotiationError(ref b)) => a == b,
             (&Error::NoRangePartition, &Error::NoRangePartition) => true,
             _ => false,
@@ -134,11 +102,7 @@ impl error::Error for Error {
             Error::TabletServer(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
             Error::Serialization(ref description) => description,
-            Error::VersionMismatch(ref description) => description,
-            Error::Backoff => "backoff",
             Error::TimedOut => "operation timed out",
-            Error::Cancelled => "operation cancelled",
-            Error::ConnectionError => "connection error",
             Error::NegotiationError(error) => error,
             Error::NoRangePartition => "no range partition",
         }
@@ -152,11 +116,7 @@ impl error::Error for Error {
             Error::TabletServer(ref error) => error.cause(),
             Error::Io(ref error) => error.cause(),
             Error::Serialization(_) => None,
-            Error::VersionMismatch(_) => None,
-            Error::Backoff => None,
             Error::TimedOut => None,
-            Error::Cancelled => None,
-            Error::ConnectionError => None,
             Error::NegotiationError(_) => None,
             Error::NoRangePartition => None,
         }
@@ -272,6 +232,13 @@ impl RpcError {
             RpcErrorCode::FatalDeserializingRequest |
             RpcErrorCode::FatalVersionMismatch |
             RpcErrorCode::FatalUnauthorized => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_retriable(&self) -> bool {
+        match self.code {
+            RpcErrorCode::ServerTooBusy => true,
             _ => false,
         }
     }
@@ -616,6 +583,13 @@ impl MasterError {
     }
     pub fn status(&self) -> &Status {
         &self.status
+    }
+    pub fn is_retriable(&self) -> bool {
+        match self.code {
+            MasterErrorCode::CatalogManagerNotInitialized => true,
+            MasterErrorCode::TabletNotRunning => true,
+            _ => false,
+        }
     }
 }
 

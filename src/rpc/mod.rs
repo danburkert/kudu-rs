@@ -74,19 +74,8 @@ impl <S> Rpc<S> {
         }
     }
 
-
-    pub fn result<T>(&self) -> Result<&T, &Error> where T: Any {
-        match *self.result.as_ref().take().expect("RPC not complete") {
-            Ok(ref msg) => Ok(msg.as_any().downcast_ref::<T>().unwrap()),
-            Err(ref error) => Err(error),
-        }
-    }
-
-    pub fn take_result<T>(mut self) -> Result<T, Error> where T: Any {
-        match self.result.take().expect("RPC not complete") {
-            Ok(msg) => Ok(*msg.into_any().downcast::<T>().unwrap()),
-            Err(error) => Err(error),
-        }
+    pub fn take_result(&mut self) -> Result<Box<Message>, Error> {
+        self.result.take().expect("RPC not complete or result already taken")
     }
 
     pub fn state(&self) -> Option<&S> {
