@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="Source to the Rust file `src/rpc/master.rs`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang">
+
+    <title>master.rs.html -- source</title>
+
+    <link rel="stylesheet" type="text/css" href="../../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content source"><pre class="line-numbers"><span id="1"> 1</span>
+<span id="2"> 2</span>
+<span id="3"> 3</span>
+<span id="4"> 4</span>
+<span id="5"> 5</span>
+<span id="6"> 6</span>
+<span id="7"> 7</span>
+<span id="8"> 8</span>
+<span id="9"> 9</span>
+<span id="10">10</span>
+<span id="11">11</span>
+<span id="12">12</span>
+<span id="13">13</span>
+<span id="14">14</span>
+<span id="15">15</span>
+<span id="16">16</span>
+<span id="17">17</span>
+<span id="18">18</span>
+<span id="19">19</span>
+<span id="20">20</span>
+<span id="21">21</span>
+<span id="22">22</span>
+<span id="23">23</span>
+<span id="24">24</span>
+<span id="25">25</span>
+<span id="26">26</span>
+<span id="27">27</span>
+<span id="28">28</span>
+<span id="29">29</span>
+<span id="30">30</span>
+<span id="31">31</span>
+<span id="32">32</span>
+<span id="33">33</span>
+<span id="34">34</span>
+<span id="35">35</span>
+<span id="36">36</span>
+<span id="37">37</span>
+<span id="38">38</span>
+<span id="39">39</span>
+<span id="40">40</span>
+<span id="41">41</span>
+<span id="42">42</span>
+<span id="43">43</span>
+<span id="44">44</span>
+<span id="45">45</span>
+<span id="46">46</span>
+<span id="47">47</span>
+<span id="48">48</span>
+<span id="49">49</span>
+<span id="50">50</span>
+<span id="51">51</span>
+<span id="52">52</span>
+<span id="53">53</span>
+<span id="54">54</span>
+<span id="55">55</span>
+<span id="56">56</span>
+<span id="57">57</span>
+</pre><pre class='rust '>
+<span class='kw'>use</span> <span class='ident'>std</span>::<span class='ident'>net</span>::<span class='ident'>SocketAddr</span>;
+<span class='kw'>use</span> <span class='ident'>std</span>::<span class='ident'>time</span>::<span class='ident'>Instant</span>;
+
+<span class='kw'>use</span> <span class='ident'>kudu_pb</span>::<span class='ident'>master</span>::{
+    <span class='ident'>AlterTableRequestPB</span>, <span class='ident'>AlterTableResponsePB</span>,
+    <span class='ident'>CreateTableRequestPB</span>, <span class='ident'>CreateTableResponsePB</span>,
+    <span class='ident'>DeleteTableRequestPB</span>, <span class='ident'>DeleteTableResponsePB</span>,
+    <span class='ident'>GetMasterRegistrationRequestPB</span>, <span class='ident'>GetMasterRegistrationResponsePB</span>,
+    <span class='ident'>GetTableLocationsRequestPB</span>, <span class='ident'>GetTableLocationsResponsePB</span>,
+    <span class='ident'>GetTableSchemaRequestPB</span>, <span class='ident'>GetTableSchemaResponsePB</span>,
+    <span class='ident'>GetTabletLocationsRequestPB</span>, <span class='ident'>GetTabletLocationsResponsePB</span>,
+    <span class='ident'>IsAlterTableDoneRequestPB</span>, <span class='ident'>IsAlterTableDoneResponsePB</span>,
+    <span class='ident'>IsCreateTableDoneRequestPB</span>, <span class='ident'>IsCreateTableDoneResponsePB</span>,
+    <span class='ident'>ListMastersRequestPB</span>, <span class='ident'>ListMastersResponsePB</span>,
+    <span class='ident'>ListTablesRequestPB</span>, <span class='ident'>ListTablesResponsePB</span>,
+    <span class='ident'>ListTabletServersRequestPB</span>, <span class='ident'>ListTabletServersResponsePB</span>,
+    <span class='ident'>PingRequestPB</span>, <span class='ident'>PingResponsePB</span>,
+};
+<span class='kw'>use</span> <span class='ident'>rpc</span>::<span class='ident'>Rpc</span>;
+
+<span class='kw'>const</span> <span class='ident'>SERVICE_NAME</span>: <span class='kw-2'>&amp;</span><span class='lifetime'>&#39;static</span> <span class='ident'>str</span> <span class='op'>=</span> <span class='string'>&quot;kudu.master.MasterService&quot;</span>;
+
+<span class='comment'>// When macros in type position and concat_idents! land the 3rd and 4th param can be dropped.</span>
+<span class='comment'>// If/when Rust gets a snake -&gt; camel ident converter the 2nd param can be dropped.</span>
+<span class='macro'>macro_rules</span><span class='macro'>!</span> <span class='ident'>rpc</span> {
+    (<span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>fn_name</span>:<span class='ident'>ident</span>, <span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>rpc_name</span>:<span class='ident'>ident</span>, <span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>request_type</span>:<span class='ident'>ident</span>, <span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>response_type</span>:<span class='ident'>ident</span>) <span class='op'>=&gt;</span> {
+        <span class='kw'>pub</span> <span class='kw'>fn</span> <span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>fn_name</span>(<span class='ident'>addr</span>: <span class='ident'>SocketAddr</span>, <span class='ident'>deadline</span>: <span class='ident'>Instant</span>, <span class='ident'>request</span>: <span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>request_type</span>) <span class='op'>-&gt;</span> <span class='ident'>Rpc</span> {
+            <span class='ident'>Rpc</span> {
+                <span class='ident'>addr</span>: <span class='ident'>addr</span>,
+                <span class='ident'>service_name</span>: <span class='ident'>SERVICE_NAME</span>,
+                <span class='ident'>method_name</span>: <span class='macro'>stringify</span><span class='macro'>!</span>(<span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>rpc_name</span>),
+                <span class='ident'>deadline</span>: <span class='ident'>deadline</span>,
+                <span class='ident'>required_feature_flags</span>: <span class='ident'>Vec</span>::<span class='ident'>new</span>(),
+                <span class='ident'>request</span>: <span class='ident'>Box</span>::<span class='ident'>new</span>(<span class='ident'>request</span>),
+                <span class='ident'>response</span>: <span class='ident'>Box</span>::<span class='ident'>new</span>(<span class='macro-nonterminal'>$</span><span class='macro-nonterminal'>response_type</span>::<span class='ident'>new</span>()),
+                <span class='ident'>sidecars</span>: <span class='ident'>Vec</span>::<span class='ident'>new</span>(),
+                <span class='ident'>callback</span>: <span class='prelude-val'>None</span>,
+                <span class='ident'>cancel</span>: <span class='prelude-val'>None</span>,
+                <span class='ident'>fail_fast</span>: <span class='bool-val'>true</span>,
+            }
+        }
+    };
+}
+
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>ping</span>, <span class='ident'>Ping</span>, <span class='ident'>PingRequestPB</span>, <span class='ident'>PingResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>get_tablet_locations</span>, <span class='ident'>GetTabletLocations</span>, <span class='ident'>GetTabletLocationsRequestPB</span>, <span class='ident'>GetTabletLocationsResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>create_table</span>, <span class='ident'>CreateTable</span>, <span class='ident'>CreateTableRequestPB</span>, <span class='ident'>CreateTableResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>is_create_table_done</span>, <span class='ident'>IsCreateTableDone</span>, <span class='ident'>IsCreateTableDoneRequestPB</span>, <span class='ident'>IsCreateTableDoneResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>delete_table</span>, <span class='ident'>DeleteTable</span>, <span class='ident'>DeleteTableRequestPB</span>, <span class='ident'>DeleteTableResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>alter_table</span>, <span class='ident'>AlterTable</span>, <span class='ident'>AlterTableRequestPB</span>, <span class='ident'>AlterTableResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>is_alter_table_done</span>, <span class='ident'>IsAlterTableDone</span>, <span class='ident'>IsAlterTableDoneRequestPB</span>, <span class='ident'>IsAlterTableDoneResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>list_tables</span>, <span class='ident'>ListTables</span>, <span class='ident'>ListTablesRequestPB</span>, <span class='ident'>ListTablesResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>get_table_locations</span>, <span class='ident'>GetTableLocations</span>, <span class='ident'>GetTableLocationsRequestPB</span>, <span class='ident'>GetTableLocationsResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>get_table_schema</span>, <span class='ident'>GetTableSchema</span>, <span class='ident'>GetTableSchemaRequestPB</span>, <span class='ident'>GetTableSchemaResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>list_tablet_servers</span>, <span class='ident'>ListTabletServers</span>, <span class='ident'>ListTabletServersRequestPB</span>, <span class='ident'>ListTabletServersResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>list_masters</span>, <span class='ident'>ListMasters</span>, <span class='ident'>ListMastersRequestPB</span>, <span class='ident'>ListMastersResponsePB</span>);
+<span class='macro'>rpc</span><span class='macro'>!</span>(<span class='ident'>get_master_registration</span>, <span class='ident'>GetMasterRegistration</span>, <span class='ident'>GetMasterRegistrationRequestPB</span>, <span class='ident'>GetMasterRegistrationResponsePB</span>);
+</pre>
+</section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../../";
+        window.currentCrate = "kudu";
+    </script>
+    <script src="../../../jquery.js"></script>
+    <script src="../../../main.js"></script>
+    <script defer src="../../../search-index.js"></script>
+</body>
+</html>

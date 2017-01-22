@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `ProtobufTypeUint32` struct in crate `protobuf`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, ProtobufTypeUint32">
+
+    <title>protobuf::types::ProtobufTypeUint32 - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>types</a></p><script>window.sidebarCurrent = {name: 'ProtobufTypeUint32', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content struct">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>types</a>::<wbr><a class='struct' href=''>ProtobufTypeUint32</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/protobuf/types.rs.html#58' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct ProtobufTypeUint32;</pre><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='../../protobuf/types/trait.ProtobufType.html' title='protobuf::types::ProtobufType'>ProtobufType</a> for <a class='struct' href='../../protobuf/types/struct.ProtobufTypeUint32.html' title='protobuf::types::ProtobufTypeUint32'>ProtobufTypeUint32</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/protobuf/types.rs.html#152-170' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='associatedtype.Value' class='type'><span id='Value.t' class='invisible'><code>type <a href='../../protobuf/types/trait.ProtobufType.html#associatedtype.Value' class='type'>Value</a> = <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<h4 id='method.wire_type' class='method'><span id='wire_type.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#tymethod.wire_type' class='fnname'>wire_type</a>() -&gt; <a class='enum' href='../../protobuf/stream/wire_format/enum.WireType.html' title='protobuf::stream::wire_format::WireType'>WireType</a></code></span></h4>
+<h4 id='method.read' class='method'><span id='read.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#tymethod.read' class='fnname'>read</a>(is: &amp;mut <a class='struct' href='../../protobuf/stream/struct.CodedInputStream.html' title='protobuf::stream::CodedInputStream'>CodedInputStream</a>) -&gt; <a class='type' href='../../protobuf/error/type.ProtobufResult.html' title='protobuf::error::ProtobufResult'>ProtobufResult</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>&gt;</code></span></h4>
+<h4 id='method.compute_size' class='method'><span id='compute_size.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#tymethod.compute_size' class='fnname'>compute_size</a>(value: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<h4 id='method.write_with_cached_size' class='method'><span id='write_with_cached_size.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#tymethod.write_with_cached_size' class='fnname'>write_with_cached_size</a>&lt;W&gt;(field_number: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; value: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; os: &amp;mut W)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -&gt; <a class='type' href='../../protobuf/error/type.ProtobufResult.html' title='protobuf::error::ProtobufResult'>ProtobufResult</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.tuple.html'>()</a>&gt; <span class='where'>where W: <a class='trait' href='https://doc.rust-lang.org/nightly/std/io/trait.Write.html' title='std::io::Write'>Write</a></span></code></span></h4>
+<h4 id='method.compute_size_with_length_delimiter' class='method'><span id='compute_size_with_length_delimiter.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#method.compute_size_with_length_delimiter' class='fnname'>compute_size_with_length_delimiter</a>(value: &amp;Self::<a class='trait' href='../../protobuf/types/trait.ProtobufType.html' title='protobuf::types::ProtobufType'>Value</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<div class='docblock'><p>Compute size adding length prefix if wire type is length delimited (i. e. string, bytes, message) <a href="../../protobuf/types/trait.ProtobufType.html#method.compute_size_with_length_delimiter">Read more</a></p>
+</div><h4 id='method.get_cached_size' class='method'><span id='get_cached_size.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#method.get_cached_size' class='fnname'>get_cached_size</a>(value: &amp;Self::<a class='trait' href='../../protobuf/types/trait.ProtobufType.html' title='protobuf::types::ProtobufType'>Value</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<div class='docblock'><p>Get previously computed size</p>
+</div><h4 id='method.get_cached_size_with_length_delimiter' class='method'><span id='get_cached_size_with_length_delimiter.v' class='invisible'><code>fn <a href='../../protobuf/types/trait.ProtobufType.html#method.get_cached_size_with_length_delimiter' class='fnname'>get_cached_size_with_length_delimiter</a>(value: &amp;Self::<a class='trait' href='../../protobuf/types/trait.ProtobufType.html' title='protobuf::types::ProtobufType'>Value</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<div class='docblock'><p>Get previously cached size with length prefix</p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "protobuf";
+    </script>
+    <script src="../../jquery.js"></script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

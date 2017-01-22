@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `FieldDescriptor` struct in crate `protobuf`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, FieldDescriptor">
+
+    <title>protobuf::reflect::FieldDescriptor - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>reflect</a></p><script>window.sidebarCurrent = {name: 'FieldDescriptor', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content struct">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>reflect</a>::<wbr><a class='struct' href=''>FieldDescriptor</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/protobuf/reflect/mod.rs.html#34-37' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct FieldDescriptor { /* fields omitted */ }</pre><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl <a class='struct' href='../../protobuf/reflect/struct.FieldDescriptor.html' title='protobuf::reflect::FieldDescriptor'>FieldDescriptor</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/protobuf/reflect/mod.rs.html#39-204' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.proto' class='method'><span id='proto.v' class='invisible'><code>fn <a href='#method.proto' class='fnname'>proto</a>(&amp;self) -&gt; &amp;'static <a class='struct' href='../../protobuf/descriptor/struct.FieldDescriptorProto.html' title='protobuf::descriptor::FieldDescriptorProto'>FieldDescriptorProto</a></code></span></h4>
+<h4 id='method.name' class='method'><span id='name.v' class='invisible'><code>fn <a href='#method.name' class='fnname'>name</a>(&amp;self) -&gt; &amp;'static <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a></code></span></h4>
+<h4 id='method.is_repeated' class='method'><span id='is_repeated.v' class='invisible'><code>fn <a href='#method.is_repeated' class='fnname'>is_repeated</a>(&amp;self) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<h4 id='method.has_field' class='method'><span id='has_field.v' class='invisible'><code>fn <a href='#method.has_field' class='fnname'>has_field</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<h4 id='method.len_field' class='method'><span id='len_field.v' class='invisible'><code>fn <a href='#method.len_field' class='fnname'>len_field</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a></code></span></h4>
+<h4 id='method.get_message' class='method'><span id='get_message.v' class='invisible'><code>fn <a href='#method.get_message' class='fnname'>get_message</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a></code></span></h4>
+<h4 id='method.get_rep_message_item' class='method'><span id='get_rep_message_item.v' class='invisible'><code>fn <a href='#method.get_rep_message_item' class='fnname'>get_rep_message_item</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>, index: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a>) -&gt; &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a></code></span></h4>
+<h4 id='method.get_enum' class='method'><span id='get_enum.v' class='invisible'><code>fn <a href='#method.get_enum' class='fnname'>get_enum</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; &amp;'static <a class='struct' href='../../protobuf/reflect/struct.EnumValueDescriptor.html' title='protobuf::reflect::EnumValueDescriptor'>EnumValueDescriptor</a></code></span></h4>
+<h4 id='method.get_rep_enum_item' class='method'><span id='get_rep_enum_item.v' class='invisible'><code>fn <a href='#method.get_rep_enum_item' class='fnname'>get_rep_enum_item</a>(&amp;self,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; index: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a>)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -&gt; &amp;'static <a class='struct' href='../../protobuf/reflect/struct.EnumValueDescriptor.html' title='protobuf::reflect::EnumValueDescriptor'>EnumValueDescriptor</a></code></span></h4>
+<h4 id='method.get_str' class='method'><span id='get_str.v' class='invisible'><code>fn <a href='#method.get_str' class='fnname'>get_str</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; &amp;'a <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a></code></span></h4>
+<h4 id='method.get_rep_str' class='method'><span id='get_rep_str.v' class='invisible'><code>fn <a href='#method.get_rep_str' class='fnname'>get_rep_str</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='struct' href='https://doc.rust-lang.org/nightly/collections/string/struct.String.html' title='collections::string::String'>String</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_rep_str_item' class='method'><span id='get_rep_str_item.v' class='invisible'><code>fn <a href='#method.get_rep_str_item' class='fnname'>get_rep_str_item</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>, index: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a>) -&gt; &amp;'a <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a></code></span></h4>
+<h4 id='method.get_bytes' class='method'><span id='get_bytes.v' class='invisible'><code>fn <a href='#method.get_bytes' class='fnname'>get_bytes</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u8.html'>u8</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_rep_bytes' class='method'><span id='get_rep_bytes.v' class='invisible'><code>fn <a href='#method.get_rep_bytes' class='fnname'>get_rep_bytes</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='struct' href='https://doc.rust-lang.org/nightly/collections/vec/struct.Vec.html' title='collections::vec::Vec'>Vec</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u8.html'>u8</a>&gt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_rep_bytes_item' class='method'><span id='get_rep_bytes_item.v' class='invisible'><code>fn <a href='#method.get_rep_bytes_item' class='fnname'>get_rep_bytes_item</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>, index: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u8.html'>u8</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_u32' class='method'><span id='get_u32.v' class='invisible'><code>fn <a href='#method.get_u32' class='fnname'>get_u32</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a></code></span></h4>
+<h4 id='method.get_rep_u32' class='method'><span id='get_rep_u32.v' class='invisible'><code>fn <a href='#method.get_rep_u32' class='fnname'>get_rep_u32</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_u64' class='method'><span id='get_u64.v' class='invisible'><code>fn <a href='#method.get_u64' class='fnname'>get_u64</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u64.html'>u64</a></code></span></h4>
+<h4 id='method.get_rep_u64' class='method'><span id='get_rep_u64.v' class='invisible'><code>fn <a href='#method.get_rep_u64' class='fnname'>get_rep_u64</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u64.html'>u64</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_i32' class='method'><span id='get_i32.v' class='invisible'><code>fn <a href='#method.get_i32' class='fnname'>get_i32</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i32.html'>i32</a></code></span></h4>
+<h4 id='method.get_rep_i32' class='method'><span id='get_rep_i32.v' class='invisible'><code>fn <a href='#method.get_rep_i32' class='fnname'>get_rep_i32</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i32.html'>i32</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_i64' class='method'><span id='get_i64.v' class='invisible'><code>fn <a href='#method.get_i64' class='fnname'>get_i64</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i64.html'>i64</a></code></span></h4>
+<h4 id='method.get_rep_i64' class='method'><span id='get_rep_i64.v' class='invisible'><code>fn <a href='#method.get_rep_i64' class='fnname'>get_rep_i64</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i64.html'>i64</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_bool' class='method'><span id='get_bool.v' class='invisible'><code>fn <a href='#method.get_bool' class='fnname'>get_bool</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<h4 id='method.get_rep_bool' class='method'><span id='get_rep_bool.v' class='invisible'><code>fn <a href='#method.get_rep_bool' class='fnname'>get_rep_bool</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_f32' class='method'><span id='get_f32.v' class='invisible'><code>fn <a href='#method.get_f32' class='fnname'>get_f32</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.f32.html'>f32</a></code></span></h4>
+<h4 id='method.get_rep_f32' class='method'><span id='get_rep_f32.v' class='invisible'><code>fn <a href='#method.get_rep_f32' class='fnname'>get_rep_f32</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.f32.html'>f32</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_f64' class='method'><span id='get_f64.v' class='invisible'><code>fn <a href='#method.get_f64' class='fnname'>get_f64</a>(&amp;self, m: &amp;<a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.f64.html'>f64</a></code></span></h4>
+<h4 id='method.get_rep_f64' class='method'><span id='get_rep_f64.v' class='invisible'><code>fn <a href='#method.get_rep_f64' class='fnname'>get_rep_f64</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'a [</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.f64.html'>f64</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a></code></span></h4>
+<h4 id='method.get_reflect' class='method'><span id='get_reflect.v' class='invisible'><code>fn <a href='#method.get_reflect' class='fnname'>get_reflect</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>) -&gt; <a class='enum' href='../../protobuf/reflect/enum.ReflectFieldRef.html' title='protobuf::reflect::ReflectFieldRef'>ReflectFieldRef</a>&lt;'a&gt;</code></span></h4>
+<h4 id='method.get_rep_item' class='method'><span id='get_rep_item.v' class='invisible'><code>fn <a href='#method.get_rep_item' class='fnname'>get_rep_item</a>&lt;'a&gt;(&amp;self, m: &amp;'a <a class='trait' href='../../protobuf/core/trait.Message.html' title='protobuf::core::Message'>Message</a>, index: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.usize.html'>usize</a>) -&gt; <a class='enum' href='../../protobuf/reflect/enum.ProtobufValueRef.html' title='protobuf::reflect::ProtobufValueRef'>ProtobufValueRef</a>&lt;'a&gt;</code></span></h4>
+</div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "protobuf";
+    </script>
+    <script src="../../jquery.js"></script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

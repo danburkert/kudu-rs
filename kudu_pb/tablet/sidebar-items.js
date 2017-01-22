@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["file_descriptor_proto",""]],"struct":[["DeltaStatsPB",""],["DeltaStatsPB_ColumnStats",""],["MemStoreTargetPB",""],["OperationResultPB",""],["TabletStatusPB",""],["TxResultPB",""]]});

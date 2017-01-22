@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `ExternalConsistencyMode` enum in crate `kudu_pb`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, ExternalConsistencyMode">
+
+    <title>kudu_pb::common::ExternalConsistencyMode - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='../index.html'>kudu_pb</a>::<wbr><a href='index.html'>common</a></p><script>window.sidebarCurrent = {name: 'ExternalConsistencyMode', ty: 'enum', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content enum">
+<h1 class='fqn'><span class='in-band'>Enum <a href='../index.html'>kudu_pb</a>::<wbr><a href='index.html'>common</a>::<wbr><a class='enum' href=''>ExternalConsistencyMode</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/kudu_pb/common.rs.html#3856-3860' title='goto source code'>[src]</a></span></h1>
+<pre class='rust enum'>pub enum ExternalConsistencyMode {
+    UNKNOWN_EXTERNAL_CONSISTENCY_MODE,
+    CLIENT_PROPAGATED,
+    COMMIT_WAIT,
+}</pre><h2 class='variants'>Variants</h2>
+<span id='variant.UNKNOWN_EXTERNAL_CONSISTENCY_MODE' class='variant'><span id='UNKNOWN_EXTERNAL_CONSISTENCY_MODE.v' class='invisible'><code>UNKNOWN_EXTERNAL_CONSISTENCY_MODE</code></span></span><span id='variant.CLIENT_PROPAGATED' class='variant'><span id='CLIENT_PROPAGATED.v' class='invisible'><code>CLIENT_PROPAGATED</code></span></span><span id='variant.COMMIT_WAIT' class='variant'><span id='COMMIT_WAIT.v' class='invisible'><code>COMMIT_WAIT</code></span></span><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html' title='core::clone::Clone'>Clone</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3855' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.clone' class='method'><span id='clone.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone' class='fnname'>clone</a>(&amp;self) -&gt; <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span></h4>
+<div class='docblock'><p>Returns a copy of the value. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone">Read more</a></p>
+</div><h4 id='method.clone_from' class='method'><span id='clone_from.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from' class='fnname'>clone_from</a>(&amp;mut self, source: &amp;Self)</code><div class='since' title='Stable since Rust version 1.0.0'>1.0.0</div></span></h4>
+<div class='docblock'><p>Performs copy-assignment from <code>source</code>. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from">Read more</a></p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html' title='core::cmp::PartialEq'>PartialEq</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3855' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.eq' class='method'><span id='eq.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#tymethod.eq' class='fnname'>eq</a>(&amp;self, __arg_0: &amp;<a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<div class='docblock'><p>This method tests for <code>self</code> and <code>other</code> values to be equal, and is used by <code>==</code>. <a href="https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#tymethod.eq">Read more</a></p>
+</div><h4 id='method.ne' class='method'><span id='ne.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#method.ne' class='fnname'>ne</a>(&amp;self, other: &amp;Rhs) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code><div class='since' title='Stable since Rust version 1.0.0'>1.0.0</div></span></h4>
+<div class='docblock'><p>This method tests for <code>!=</code>.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/cmp/trait.Eq.html' title='core::cmp::Eq'>Eq</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3855' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html' title='core::fmt::Debug'>Debug</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3855' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.fmt' class='method'><span id='fmt.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt' class='fnname'>fmt</a>(&amp;self, __arg_0: &amp;mut <a class='struct' href='https://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html' title='core::fmt::Formatter'>Formatter</a>) -&gt; <a class='type' href='https://doc.rust-lang.org/nightly/core/fmt/type.Result.html' title='core::fmt::Result'>Result</a></code></span></h4>
+<div class='docblock'><p>Formats the value using the given formatter.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/hash/trait.Hash.html' title='core::hash::Hash'>Hash</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3855' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.hash' class='method'><span id='hash.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/hash/trait.Hash.html#tymethod.hash' class='fnname'>hash</a>&lt;__H:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/hash/trait.Hasher.html' title='core::hash::Hasher'>Hasher</a>&gt;(&amp;self, __arg_0: &amp;mut __H)</code></span></h4>
+<div class='docblock'><p>Feeds this value into the state given, updating the hasher as necessary.</p>
+</div><h4 id='method.hash_slice' class='method'><span id='hash_slice.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/hash/trait.Hash.html#method.hash_slice' class='fnname'>hash_slice</a>&lt;H&gt;(data: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;[Self]</a>, state: &amp;mut H) <span class='where'>where H: <a class='trait' href='https://doc.rust-lang.org/nightly/core/hash/trait.Hasher.html' title='core::hash::Hasher'>Hasher</a></span></code><div class='since' title='Stable since Rust version 1.3.0'>1.3.0</div></span></h4>
+<div class='docblock'><p>Feeds a slice of this type into the state provided.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='../../protobuf/core/trait.ProtobufEnum.html' title='protobuf::core::ProtobufEnum'>ProtobufEnum</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3862-3896' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.value' class='method'><span id='value.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#tymethod.value' class='fnname'>value</a>(&amp;self) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i32.html'>i32</a></code></span></h4>
+<h4 id='method.from_i32' class='method'><span id='from_i32.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#tymethod.from_i32' class='fnname'>from_i32</a>(value: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.i32.html'>i32</a>) -&gt; <a class='enum' href='https://doc.rust-lang.org/nightly/core/option/enum.Option.html' title='core::option::Option'>Option</a>&lt;<a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a>&gt;</code></span></h4>
+<h4 id='method.values' class='method'><span id='values.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#method.values' class='fnname'>values</a>() -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;'static [Self]</a></code></span></h4>
+<h4 id='method.enum_descriptor_static' class='method'><span id='enum_descriptor_static.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#method.enum_descriptor_static' class='fnname'>enum_descriptor_static</a>(_: <a class='enum' href='https://doc.rust-lang.org/nightly/core/option/enum.Option.html' title='core::option::Option'>Option</a>&lt;<a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a>&gt;)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -&gt; &amp;'static <a class='struct' href='../../protobuf/reflect/struct.EnumDescriptor.html' title='protobuf::reflect::EnumDescriptor'>EnumDescriptor</a></code></span></h4>
+<h4 id='method.descriptor' class='method'><span id='descriptor.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#method.descriptor' class='fnname'>descriptor</a>(&amp;self) -&gt; &amp;'static <a class='struct' href='../../protobuf/reflect/struct.EnumValueDescriptor.html' title='protobuf::reflect::EnumValueDescriptor'>EnumValueDescriptor</a></code></span></h4>
+<h4 id='method.enum_descriptor' class='method'><span id='enum_descriptor.v' class='invisible'><code>fn <a href='../../protobuf/core/trait.ProtobufEnum.html#method.enum_descriptor' class='fnname'>enum_descriptor</a>(&amp;self) -&gt; &amp;'static <a class='struct' href='../../protobuf/reflect/struct.EnumDescriptor.html' title='protobuf::reflect::EnumDescriptor'>EnumDescriptor</a></code></span></h4>
+</div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/marker/trait.Copy.html' title='core::marker::Copy'>Copy</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3898-3899' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='../../protobuf/reflect/value/trait.ProtobufValue.html' title='protobuf::reflect::value::ProtobufValue'>ProtobufValue</a> for <a class='enum' href='../../kudu_pb/common/enum.ExternalConsistencyMode.html' title='kudu_pb::common::ExternalConsistencyMode'>ExternalConsistencyMode</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/kudu_pb/common.rs.html#3901-3905' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.as_ref' class='method'><span id='as_ref.v' class='invisible'><code>fn <a href='../../protobuf/reflect/value/trait.ProtobufValue.html#tymethod.as_ref' class='fnname'>as_ref</a>(&amp;self) -&gt; <a class='enum' href='../../protobuf/reflect/value/enum.ProtobufValueRef.html' title='protobuf::reflect::value::ProtobufValueRef'>ProtobufValueRef</a></code></span></h4>
+<h4 id='method.as_any' class='method'><span id='as_any.v' class='invisible'><code>fn <a href='../../protobuf/reflect/value/trait.ProtobufValue.html#method.as_any' class='fnname'>as_any</a>(&amp;self) -&gt; &amp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/any/trait.Any.html' title='core::any::Any'>Any</a> + 'static</code></span></h4>
+<h4 id='method.is_non_zero' class='method'><span id='is_non_zero.v' class='invisible'><code>fn <a href='../../protobuf/reflect/value/trait.ProtobufValue.html#method.is_non_zero' class='fnname'>is_non_zero</a>(&amp;self) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<h4 id='method.as_ref_copy' class='method'><span id='as_ref_copy.v' class='invisible'><code>fn <a href='../../protobuf/reflect/value/trait.ProtobufValue.html#method.as_ref_copy' class='fnname'>as_ref_copy</a>(&amp;self) -&gt; <a class='enum' href='../../protobuf/reflect/value/enum.ProtobufValueRef.html' title='protobuf::reflect::value::ProtobufValueRef'>ProtobufValueRef</a>&lt;'static&gt;</code></span></h4>
+</div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "kudu_pb";
+    </script>
+    <script src="../../jquery.js"></script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

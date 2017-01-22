@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `Column` struct in crate `kudu`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, Column">
+
+    <title>kudu::Column - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='index.html'>kudu</a></p><script>window.sidebarCurrent = {name: 'Column', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content struct">
+<h1 class='fqn'><span class='in-band'>Struct <a href='index.html'>kudu</a>::<wbr><a class='struct' href=''>Column</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/kudu/schema.rs.html#21-28' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct Column { /* fields omitted */ }</pre><div class='docblock'><p><code>Column</code> instances hold metadata information about columns in a Kudu table.</p>
+
+<p><code>Column</code> also serves as a builder object for specifying new columns during create and alter
+table operations.</p>
+</div><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/kudu/schema.rs.html#30-148' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.name' class='method'><span id='name.v' class='invisible'><code>fn <a href='#method.name' class='fnname'>name</a>(&amp;self) -&gt; &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a></code></span></h4>
+<h4 id='method.data_type' class='method'><span id='data_type.v' class='invisible'><code>fn <a href='#method.data_type' class='fnname'>data_type</a>(&amp;self) -&gt; <a class='enum' href='../kudu/enum.DataType.html' title='kudu::DataType'>DataType</a></code></span></h4>
+<h4 id='method.is_nullable' class='method'><span id='is_nullable.v' class='invisible'><code>fn <a href='#method.is_nullable' class='fnname'>is_nullable</a>(&amp;self) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<h4 id='method.encoding' class='method'><span id='encoding.v' class='invisible'><code>fn <a href='#method.encoding' class='fnname'>encoding</a>(&amp;self) -&gt; <a class='enum' href='../kudu/enum.EncodingType.html' title='kudu::EncodingType'>EncodingType</a></code></span></h4>
+<h4 id='method.compression' class='method'><span id='compression.v' class='invisible'><code>fn <a href='#method.compression' class='fnname'>compression</a>(&amp;self) -&gt; <a class='enum' href='../kudu/enum.CompressionType.html' title='kudu::CompressionType'>CompressionType</a></code></span></h4>
+<h4 id='method.block_size' class='method'><span id='block_size.v' class='invisible'><code>fn <a href='#method.block_size' class='fnname'>block_size</a>(&amp;self) -&gt; <a class='enum' href='https://doc.rust-lang.org/nightly/core/option/enum.Option.html' title='core::option::Option'>Option</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>&gt;</code></span></h4>
+<h4 id='method.builder' class='method'><span id='builder.v' class='invisible'><code>fn <a href='#method.builder' class='fnname'>builder</a>&lt;S&gt;(name: S, data_type: <a class='enum' href='../kudu/enum.DataType.html' title='kudu::DataType'>DataType</a>) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a> <span class='where'>where S: <a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.Into.html' title='core::convert::Into'>Into</a>&lt;<a class='struct' href='https://doc.rust-lang.org/nightly/collections/string/struct.String.html' title='collections::string::String'>String</a>&gt;</span></code></span></h4>
+<div class='docblock'><p>Returns a new column builder.</p>
+</div><h4 id='method.set_nullable' class='method'><span id='set_nullable.v' class='invisible'><code>fn <a href='#method.set_nullable' class='fnname'>set_nullable</a>(self) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_nullable_by_ref' class='method'><span id='set_nullable_by_ref.v' class='invisible'><code>fn <a href='#method.set_nullable_by_ref' class='fnname'>set_nullable_by_ref</a>(&amp;mut self) -&gt; &amp;mut <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_not_null' class='method'><span id='set_not_null.v' class='invisible'><code>fn <a href='#method.set_not_null' class='fnname'>set_not_null</a>(self) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_not_null_by_ref' class='method'><span id='set_not_null_by_ref.v' class='invisible'><code>fn <a href='#method.set_not_null_by_ref' class='fnname'>set_not_null_by_ref</a>(&amp;mut self) -&gt; &amp;mut <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_encoding' class='method'><span id='set_encoding.v' class='invisible'><code>fn <a href='#method.set_encoding' class='fnname'>set_encoding</a>(self, encoding: <a class='enum' href='../kudu/enum.EncodingType.html' title='kudu::EncodingType'>EncodingType</a>) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_encoding_by_ref' class='method'><span id='set_encoding_by_ref.v' class='invisible'><code>fn <a href='#method.set_encoding_by_ref' class='fnname'>set_encoding_by_ref</a>(&amp;mut self, encoding: <a class='enum' href='../kudu/enum.EncodingType.html' title='kudu::EncodingType'>EncodingType</a>) -&gt; &amp;mut <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_compression' class='method'><span id='set_compression.v' class='invisible'><code>fn <a href='#method.set_compression' class='fnname'>set_compression</a>(self, compression: <a class='enum' href='../kudu/enum.CompressionType.html' title='kudu::CompressionType'>CompressionType</a>) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_compression_by_ref' class='method'><span id='set_compression_by_ref.v' class='invisible'><code>fn <a href='#method.set_compression_by_ref' class='fnname'>set_compression_by_ref</a>(&amp;mut self,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; compression: <a class='enum' href='../kudu/enum.CompressionType.html' title='kudu::CompressionType'>CompressionType</a>)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -&gt; &amp;mut <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_block_size' class='method'><span id='set_block_size.v' class='invisible'><code>fn <a href='#method.set_block_size' class='fnname'>set_block_size</a>(self, block_size: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<h4 id='method.set_block_size_by_ref' class='method'><span id='set_block_size_by_ref.v' class='invisible'><code>fn <a href='#method.set_block_size_by_ref' class='fnname'>set_block_size_by_ref</a>(&amp;mut self, block_size: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.u32.html'>u32</a>) -&gt; &amp;mut <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+</div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html' title='core::clone::Clone'>Clone</a> for <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/kudu/schema.rs.html#20' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.clone' class='method'><span id='clone.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone' class='fnname'>clone</a>(&amp;self) -&gt; <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span></h4>
+<div class='docblock'><p>Returns a copy of the value. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#tymethod.clone">Read more</a></p>
+</div><h4 id='method.clone_from' class='method'><span id='clone_from.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from' class='fnname'>clone_from</a>(&amp;mut self, source: &amp;Self)</code><div class='since' title='Stable since Rust version 1.0.0'>1.0.0</div></span></h4>
+<div class='docblock'><p>Performs copy-assignment from <code>source</code>. <a href="https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html#method.clone_from">Read more</a></p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html' title='core::cmp::PartialEq'>PartialEq</a> for <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/kudu/schema.rs.html#20' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.eq' class='method'><span id='eq.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#tymethod.eq' class='fnname'>eq</a>(&amp;self, __arg_0: &amp;<a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<div class='docblock'><p>This method tests for <code>self</code> and <code>other</code> values to be equal, and is used by <code>==</code>. <a href="https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#tymethod.eq">Read more</a></p>
+</div><h4 id='method.ne' class='method'><span id='ne.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/cmp/trait.PartialEq.html#method.ne' class='fnname'>ne</a>(&amp;self, __arg_0: &amp;<a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a>) -&gt; <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a></code></span></h4>
+<div class='docblock'><p>This method tests for <code>!=</code>.</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/cmp/trait.Eq.html' title='core::cmp::Eq'>Eq</a> for <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/kudu/schema.rs.html#20' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl <a class='trait' href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html' title='core::fmt::Debug'>Debug</a> for <a class='struct' href='../kudu/struct.Column.html' title='kudu::Column'>Column</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/kudu/schema.rs.html#150-167' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.fmt' class='method'><span id='fmt.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt' class='fnname'>fmt</a>(&amp;self, f: &amp;mut <a class='struct' href='https://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html' title='core::fmt::Formatter'>Formatter</a>) -&gt; <a class='type' href='https://doc.rust-lang.org/nightly/core/fmt/type.Result.html' title='core::fmt::Result'>Result</a></code></span></h4>
+<div class='docblock'><p>Formats the value using the given formatter.</p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "kudu";
+    </script>
+    <script src="../jquery.js"></script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>

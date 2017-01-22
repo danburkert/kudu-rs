@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["ConsensusConfigType",""],["RaftPeerPB_MemberType",""],["RaftPeerPB_Role",""]],"fn":[["file_descriptor_proto",""]],"struct":[["ConsensusMetadataPB",""],["ConsensusStatePB",""],["RaftConfigPB",""],["RaftPeerPB",""]]});

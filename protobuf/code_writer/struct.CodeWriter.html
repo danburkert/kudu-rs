@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `CodeWriter` struct in crate `protobuf`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, CodeWriter">
+
+    <title>protobuf::code_writer::CodeWriter - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>code_writer</a></p><script>window.sidebarCurrent = {name: 'CodeWriter', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content struct">
+<h1 class='fqn'><span class='in-band'>Struct <a href='../index.html'>protobuf</a>::<wbr><a href='index.html'>code_writer</a>::<wbr><a class='struct' href=''>CodeWriter</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../../src/protobuf/code_writer.rs.html#6-9' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct CodeWriter&lt;'a&gt; { /* fields omitted */ }</pre><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl&lt;'a&gt; <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>&lt;'a&gt;</code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../../src/protobuf/code_writer.rs.html#11-300' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new' class='method'><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>(writer: &amp;'a mut <a class='trait' href='https://doc.rust-lang.org/nightly/std/io/trait.Write.html' title='std::io::Write'>Write</a>) -&gt; <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>&lt;'a&gt;</code></span></h4>
+<h4 id='method.write_line' class='method'><span id='write_line.v' class='invisible'><code>fn <a href='#method.write_line' class='fnname'>write_line</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;&gt;(&amp;mut self, line: S)</code></span></h4>
+<h4 id='method.write_generated' class='method'><span id='write_generated.v' class='invisible'><code>fn <a href='#method.write_generated' class='fnname'>write_generated</a>(&amp;mut self)</code></span></h4>
+<h4 id='method.todo' class='method'><span id='todo.v' class='invisible'><code>fn <a href='#method.todo' class='fnname'>todo</a>(&amp;mut self, message: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.indented' class='method'><span id='indented.v' class='invisible'><code>fn <a href='#method.indented' class='fnname'>indented</a>&lt;F&gt;(&amp;mut self, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.commented' class='method'><span id='commented.v' class='invisible'><code>fn <a href='#method.commented' class='fnname'>commented</a>&lt;F&gt;(&amp;mut self, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.lazy_static' class='method'><span id='lazy_static.v' class='invisible'><code>fn <a href='#method.lazy_static' class='fnname'>lazy_static</a>(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, ty: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.lazy_static_decl_get' class='method'><span id='lazy_static_decl_get.v' class='invisible'><code>fn <a href='#method.lazy_static_decl_get' class='fnname'>lazy_static_decl_get</a>&lt;F&gt;(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, ty: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, init: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.lazy_static_decl_get_simple' class='method'><span id='lazy_static_decl_get_simple.v' class='invisible'><code>fn <a href='#method.lazy_static_decl_get_simple' class='fnname'>lazy_static_decl_get_simple</a>(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, ty: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, init: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.block' class='method'><span id='block.v' class='invisible'><code>fn <a href='#method.block' class='fnname'>block</a>&lt;F&gt;(&amp;mut self, first_line: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, last_line: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.expr_block' class='method'><span id='expr_block.v' class='invisible'><code>fn <a href='#method.expr_block' class='fnname'>expr_block</a>&lt;F&gt;(&amp;mut self, prefix: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.stmt_block' class='method'><span id='stmt_block.v' class='invisible'><code>fn <a href='#method.stmt_block' class='fnname'>stmt_block</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, prefix: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.unsafe_expr' class='method'><span id='unsafe_expr.v' class='invisible'><code>fn <a href='#method.unsafe_expr' class='fnname'>unsafe_expr</a>&lt;F&gt;(&amp;mut self, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.impl_self_block' class='method'><span id='impl_self_block.v' class='invisible'><code>fn <a href='#method.impl_self_block' class='fnname'>impl_self_block</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, name: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.impl_for_block' class='method'><span id='impl_for_block.v' class='invisible'><code>fn <a href='#method.impl_for_block' class='fnname'>impl_for_block</a>&lt;S1:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, S2:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; tr: S1,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ty: S2,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.unsafe_impl' class='method'><span id='unsafe_impl.v' class='invisible'><code>fn <a href='#method.unsafe_impl' class='fnname'>unsafe_impl</a>(&amp;mut self, what: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, for_what: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.pub_struct' class='method'><span id='pub_struct.v' class='invisible'><code>fn <a href='#method.pub_struct' class='fnname'>pub_struct</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, name: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.def_struct' class='method'><span id='def_struct.v' class='invisible'><code>fn <a href='#method.def_struct' class='fnname'>def_struct</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, name: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.pub_enum' class='method'><span id='pub_enum.v' class='invisible'><code>fn <a href='#method.pub_enum' class='fnname'>pub_enum</a>&lt;F&gt;(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.pub_trait' class='method'><span id='pub_trait.v' class='invisible'><code>fn <a href='#method.pub_trait' class='fnname'>pub_trait</a>&lt;F&gt;(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.field_entry' class='method'><span id='field_entry.v' class='invisible'><code>fn <a href='#method.field_entry' class='fnname'>field_entry</a>(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, value: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.field_decl' class='method'><span id='field_decl.v' class='invisible'><code>fn <a href='#method.field_decl' class='fnname'>field_decl</a>(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, field_type: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.pub_field_decl' class='method'><span id='pub_field_decl.v' class='invisible'><code>fn <a href='#method.pub_field_decl' class='fnname'>pub_field_decl</a>(&amp;mut self, name: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, field_type: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.derive' class='method'><span id='derive.v' class='invisible'><code>fn <a href='#method.derive' class='fnname'>derive</a>(&amp;mut self, derive: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;[</a>&amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a>)</code></span></h4>
+<h4 id='method.allow' class='method'><span id='allow.v' class='invisible'><code>fn <a href='#method.allow' class='fnname'>allow</a>(&amp;mut self, what: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>&amp;[</a>&amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a><a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.slice.html'>]</a>)</code></span></h4>
+<h4 id='method.comment' class='method'><span id='comment.v' class='invisible'><code>fn <a href='#method.comment' class='fnname'>comment</a>(&amp;mut self, comment: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.fn_def' class='method'><span id='fn_def.v' class='invisible'><code>fn <a href='#method.fn_def' class='fnname'>fn_def</a>(&amp;mut self, sig: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.fn_block' class='method'><span id='fn_block.v' class='invisible'><code>fn <a href='#method.fn_block' class='fnname'>fn_block</a>&lt;F&gt;(&amp;mut self, public: <a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.bool.html'>bool</a>, sig: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.pub_fn' class='method'><span id='pub_fn.v' class='invisible'><code>fn <a href='#method.pub_fn' class='fnname'>pub_fn</a>&lt;F&gt;(&amp;mut self, sig: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.def_fn' class='method'><span id='def_fn.v' class='invisible'><code>fn <a href='#method.def_fn' class='fnname'>def_fn</a>&lt;F&gt;(&amp;mut self, sig: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.while_block' class='method'><span id='while_block.v' class='invisible'><code>fn <a href='#method.while_block' class='fnname'>while_block</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, cond: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.if_stmt' class='method'><span id='if_stmt.v' class='invisible'><code>fn <a href='#method.if_stmt' class='fnname'>if_stmt</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, cond: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.if_else_stmt' class='method'><span id='if_else_stmt.v' class='invisible'><code>fn <a href='#method.if_else_stmt' class='fnname'>if_else_stmt</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, cond: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.if_let_stmt' class='method'><span id='if_let_stmt.v' class='invisible'><code>fn <a href='#method.if_let_stmt' class='fnname'>if_let_stmt</a>&lt;F&gt;(&amp;mut self, decl: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, expr: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.if_let_else_stmt' class='method'><span id='if_let_else_stmt.v' class='invisible'><code>fn <a href='#method.if_let_else_stmt' class='fnname'>if_let_else_stmt</a>&lt;F&gt;(&amp;mut self, decl: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, expr: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.for_stmt' class='method'><span id='for_stmt.v' class='invisible'><code>fn <a href='#method.for_stmt' class='fnname'>for_stmt</a>&lt;S1:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, S2:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; over: S1,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; varn: S2,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.match_block' class='method'><span id='match_block.v' class='invisible'><code>fn <a href='#method.match_block' class='fnname'>match_block</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, value: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.match_expr' class='method'><span id='match_expr.v' class='invisible'><code>fn <a href='#method.match_expr' class='fnname'>match_expr</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, value: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.case_block' class='method'><span id='case_block.v' class='invisible'><code>fn <a href='#method.case_block' class='fnname'>case_block</a>&lt;S:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, F&gt;(&amp;mut self, cond: S, cb: F) <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(&amp;mut <a class='struct' href='../../protobuf/code_writer/struct.CodeWriter.html' title='protobuf::code_writer::CodeWriter'>CodeWriter</a>)</span></code></span></h4>
+<h4 id='method.case_expr' class='method'><span id='case_expr.v' class='invisible'><code>fn <a href='#method.case_expr' class='fnname'>case_expr</a>&lt;S1:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;, S2:&nbsp;<a class='trait' href='https://doc.rust-lang.org/nightly/core/convert/trait.AsRef.html' title='core::convert::AsRef'>AsRef</a>&lt;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>&gt;&gt;(&amp;mut self, cond: S1, body: S2)</code></span></h4>
+<h4 id='method.error_unexpected_wire_type' class='method'><span id='error_unexpected_wire_type.v' class='invisible'><code>fn <a href='#method.error_unexpected_wire_type' class='fnname'>error_unexpected_wire_type</a>(&amp;mut self, wire_type: &amp;<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.str.html'>str</a>)</code></span></h4>
+<h4 id='method.assert_wire_type' class='method'><span id='assert_wire_type.v' class='invisible'><code>fn <a href='#method.assert_wire_type' class='fnname'>assert_wire_type</a>(&amp;mut self, wire_type: <a class='enum' href='../../protobuf/stream/wire_format/enum.WireType.html' title='protobuf::stream::wire_format::WireType'>WireType</a>)</code></span></h4>
+</div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../../";
+        window.currentCrate = "protobuf";
+    </script>
+    <script src="../../jquery.js"></script>
+    <script src="../../main.js"></script>
+    <script defer src="../../search-index.js"></script>
+</body>
+</html>

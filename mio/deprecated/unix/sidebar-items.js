@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Shutdown","Possible values which can be passed to the [`shutdown`] method of [`TcpStream`]."]],"fn":[["pipe",""]],"struct":[["Io",""],["PipeReader",""],["PipeWriter",""],["UnixListener",""],["UnixSocket",""],["UnixStream",""]]});

@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["BlockRecordType",""]],"fn":[["file_descriptor_proto",""]],"struct":[["BlockIdPB",""],["BlockRecordPB",""],["InstanceMetadataPB",""],["PathInstanceMetadataPB",""],["PathSetPB",""]]});

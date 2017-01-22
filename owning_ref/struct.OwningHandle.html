@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `OwningHandle` struct in crate `owning_ref`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, OwningHandle">
+
+    <title>owning_ref::OwningHandle - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css">
+    <link rel="stylesheet" type="text/css" href="../main.css">
+    
+
+    
+    
+</head>
+<body class="rustdoc">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        
+        <p class='location'><a href='index.html'>owning_ref</a></p><script>window.sidebarCurrent = {name: 'OwningHandle', ty: 'struct', relpath: ''};</script><script defer src="sidebar-items.js"></script>
+    </nav>
+
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content struct">
+<h1 class='fqn'><span class='in-band'>Struct <a href='index.html'>owning_ref</a>::<wbr><a class='struct' href=''>OwningHandle</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/owning_ref/lib.rs.html#417-422' title='goto source code'>[src]</a></span></h1>
+<pre class='rust struct'>pub struct OwningHandle&lt;O, H&gt; <span class='where'>where O: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a>, H: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Deref</a></span> { /* fields omitted */ }</pre><div class='docblock'><p><code>OwningHandle</code> is a complement to <code>OwningRef</code>. Where <code>OwningRef</code> allows
+consumers to pass around an owned object and a dependent reference,
+<code>OwningHandle</code> contains an owned object and a dependent <em>object</em>.</p>
+
+<p><code>OwningHandle</code> can encapsulate a <code>RefMut</code> along with its associated
+<code>RefCell</code>, or an <code>RwLockReadGuard</code> along with its associated <code>RwLock</code>.
+However, the API is completely generic and there are no restrictions on
+what types of owning and dependent objects may be used.</p>
+
+<p><code>OwningHandle</code> is created by passing an owner object (which dereferences
+to a stable address) along with a callback which receives a pointer to
+that stable location. The callback may then dereference the pointer and
+mint a dependent object, with the guarantee that the returned object will
+not outlive the referent of the pointer.</p>
+
+<p>This does foist some unsafety onto the callback, which needs an <code>unsafe</code>
+block to dereference the pointer. It would be almost good enough for
+OwningHandle to pass a transmuted &amp;&#39;statc reference to the callback
+since the lifetime is infinite as far as the minted handle is concerned.
+However, even an <code>Fn</code> callback can still allow the reference to escape
+via a <code>StaticMutex</code> or similar, which technically violates the safety
+contract. Some sort of language support in the lifetime system could
+make this API a bit nicer.</p>
+</div><h2 id='methods'>Methods</h2><h3 class='impl'><span class='in-band'><code>impl&lt;O, H&gt; <a class='struct' href='../owning_ref/struct.OwningHandle.html' title='owning_ref::OwningHandle'>OwningHandle</a>&lt;O, H&gt; <span class='where'>where O: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a>, H: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Deref</a></span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/owning_ref/lib.rs.html#445-483' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.new' class='method'><span id='new.v' class='invisible'><code>fn <a href='#method.new' class='fnname'>new</a>&lt;F&gt;(o: O, f: F) -&gt; Self <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.pointer.html'>*const </a>O::<a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Target</a>) -&gt; H</span></code></span></h4>
+<div class='docblock'><p>Create a new OwningHandle. The provided callback will be invoked with
+a pointer to the object owned by <code>o</code>, and the returned value is stored
+as the object to which this <code>OwningHandle</code> will forward <code>Deref</code> and
+<code>DerefMut</code>.</p>
+</div><h4 id='method.try_new' class='method'><span id='try_new.v' class='invisible'><code>fn <a href='#method.try_new' class='fnname'>try_new</a>&lt;F, E&gt;(o: O, f: F) -&gt; <a class='enum' href='https://doc.rust-lang.org/nightly/core/result/enum.Result.html' title='core::result::Result'>Result</a>&lt;Self, E&gt; <span class='where'>where F: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Fn.html' title='core::ops::Fn'>Fn</a>(<a class='primitive' href='https://doc.rust-lang.org/nightly/std/primitive.pointer.html'>*const </a>O::<a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Target</a>) -&gt; <a class='enum' href='https://doc.rust-lang.org/nightly/core/result/enum.Result.html' title='core::result::Result'>Result</a>&lt;H, E&gt;</span></code></span></h4>
+<div class='docblock'><p>Create a new OwningHandle. The provided callback will be invoked with
+a pointer to the object owned by <code>o</code>, and the returned value is stored
+as the object to which this <code>OwningHandle</code> will forward <code>Deref</code> and
+<code>DerefMut</code>.</p>
+</div></div><h2 id='implementations'>Trait Implementations</h2><h3 class='impl'><span class='in-band'><code>impl&lt;O, H&gt; <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Deref</a> for <a class='struct' href='../owning_ref/struct.OwningHandle.html' title='owning_ref::OwningHandle'>OwningHandle</a>&lt;O, H&gt; <span class='where'>where O: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a>, H: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Deref</a></span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/owning_ref/lib.rs.html#424-431' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='associatedtype.Target' class='type'><span id='Target.t' class='invisible'><code>type <a href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html#associatedtype.Target' class='type'>Target</a> = H::<a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Target</a></code></span></h4>
+<div class='docblock'><p>The resulting type after dereferencing</p>
+</div><h4 id='method.deref' class='method'><span id='deref.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html#tymethod.deref' class='fnname'>deref</a>(&amp;self) -&gt; &amp;H::<a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Target</a></code></span></h4>
+<div class='docblock'><p>The method called to dereference a value</p>
+</div></div><h3 class='impl'><span class='in-band'><code>impl&lt;O, H&gt; <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a> for <a class='struct' href='../owning_ref/struct.OwningHandle.html' title='owning_ref::OwningHandle'>OwningHandle</a>&lt;O, H&gt; <span class='where fmt-newline'>where O: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;H: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a></span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/owning_ref/lib.rs.html#433-435' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'></div><h3 class='impl'><span class='in-band'><code>impl&lt;O, H&gt; <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.DerefMut.html' title='core::ops::DerefMut'>DerefMut</a> for <a class='struct' href='../owning_ref/struct.OwningHandle.html' title='owning_ref::OwningHandle'>OwningHandle</a>&lt;O, H&gt; <span class='where'>where O: <a class='trait' href='../owning_ref/trait.StableAddress.html' title='owning_ref::StableAddress'>StableAddress</a>, H: <a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.DerefMut.html' title='core::ops::DerefMut'>DerefMut</a></span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/owning_ref/lib.rs.html#437-443' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.deref_mut' class='method'><span id='deref_mut.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/ops/trait.DerefMut.html#tymethod.deref_mut' class='fnname'>deref_mut</a>(&amp;mut self) -&gt; &amp;mut H::<a class='trait' href='https://doc.rust-lang.org/nightly/core/ops/trait.Deref.html' title='core::ops::Deref'>Target</a></code></span></h4>
+<div class='docblock'><p>The method called to mutably dereference a value</p>
+</div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt>?</dt>
+                    <dd>Show this help dialog</dd>
+                    <dt>S</dt>
+                    <dd>Focus the search field</dd>
+                    <dt>&larrb;</dt>
+                    <dd>Move up in search results</dd>
+                    <dt>&rarrb;</dt>
+                    <dd>Move down in search results</dd>
+                    <dt>&#9166;</dt>
+                    <dd>Go to active search result</dd>
+                    <dt>+</dt>
+                    <dd>Collapse/expand all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "owning_ref";
+    </script>
+    <script src="../jquery.js"></script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>
