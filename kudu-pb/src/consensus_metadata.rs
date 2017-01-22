@@ -7,17 +7,24 @@
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
+#![allow(box_pointers)]
 #![allow(dead_code)]
+#![allow(missing_docs)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(trivial_casts)]
+#![allow(unsafe_code)]
 #![allow(unused_imports)]
+#![allow(unused_results)]
+
+use std::io::Write;
 
 use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
-#[derive(Clone,Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct RaftPeerPB {
     // message fields
     permanent_uuid: ::protobuf::SingularField<::std::vec::Vec<u8>>,
@@ -25,7 +32,7 @@ pub struct RaftPeerPB {
     last_known_addr: ::protobuf::SingularPtrField<super::common::HostPortPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -42,15 +49,7 @@ impl RaftPeerPB {
             ptr: 0 as *const RaftPeerPB,
         };
         unsafe {
-            instance.get(|| {
-                RaftPeerPB {
-                    permanent_uuid: ::protobuf::SingularField::none(),
-                    member_type: ::std::option::Option::None,
-                    last_known_addr: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(RaftPeerPB::new)
         }
     }
 
@@ -90,6 +89,14 @@ impl RaftPeerPB {
         }
     }
 
+    fn get_permanent_uuid_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.permanent_uuid
+    }
+
+    fn mut_permanent_uuid_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.permanent_uuid
+    }
+
     // optional .kudu.consensus.RaftPeerPB.MemberType member_type = 2;
 
     pub fn clear_member_type(&mut self) {
@@ -107,6 +114,14 @@ impl RaftPeerPB {
 
     pub fn get_member_type(&self) -> RaftPeerPB_MemberType {
         self.member_type.unwrap_or(RaftPeerPB_MemberType::UNKNOWN_MEMBER_TYPE)
+    }
+
+    fn get_member_type_for_reflect(&self) -> &::std::option::Option<RaftPeerPB_MemberType> {
+        &self.member_type
+    }
+
+    fn mut_member_type_for_reflect(&mut self) -> &mut ::std::option::Option<RaftPeerPB_MemberType> {
+        &mut self.member_type
     }
 
     // optional .kudu.HostPortPB last_known_addr = 3;
@@ -141,6 +156,14 @@ impl RaftPeerPB {
     pub fn get_last_known_addr(&self) -> &super::common::HostPortPB {
         self.last_known_addr.as_ref().unwrap_or_else(|| super::common::HostPortPB::default_instance())
     }
+
+    fn get_last_known_addr_for_reflect(&self) -> &::protobuf::SingularPtrField<super::common::HostPortPB> {
+        &self.last_known_addr
+    }
+
+    fn mut_last_known_addr_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::common::HostPortPB> {
+        &mut self.last_known_addr
+    }
 }
 
 impl ::protobuf::Message for RaftPeerPB {
@@ -149,24 +172,24 @@ impl ::protobuf::Message for RaftPeerPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.permanent_uuid));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.permanent_uuid)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_enum());
+                    let tmp = is.read_enum()?;
                     self.member_type = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.last_known_addr));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.last_known_addr)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -177,14 +200,14 @@ impl ::protobuf::Message for RaftPeerPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.permanent_uuid.iter() {
-            my_size += ::protobuf::rt::bytes_size(1, &value);
+        if let Some(v) = self.permanent_uuid.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(1, &v);
         };
-        for value in self.member_type.iter() {
-            my_size += ::protobuf::rt::enum_size(2, *value);
+        if let Some(v) = self.member_type {
+            my_size += ::protobuf::rt::enum_size(2, v);
         };
-        for value in self.last_known_addr.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.last_known_addr.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -192,19 +215,19 @@ impl ::protobuf::Message for RaftPeerPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.permanent_uuid.as_ref() {
-            try!(w.write_bytes(1, &v));
+            os.write_bytes(1, &v)?;
         };
         if let Some(v) = self.member_type {
-            try!(w.write_enum(2, v.value()));
+            os.write_enum(2, v.value())?;
         };
         if let Some(v) = self.last_known_addr.as_ref() {
-            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -218,10 +241,6 @@ impl ::protobuf::Message for RaftPeerPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<RaftPeerPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -252,20 +271,20 @@ impl ::protobuf::MessageStatic for RaftPeerPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "permanent_uuid",
-                    RaftPeerPB::has_permanent_uuid,
-                    RaftPeerPB::get_permanent_uuid,
+                    RaftPeerPB::get_permanent_uuid_for_reflect,
+                    RaftPeerPB::mut_permanent_uuid_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_enum_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeEnum<RaftPeerPB_MemberType>>(
                     "member_type",
-                    RaftPeerPB::has_member_type,
-                    RaftPeerPB::get_member_type,
+                    RaftPeerPB::get_member_type_for_reflect,
+                    RaftPeerPB::mut_member_type_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::common::HostPortPB>>(
                     "last_known_addr",
-                    RaftPeerPB::has_last_known_addr,
-                    RaftPeerPB::get_last_known_addr,
+                    RaftPeerPB::get_last_known_addr_for_reflect,
+                    RaftPeerPB::mut_last_known_addr_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<RaftPeerPB>(
                     "RaftPeerPB",
@@ -286,18 +305,15 @@ impl ::protobuf::Clear for RaftPeerPB {
     }
 }
 
-impl ::std::cmp::PartialEq for RaftPeerPB {
-    fn eq(&self, other: &RaftPeerPB) -> bool {
-        self.permanent_uuid == other.permanent_uuid &&
-        self.member_type == other.member_type &&
-        self.last_known_addr == other.last_known_addr &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for RaftPeerPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for RaftPeerPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 
@@ -353,6 +369,12 @@ impl ::protobuf::ProtobufEnum for RaftPeerPB_Role {
 impl ::std::marker::Copy for RaftPeerPB_Role {
 }
 
+impl ::protobuf::reflect::ProtobufValue for RaftPeerPB_Role {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
+}
+
 #[derive(Clone,PartialEq,Eq,Debug,Hash)]
 pub enum RaftPeerPB_MemberType {
     UNKNOWN_MEMBER_TYPE = 999,
@@ -399,7 +421,13 @@ impl ::protobuf::ProtobufEnum for RaftPeerPB_MemberType {
 impl ::std::marker::Copy for RaftPeerPB_MemberType {
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for RaftPeerPB_MemberType {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct RaftConfigPB {
     // message fields
     opid_index: ::std::option::Option<i64>,
@@ -407,7 +435,7 @@ pub struct RaftConfigPB {
     peers: ::protobuf::RepeatedField<RaftPeerPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -424,15 +452,7 @@ impl RaftConfigPB {
             ptr: 0 as *const RaftConfigPB,
         };
         unsafe {
-            instance.get(|| {
-                RaftConfigPB {
-                    opid_index: ::std::option::Option::None,
-                    OBSOLETE_local: ::std::option::Option::None,
-                    peers: ::protobuf::RepeatedField::new(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(RaftConfigPB::new)
         }
     }
 
@@ -455,6 +475,14 @@ impl RaftConfigPB {
         self.opid_index.unwrap_or(0)
     }
 
+    fn get_opid_index_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.opid_index
+    }
+
+    fn mut_opid_index_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.opid_index
+    }
+
     // optional bool OBSOLETE_local = 2;
 
     pub fn clear_OBSOLETE_local(&mut self) {
@@ -472,6 +500,14 @@ impl RaftConfigPB {
 
     pub fn get_OBSOLETE_local(&self) -> bool {
         self.OBSOLETE_local.unwrap_or(false)
+    }
+
+    fn get_OBSOLETE_local_for_reflect(&self) -> &::std::option::Option<bool> {
+        &self.OBSOLETE_local
+    }
+
+    fn mut_OBSOLETE_local_for_reflect(&mut self) -> &mut ::std::option::Option<bool> {
+        &mut self.OBSOLETE_local
     }
 
     // repeated .kudu.consensus.RaftPeerPB peers = 3;
@@ -498,6 +534,14 @@ impl RaftConfigPB {
     pub fn get_peers(&self) -> &[RaftPeerPB] {
         &self.peers
     }
+
+    fn get_peers_for_reflect(&self) -> &::protobuf::RepeatedField<RaftPeerPB> {
+        &self.peers
+    }
+
+    fn mut_peers_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<RaftPeerPB> {
+        &mut self.peers
+    }
 }
 
 impl ::protobuf::Message for RaftConfigPB {
@@ -506,28 +550,28 @@ impl ::protobuf::Message for RaftConfigPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.opid_index = ::std::option::Option::Some(tmp);
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_bool());
+                    let tmp = is.read_bool()?;
                     self.OBSOLETE_local = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.peers));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.peers)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -538,13 +582,13 @@ impl ::protobuf::Message for RaftConfigPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.opid_index.iter() {
-            my_size += ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.opid_index {
+            my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        if self.OBSOLETE_local.is_some() {
+        if let Some(v) = self.OBSOLETE_local {
             my_size += 2;
         };
-        for value in self.peers.iter() {
+        for value in &self.peers {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
@@ -553,19 +597,19 @@ impl ::protobuf::Message for RaftConfigPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.opid_index {
-            try!(w.write_int64(1, v));
+            os.write_int64(1, v)?;
         };
         if let Some(v) = self.OBSOLETE_local {
-            try!(w.write_bool(2, v));
+            os.write_bool(2, v)?;
         };
-        for v in self.peers.iter() {
-            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.peers {
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -579,10 +623,6 @@ impl ::protobuf::Message for RaftConfigPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<RaftConfigPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -613,19 +653,20 @@ impl ::protobuf::MessageStatic for RaftConfigPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "opid_index",
-                    RaftConfigPB::has_opid_index,
-                    RaftConfigPB::get_opid_index,
+                    RaftConfigPB::get_opid_index_for_reflect,
+                    RaftConfigPB::mut_opid_index_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bool_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
                     "OBSOLETE_local",
-                    RaftConfigPB::has_OBSOLETE_local,
-                    RaftConfigPB::get_OBSOLETE_local,
+                    RaftConfigPB::get_OBSOLETE_local_for_reflect,
+                    RaftConfigPB::mut_OBSOLETE_local_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<RaftPeerPB>>(
                     "peers",
-                    RaftConfigPB::get_peers,
+                    RaftConfigPB::get_peers_for_reflect,
+                    RaftConfigPB::mut_peers_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<RaftConfigPB>(
                     "RaftConfigPB",
@@ -646,22 +687,19 @@ impl ::protobuf::Clear for RaftConfigPB {
     }
 }
 
-impl ::std::cmp::PartialEq for RaftConfigPB {
-    fn eq(&self, other: &RaftConfigPB) -> bool {
-        self.opid_index == other.opid_index &&
-        self.OBSOLETE_local == other.OBSOLETE_local &&
-        self.peers == other.peers &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for RaftConfigPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for RaftConfigPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct ConsensusStatePB {
     // message fields
     current_term: ::std::option::Option<i64>,
@@ -669,7 +707,7 @@ pub struct ConsensusStatePB {
     config: ::protobuf::SingularPtrField<RaftConfigPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -686,15 +724,7 @@ impl ConsensusStatePB {
             ptr: 0 as *const ConsensusStatePB,
         };
         unsafe {
-            instance.get(|| {
-                ConsensusStatePB {
-                    current_term: ::std::option::Option::None,
-                    leader_uuid: ::protobuf::SingularField::none(),
-                    config: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ConsensusStatePB::new)
         }
     }
 
@@ -715,6 +745,14 @@ impl ConsensusStatePB {
 
     pub fn get_current_term(&self) -> i64 {
         self.current_term.unwrap_or(0)
+    }
+
+    fn get_current_term_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.current_term
+    }
+
+    fn mut_current_term_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.current_term
     }
 
     // optional string leader_uuid = 2;
@@ -753,6 +791,14 @@ impl ConsensusStatePB {
         }
     }
 
+    fn get_leader_uuid_for_reflect(&self) -> &::protobuf::SingularField<::std::string::String> {
+        &self.leader_uuid
+    }
+
+    fn mut_leader_uuid_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::string::String> {
+        &mut self.leader_uuid
+    }
+
     // required .kudu.consensus.RaftConfigPB config = 3;
 
     pub fn clear_config(&mut self) {
@@ -785,6 +831,14 @@ impl ConsensusStatePB {
     pub fn get_config(&self) -> &RaftConfigPB {
         self.config.as_ref().unwrap_or_else(|| RaftConfigPB::default_instance())
     }
+
+    fn get_config_for_reflect(&self) -> &::protobuf::SingularPtrField<RaftConfigPB> {
+        &self.config
+    }
+
+    fn mut_config_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<RaftConfigPB> {
+        &mut self.config
+    }
 }
 
 impl ::protobuf::Message for ConsensusStatePB {
@@ -799,24 +853,24 @@ impl ::protobuf::Message for ConsensusStatePB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.current_term = ::std::option::Option::Some(tmp);
                 },
                 2 => {
-                    try!(::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.leader_uuid));
+                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.leader_uuid)?;
                 },
                 3 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.config));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.config)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -827,14 +881,14 @@ impl ::protobuf::Message for ConsensusStatePB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.current_term.iter() {
-            my_size += ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.current_term {
+            my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.leader_uuid.iter() {
-            my_size += ::protobuf::rt::string_size(2, &value);
+        if let Some(v) = self.leader_uuid.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
         };
-        for value in self.config.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.config.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -842,19 +896,19 @@ impl ::protobuf::Message for ConsensusStatePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.current_term {
-            try!(w.write_int64(1, v));
+            os.write_int64(1, v)?;
         };
         if let Some(v) = self.leader_uuid.as_ref() {
-            try!(w.write_string(2, &v));
+            os.write_string(2, &v)?;
         };
         if let Some(v) = self.config.as_ref() {
-            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -868,10 +922,6 @@ impl ::protobuf::Message for ConsensusStatePB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ConsensusStatePB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -902,20 +952,20 @@ impl ::protobuf::MessageStatic for ConsensusStatePB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "current_term",
-                    ConsensusStatePB::has_current_term,
-                    ConsensusStatePB::get_current_term,
+                    ConsensusStatePB::get_current_term_for_reflect,
+                    ConsensusStatePB::mut_current_term_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_string_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "leader_uuid",
-                    ConsensusStatePB::has_leader_uuid,
-                    ConsensusStatePB::get_leader_uuid,
+                    ConsensusStatePB::get_leader_uuid_for_reflect,
+                    ConsensusStatePB::mut_leader_uuid_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<RaftConfigPB>>(
                     "config",
-                    ConsensusStatePB::has_config,
-                    ConsensusStatePB::get_config,
+                    ConsensusStatePB::get_config_for_reflect,
+                    ConsensusStatePB::mut_config_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ConsensusStatePB>(
                     "ConsensusStatePB",
@@ -936,22 +986,19 @@ impl ::protobuf::Clear for ConsensusStatePB {
     }
 }
 
-impl ::std::cmp::PartialEq for ConsensusStatePB {
-    fn eq(&self, other: &ConsensusStatePB) -> bool {
-        self.current_term == other.current_term &&
-        self.leader_uuid == other.leader_uuid &&
-        self.config == other.config &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ConsensusStatePB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for ConsensusStatePB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct ConsensusMetadataPB {
     // message fields
     committed_config: ::protobuf::SingularPtrField<RaftConfigPB>,
@@ -959,7 +1006,7 @@ pub struct ConsensusMetadataPB {
     voted_for: ::protobuf::SingularField<::std::string::String>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -976,15 +1023,7 @@ impl ConsensusMetadataPB {
             ptr: 0 as *const ConsensusMetadataPB,
         };
         unsafe {
-            instance.get(|| {
-                ConsensusMetadataPB {
-                    committed_config: ::protobuf::SingularPtrField::none(),
-                    current_term: ::std::option::Option::None,
-                    voted_for: ::protobuf::SingularField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ConsensusMetadataPB::new)
         }
     }
 
@@ -1021,6 +1060,14 @@ impl ConsensusMetadataPB {
         self.committed_config.as_ref().unwrap_or_else(|| RaftConfigPB::default_instance())
     }
 
+    fn get_committed_config_for_reflect(&self) -> &::protobuf::SingularPtrField<RaftConfigPB> {
+        &self.committed_config
+    }
+
+    fn mut_committed_config_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<RaftConfigPB> {
+        &mut self.committed_config
+    }
+
     // required int64 current_term = 2;
 
     pub fn clear_current_term(&mut self) {
@@ -1038,6 +1085,14 @@ impl ConsensusMetadataPB {
 
     pub fn get_current_term(&self) -> i64 {
         self.current_term.unwrap_or(0)
+    }
+
+    fn get_current_term_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.current_term
+    }
+
+    fn mut_current_term_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.current_term
     }
 
     // optional string voted_for = 3;
@@ -1075,6 +1130,14 @@ impl ConsensusMetadataPB {
             None => "",
         }
     }
+
+    fn get_voted_for_for_reflect(&self) -> &::protobuf::SingularField<::std::string::String> {
+        &self.voted_for
+    }
+
+    fn mut_voted_for_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::string::String> {
+        &mut self.voted_for
+    }
 }
 
 impl ::protobuf::Message for ConsensusMetadataPB {
@@ -1089,24 +1152,24 @@ impl ::protobuf::Message for ConsensusMetadataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.committed_config));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.committed_config)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.current_term = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    try!(::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.voted_for));
+                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.voted_for)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -1117,34 +1180,34 @@ impl ::protobuf::Message for ConsensusMetadataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.committed_config.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.committed_config.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.current_term.iter() {
-            my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.current_term {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.voted_for.iter() {
-            my_size += ::protobuf::rt::string_size(3, &value);
+        if let Some(v) = self.voted_for.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.committed_config.as_ref() {
-            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.current_term {
-            try!(w.write_int64(2, v));
+            os.write_int64(2, v)?;
         };
         if let Some(v) = self.voted_for.as_ref() {
-            try!(w.write_string(3, &v));
+            os.write_string(3, &v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -1158,10 +1221,6 @@ impl ::protobuf::Message for ConsensusMetadataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ConsensusMetadataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -1192,20 +1251,20 @@ impl ::protobuf::MessageStatic for ConsensusMetadataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<RaftConfigPB>>(
                     "committed_config",
-                    ConsensusMetadataPB::has_committed_config,
-                    ConsensusMetadataPB::get_committed_config,
+                    ConsensusMetadataPB::get_committed_config_for_reflect,
+                    ConsensusMetadataPB::mut_committed_config_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "current_term",
-                    ConsensusMetadataPB::has_current_term,
-                    ConsensusMetadataPB::get_current_term,
+                    ConsensusMetadataPB::get_current_term_for_reflect,
+                    ConsensusMetadataPB::mut_current_term_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_string_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "voted_for",
-                    ConsensusMetadataPB::has_voted_for,
-                    ConsensusMetadataPB::get_voted_for,
+                    ConsensusMetadataPB::get_voted_for_for_reflect,
+                    ConsensusMetadataPB::mut_voted_for_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ConsensusMetadataPB>(
                     "ConsensusMetadataPB",
@@ -1226,18 +1285,15 @@ impl ::protobuf::Clear for ConsensusMetadataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for ConsensusMetadataPB {
-    fn eq(&self, other: &ConsensusMetadataPB) -> bool {
-        self.committed_config == other.committed_config &&
-        self.current_term == other.current_term &&
-        self.voted_for == other.voted_for &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ConsensusMetadataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConsensusMetadataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 
@@ -1285,6 +1341,12 @@ impl ::protobuf::ProtobufEnum for ConsensusConfigType {
 }
 
 impl ::std::marker::Copy for ConsensusConfigType {
+}
+
+impl ::protobuf::reflect::ProtobufValue for ConsensusConfigType {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
 }
 
 static file_descriptor_proto_data: &'static [u8] = &[

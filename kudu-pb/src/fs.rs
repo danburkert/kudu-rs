@@ -7,24 +7,31 @@
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
+#![allow(box_pointers)]
 #![allow(dead_code)]
+#![allow(missing_docs)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(trivial_casts)]
+#![allow(unsafe_code)]
 #![allow(unused_imports)]
+#![allow(unused_results)]
+
+use std::io::Write;
 
 use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
-#[derive(Clone,Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct InstanceMetadataPB {
     // message fields
     uuid: ::protobuf::SingularField<::std::vec::Vec<u8>>,
     format_stamp: ::protobuf::SingularField<::std::string::String>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -41,14 +48,7 @@ impl InstanceMetadataPB {
             ptr: 0 as *const InstanceMetadataPB,
         };
         unsafe {
-            instance.get(|| {
-                InstanceMetadataPB {
-                    uuid: ::protobuf::SingularField::none(),
-                    format_stamp: ::protobuf::SingularField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(InstanceMetadataPB::new)
         }
     }
 
@@ -86,6 +86,14 @@ impl InstanceMetadataPB {
             Some(v) => &v,
             None => &[],
         }
+    }
+
+    fn get_uuid_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.uuid
+    }
+
+    fn mut_uuid_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.uuid
     }
 
     // required string format_stamp = 2;
@@ -123,6 +131,14 @@ impl InstanceMetadataPB {
             None => "",
         }
     }
+
+    fn get_format_stamp_for_reflect(&self) -> &::protobuf::SingularField<::std::string::String> {
+        &self.format_stamp
+    }
+
+    fn mut_format_stamp_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::string::String> {
+        &mut self.format_stamp
+    }
 }
 
 impl ::protobuf::Message for InstanceMetadataPB {
@@ -137,17 +153,17 @@ impl ::protobuf::Message for InstanceMetadataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.uuid));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.uuid)?;
                 },
                 2 => {
-                    try!(::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.format_stamp));
+                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.format_stamp)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -158,25 +174,25 @@ impl ::protobuf::Message for InstanceMetadataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.uuid.iter() {
-            my_size += ::protobuf::rt::bytes_size(1, &value);
+        if let Some(v) = self.uuid.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(1, &v);
         };
-        for value in self.format_stamp.iter() {
-            my_size += ::protobuf::rt::string_size(2, &value);
+        if let Some(v) = self.format_stamp.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.uuid.as_ref() {
-            try!(w.write_bytes(1, &v));
+            os.write_bytes(1, &v)?;
         };
         if let Some(v) = self.format_stamp.as_ref() {
-            try!(w.write_string(2, &v));
+            os.write_string(2, &v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -190,10 +206,6 @@ impl ::protobuf::Message for InstanceMetadataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<InstanceMetadataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -224,15 +236,15 @@ impl ::protobuf::MessageStatic for InstanceMetadataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "uuid",
-                    InstanceMetadataPB::has_uuid,
-                    InstanceMetadataPB::get_uuid,
+                    InstanceMetadataPB::get_uuid_for_reflect,
+                    InstanceMetadataPB::mut_uuid_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_string_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "format_stamp",
-                    InstanceMetadataPB::has_format_stamp,
-                    InstanceMetadataPB::get_format_stamp,
+                    InstanceMetadataPB::get_format_stamp_for_reflect,
+                    InstanceMetadataPB::mut_format_stamp_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<InstanceMetadataPB>(
                     "InstanceMetadataPB",
@@ -252,28 +264,26 @@ impl ::protobuf::Clear for InstanceMetadataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for InstanceMetadataPB {
-    fn eq(&self, other: &InstanceMetadataPB) -> bool {
-        self.uuid == other.uuid &&
-        self.format_stamp == other.format_stamp &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for InstanceMetadataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for InstanceMetadataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct PathSetPB {
     // message fields
     uuid: ::protobuf::SingularField<::std::vec::Vec<u8>>,
     all_uuids: ::protobuf::RepeatedField<::std::vec::Vec<u8>>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -290,14 +300,7 @@ impl PathSetPB {
             ptr: 0 as *const PathSetPB,
         };
         unsafe {
-            instance.get(|| {
-                PathSetPB {
-                    uuid: ::protobuf::SingularField::none(),
-                    all_uuids: ::protobuf::RepeatedField::new(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(PathSetPB::new)
         }
     }
 
@@ -337,6 +340,14 @@ impl PathSetPB {
         }
     }
 
+    fn get_uuid_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.uuid
+    }
+
+    fn mut_uuid_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.uuid
+    }
+
     // repeated bytes all_uuids = 2;
 
     pub fn clear_all_uuids(&mut self) {
@@ -361,6 +372,14 @@ impl PathSetPB {
     pub fn get_all_uuids(&self) -> &[::std::vec::Vec<u8>] {
         &self.all_uuids
     }
+
+    fn get_all_uuids_for_reflect(&self) -> &::protobuf::RepeatedField<::std::vec::Vec<u8>> {
+        &self.all_uuids
+    }
+
+    fn mut_all_uuids_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<::std::vec::Vec<u8>> {
+        &mut self.all_uuids
+    }
 }
 
 impl ::protobuf::Message for PathSetPB {
@@ -372,17 +391,17 @@ impl ::protobuf::Message for PathSetPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.uuid));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.uuid)?;
                 },
                 2 => {
-                    try!(::protobuf::rt::read_repeated_bytes_into(wire_type, is, &mut self.all_uuids));
+                    ::protobuf::rt::read_repeated_bytes_into(wire_type, is, &mut self.all_uuids)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -393,10 +412,10 @@ impl ::protobuf::Message for PathSetPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.uuid.iter() {
-            my_size += ::protobuf::rt::bytes_size(1, &value);
+        if let Some(v) = self.uuid.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(1, &v);
         };
-        for value in self.all_uuids.iter() {
+        for value in &self.all_uuids {
             my_size += ::protobuf::rt::bytes_size(2, &value);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -404,14 +423,14 @@ impl ::protobuf::Message for PathSetPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.uuid.as_ref() {
-            try!(w.write_bytes(1, &v));
+            os.write_bytes(1, &v)?;
         };
-        for v in self.all_uuids.iter() {
-            try!(w.write_bytes(2, &v));
+        for v in &self.all_uuids {
+            os.write_bytes(2, &v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -425,10 +444,6 @@ impl ::protobuf::Message for PathSetPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<PathSetPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -459,14 +474,15 @@ impl ::protobuf::MessageStatic for PathSetPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "uuid",
-                    PathSetPB::has_uuid,
-                    PathSetPB::get_uuid,
+                    PathSetPB::get_uuid_for_reflect,
+                    PathSetPB::mut_uuid_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "all_uuids",
-                    PathSetPB::get_all_uuids,
+                    PathSetPB::get_all_uuids_for_reflect,
+                    PathSetPB::mut_all_uuids_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<PathSetPB>(
                     "PathSetPB",
@@ -486,21 +502,19 @@ impl ::protobuf::Clear for PathSetPB {
     }
 }
 
-impl ::std::cmp::PartialEq for PathSetPB {
-    fn eq(&self, other: &PathSetPB) -> bool {
-        self.uuid == other.uuid &&
-        self.all_uuids == other.all_uuids &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for PathSetPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for PathSetPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct PathInstanceMetadataPB {
     // message fields
     path_set: ::protobuf::SingularPtrField<PathSetPB>,
@@ -508,7 +522,7 @@ pub struct PathInstanceMetadataPB {
     filesystem_block_size_bytes: ::std::option::Option<u64>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -525,15 +539,7 @@ impl PathInstanceMetadataPB {
             ptr: 0 as *const PathInstanceMetadataPB,
         };
         unsafe {
-            instance.get(|| {
-                PathInstanceMetadataPB {
-                    path_set: ::protobuf::SingularPtrField::none(),
-                    block_manager_type: ::protobuf::SingularField::none(),
-                    filesystem_block_size_bytes: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(PathInstanceMetadataPB::new)
         }
     }
 
@@ -568,6 +574,14 @@ impl PathInstanceMetadataPB {
 
     pub fn get_path_set(&self) -> &PathSetPB {
         self.path_set.as_ref().unwrap_or_else(|| PathSetPB::default_instance())
+    }
+
+    fn get_path_set_for_reflect(&self) -> &::protobuf::SingularPtrField<PathSetPB> {
+        &self.path_set
+    }
+
+    fn mut_path_set_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<PathSetPB> {
+        &mut self.path_set
     }
 
     // required string block_manager_type = 2;
@@ -606,6 +620,14 @@ impl PathInstanceMetadataPB {
         }
     }
 
+    fn get_block_manager_type_for_reflect(&self) -> &::protobuf::SingularField<::std::string::String> {
+        &self.block_manager_type
+    }
+
+    fn mut_block_manager_type_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::string::String> {
+        &mut self.block_manager_type
+    }
+
     // required uint64 filesystem_block_size_bytes = 3;
 
     pub fn clear_filesystem_block_size_bytes(&mut self) {
@@ -624,6 +646,14 @@ impl PathInstanceMetadataPB {
     pub fn get_filesystem_block_size_bytes(&self) -> u64 {
         self.filesystem_block_size_bytes.unwrap_or(0)
     }
+
+    fn get_filesystem_block_size_bytes_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.filesystem_block_size_bytes
+    }
+
+    fn mut_filesystem_block_size_bytes_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.filesystem_block_size_bytes
+    }
 }
 
 impl ::protobuf::Message for PathInstanceMetadataPB {
@@ -641,24 +671,24 @@ impl ::protobuf::Message for PathInstanceMetadataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.path_set));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.path_set)?;
                 },
                 2 => {
-                    try!(::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.block_manager_type));
+                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.block_manager_type)?;
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint64());
+                    let tmp = is.read_uint64()?;
                     self.filesystem_block_size_bytes = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -669,34 +699,34 @@ impl ::protobuf::Message for PathInstanceMetadataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.path_set.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.path_set.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.block_manager_type.iter() {
-            my_size += ::protobuf::rt::string_size(2, &value);
+        if let Some(v) = self.block_manager_type.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
         };
-        for value in self.filesystem_block_size_bytes.iter() {
-            my_size += ::protobuf::rt::value_size(3, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.filesystem_block_size_bytes {
+            my_size += ::protobuf::rt::value_size(3, v, ::protobuf::wire_format::WireTypeVarint);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.path_set.as_ref() {
-            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.block_manager_type.as_ref() {
-            try!(w.write_string(2, &v));
+            os.write_string(2, &v)?;
         };
         if let Some(v) = self.filesystem_block_size_bytes {
-            try!(w.write_uint64(3, v));
+            os.write_uint64(3, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -710,10 +740,6 @@ impl ::protobuf::Message for PathInstanceMetadataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<PathInstanceMetadataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -744,20 +770,20 @@ impl ::protobuf::MessageStatic for PathInstanceMetadataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<PathSetPB>>(
                     "path_set",
-                    PathInstanceMetadataPB::has_path_set,
-                    PathInstanceMetadataPB::get_path_set,
+                    PathInstanceMetadataPB::get_path_set_for_reflect,
+                    PathInstanceMetadataPB::mut_path_set_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_string_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "block_manager_type",
-                    PathInstanceMetadataPB::has_block_manager_type,
-                    PathInstanceMetadataPB::get_block_manager_type,
+                    PathInstanceMetadataPB::get_block_manager_type_for_reflect,
+                    PathInstanceMetadataPB::mut_block_manager_type_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "filesystem_block_size_bytes",
-                    PathInstanceMetadataPB::has_filesystem_block_size_bytes,
-                    PathInstanceMetadataPB::get_filesystem_block_size_bytes,
+                    PathInstanceMetadataPB::get_filesystem_block_size_bytes_for_reflect,
+                    PathInstanceMetadataPB::mut_filesystem_block_size_bytes_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<PathInstanceMetadataPB>(
                     "PathInstanceMetadataPB",
@@ -778,28 +804,25 @@ impl ::protobuf::Clear for PathInstanceMetadataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for PathInstanceMetadataPB {
-    fn eq(&self, other: &PathInstanceMetadataPB) -> bool {
-        self.path_set == other.path_set &&
-        self.block_manager_type == other.block_manager_type &&
-        self.filesystem_block_size_bytes == other.filesystem_block_size_bytes &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for PathInstanceMetadataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for PathInstanceMetadataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct BlockIdPB {
     // message fields
     id: ::std::option::Option<u64>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -816,13 +839,7 @@ impl BlockIdPB {
             ptr: 0 as *const BlockIdPB,
         };
         unsafe {
-            instance.get(|| {
-                BlockIdPB {
-                    id: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(BlockIdPB::new)
         }
     }
 
@@ -844,6 +861,14 @@ impl BlockIdPB {
     pub fn get_id(&self) -> u64 {
         self.id.unwrap_or(0)
     }
+
+    fn get_id_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.id
+    }
+
+    fn mut_id_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.id
+    }
 }
 
 impl ::protobuf::Message for BlockIdPB {
@@ -855,18 +880,18 @@ impl ::protobuf::Message for BlockIdPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_fixed64());
+                    let tmp = is.read_fixed64()?;
                     self.id = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -877,7 +902,7 @@ impl ::protobuf::Message for BlockIdPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if self.id.is_some() {
+        if let Some(v) = self.id {
             my_size += 9;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -885,11 +910,11 @@ impl ::protobuf::Message for BlockIdPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.id {
-            try!(w.write_fixed64(1, v));
+            os.write_fixed64(1, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -903,10 +928,6 @@ impl ::protobuf::Message for BlockIdPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<BlockIdPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -937,10 +958,10 @@ impl ::protobuf::MessageStatic for BlockIdPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeFixed64>(
                     "id",
-                    BlockIdPB::has_id,
-                    BlockIdPB::get_id,
+                    BlockIdPB::get_id_for_reflect,
+                    BlockIdPB::mut_id_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<BlockIdPB>(
                     "BlockIdPB",
@@ -959,20 +980,19 @@ impl ::protobuf::Clear for BlockIdPB {
     }
 }
 
-impl ::std::cmp::PartialEq for BlockIdPB {
-    fn eq(&self, other: &BlockIdPB) -> bool {
-        self.id == other.id &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for BlockIdPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for BlockIdPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct BlockRecordPB {
     // message fields
     block_id: ::protobuf::SingularPtrField<BlockIdPB>,
@@ -982,7 +1002,7 @@ pub struct BlockRecordPB {
     length: ::std::option::Option<i64>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -999,17 +1019,7 @@ impl BlockRecordPB {
             ptr: 0 as *const BlockRecordPB,
         };
         unsafe {
-            instance.get(|| {
-                BlockRecordPB {
-                    block_id: ::protobuf::SingularPtrField::none(),
-                    op_type: ::std::option::Option::None,
-                    timestamp_us: ::std::option::Option::None,
-                    offset: ::std::option::Option::None,
-                    length: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(BlockRecordPB::new)
         }
     }
 
@@ -1046,6 +1056,14 @@ impl BlockRecordPB {
         self.block_id.as_ref().unwrap_or_else(|| BlockIdPB::default_instance())
     }
 
+    fn get_block_id_for_reflect(&self) -> &::protobuf::SingularPtrField<BlockIdPB> {
+        &self.block_id
+    }
+
+    fn mut_block_id_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<BlockIdPB> {
+        &mut self.block_id
+    }
+
     // required .kudu.BlockRecordType op_type = 2;
 
     pub fn clear_op_type(&mut self) {
@@ -1063,6 +1081,14 @@ impl BlockRecordPB {
 
     pub fn get_op_type(&self) -> BlockRecordType {
         self.op_type.unwrap_or(BlockRecordType::UNKNOWN)
+    }
+
+    fn get_op_type_for_reflect(&self) -> &::std::option::Option<BlockRecordType> {
+        &self.op_type
+    }
+
+    fn mut_op_type_for_reflect(&mut self) -> &mut ::std::option::Option<BlockRecordType> {
+        &mut self.op_type
     }
 
     // required uint64 timestamp_us = 3;
@@ -1084,6 +1110,14 @@ impl BlockRecordPB {
         self.timestamp_us.unwrap_or(0)
     }
 
+    fn get_timestamp_us_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.timestamp_us
+    }
+
+    fn mut_timestamp_us_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.timestamp_us
+    }
+
     // optional int64 offset = 4;
 
     pub fn clear_offset(&mut self) {
@@ -1101,6 +1135,14 @@ impl BlockRecordPB {
 
     pub fn get_offset(&self) -> i64 {
         self.offset.unwrap_or(0)
+    }
+
+    fn get_offset_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.offset
+    }
+
+    fn mut_offset_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.offset
     }
 
     // optional int64 length = 5;
@@ -1121,6 +1163,14 @@ impl BlockRecordPB {
     pub fn get_length(&self) -> i64 {
         self.length.unwrap_or(0)
     }
+
+    fn get_length_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.length
+    }
+
+    fn mut_length_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.length
+    }
 }
 
 impl ::protobuf::Message for BlockRecordPB {
@@ -1138,42 +1188,42 @@ impl ::protobuf::Message for BlockRecordPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block_id));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block_id)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_enum());
+                    let tmp = is.read_enum()?;
                     self.op_type = ::std::option::Option::Some(tmp);
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint64());
+                    let tmp = is.read_uint64()?;
                     self.timestamp_us = ::std::option::Option::Some(tmp);
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.offset = ::std::option::Option::Some(tmp);
                 },
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.length = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -1184,46 +1234,46 @@ impl ::protobuf::Message for BlockRecordPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.block_id.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.block_id.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.op_type.iter() {
-            my_size += ::protobuf::rt::enum_size(2, *value);
+        if let Some(v) = self.op_type {
+            my_size += ::protobuf::rt::enum_size(2, v);
         };
-        for value in self.timestamp_us.iter() {
-            my_size += ::protobuf::rt::value_size(3, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.timestamp_us {
+            my_size += ::protobuf::rt::value_size(3, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.offset.iter() {
-            my_size += ::protobuf::rt::value_size(4, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.offset {
+            my_size += ::protobuf::rt::value_size(4, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.length.iter() {
-            my_size += ::protobuf::rt::value_size(5, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.length {
+            my_size += ::protobuf::rt::value_size(5, v, ::protobuf::wire_format::WireTypeVarint);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block_id.as_ref() {
-            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.op_type {
-            try!(w.write_enum(2, v.value()));
+            os.write_enum(2, v.value())?;
         };
         if let Some(v) = self.timestamp_us {
-            try!(w.write_uint64(3, v));
+            os.write_uint64(3, v)?;
         };
         if let Some(v) = self.offset {
-            try!(w.write_int64(4, v));
+            os.write_int64(4, v)?;
         };
         if let Some(v) = self.length {
-            try!(w.write_int64(5, v));
+            os.write_int64(5, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -1237,10 +1287,6 @@ impl ::protobuf::Message for BlockRecordPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<BlockRecordPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -1271,30 +1317,30 @@ impl ::protobuf::MessageStatic for BlockRecordPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<BlockIdPB>>(
                     "block_id",
-                    BlockRecordPB::has_block_id,
-                    BlockRecordPB::get_block_id,
+                    BlockRecordPB::get_block_id_for_reflect,
+                    BlockRecordPB::mut_block_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_enum_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeEnum<BlockRecordType>>(
                     "op_type",
-                    BlockRecordPB::has_op_type,
-                    BlockRecordPB::get_op_type,
+                    BlockRecordPB::get_op_type_for_reflect,
+                    BlockRecordPB::mut_op_type_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "timestamp_us",
-                    BlockRecordPB::has_timestamp_us,
-                    BlockRecordPB::get_timestamp_us,
+                    BlockRecordPB::get_timestamp_us_for_reflect,
+                    BlockRecordPB::mut_timestamp_us_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "offset",
-                    BlockRecordPB::has_offset,
-                    BlockRecordPB::get_offset,
+                    BlockRecordPB::get_offset_for_reflect,
+                    BlockRecordPB::mut_offset_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "length",
-                    BlockRecordPB::has_length,
-                    BlockRecordPB::get_length,
+                    BlockRecordPB::get_length_for_reflect,
+                    BlockRecordPB::mut_length_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<BlockRecordPB>(
                     "BlockRecordPB",
@@ -1317,20 +1363,15 @@ impl ::protobuf::Clear for BlockRecordPB {
     }
 }
 
-impl ::std::cmp::PartialEq for BlockRecordPB {
-    fn eq(&self, other: &BlockRecordPB) -> bool {
-        self.block_id == other.block_id &&
-        self.op_type == other.op_type &&
-        self.timestamp_us == other.timestamp_us &&
-        self.offset == other.offset &&
-        self.length == other.length &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for BlockRecordPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for BlockRecordPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 
@@ -1378,6 +1419,12 @@ impl ::protobuf::ProtobufEnum for BlockRecordType {
 }
 
 impl ::std::marker::Copy for BlockRecordType {
+}
+
+impl ::protobuf::reflect::ProtobufValue for BlockRecordType {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
 }
 
 static file_descriptor_proto_data: &'static [u8] = &[

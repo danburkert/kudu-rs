@@ -31,7 +31,6 @@ impl Node {
             args: args,
             process: None,
         }
-
     }
 
     fn stop(&mut self) {
@@ -46,6 +45,8 @@ impl Node {
         for &(k, ref v) in &self.args {
             command.arg(format!("--{}={}", k, v));
         }
+
+        println!("binary: {:?}", self.bin);
 
         command.stderr(Stdio::piped());
         let mut process = command.spawn().unwrap();

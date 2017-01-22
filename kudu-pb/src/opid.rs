@@ -7,24 +7,31 @@
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
+#![allow(box_pointers)]
 #![allow(dead_code)]
+#![allow(missing_docs)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(trivial_casts)]
+#![allow(unsafe_code)]
 #![allow(unused_imports)]
+#![allow(unused_results)]
+
+use std::io::Write;
 
 use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
-#[derive(Clone,Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct OpId {
     // message fields
     term: ::std::option::Option<i64>,
     index: ::std::option::Option<i64>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -41,14 +48,7 @@ impl OpId {
             ptr: 0 as *const OpId,
         };
         unsafe {
-            instance.get(|| {
-                OpId {
-                    term: ::std::option::Option::None,
-                    index: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(OpId::new)
         }
     }
 
@@ -71,6 +71,14 @@ impl OpId {
         self.term.unwrap_or(0)
     }
 
+    fn get_term_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.term
+    }
+
+    fn mut_term_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.term
+    }
+
     // required int64 index = 2;
 
     pub fn clear_index(&mut self) {
@@ -89,6 +97,14 @@ impl OpId {
     pub fn get_index(&self) -> i64 {
         self.index.unwrap_or(0)
     }
+
+    fn get_index_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.index
+    }
+
+    fn mut_index_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.index
+    }
 }
 
 impl ::protobuf::Message for OpId {
@@ -103,25 +119,25 @@ impl ::protobuf::Message for OpId {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.term = ::std::option::Option::Some(tmp);
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.index = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -132,25 +148,25 @@ impl ::protobuf::Message for OpId {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.term.iter() {
-            my_size += ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.term {
+            my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.index.iter() {
-            my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.index {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.term {
-            try!(w.write_int64(1, v));
+            os.write_int64(1, v)?;
         };
         if let Some(v) = self.index {
-            try!(w.write_int64(2, v));
+            os.write_int64(2, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -164,10 +180,6 @@ impl ::protobuf::Message for OpId {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<OpId>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -198,15 +210,15 @@ impl ::protobuf::MessageStatic for OpId {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "term",
-                    OpId::has_term,
-                    OpId::get_term,
+                    OpId::get_term_for_reflect,
+                    OpId::mut_term_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "index",
-                    OpId::has_index,
-                    OpId::get_index,
+                    OpId::get_index_for_reflect,
+                    OpId::mut_index_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<OpId>(
                     "OpId",
@@ -226,17 +238,15 @@ impl ::protobuf::Clear for OpId {
     }
 }
 
-impl ::std::cmp::PartialEq for OpId {
-    fn eq(&self, other: &OpId) -> bool {
-        self.term == other.term &&
-        self.index == other.index &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for OpId {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for OpId {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 

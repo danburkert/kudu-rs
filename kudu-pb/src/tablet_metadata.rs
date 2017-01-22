@@ -7,24 +7,31 @@
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
+#![allow(box_pointers)]
 #![allow(dead_code)]
+#![allow(missing_docs)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(trivial_casts)]
+#![allow(unsafe_code)]
 #![allow(unused_imports)]
+#![allow(unused_results)]
+
+use std::io::Write;
 
 use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
-#[derive(Clone,Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ColumnDataPB {
     // message fields
     block: ::protobuf::SingularPtrField<super::fs::BlockIdPB>,
     column_id: ::std::option::Option<i32>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -41,14 +48,7 @@ impl ColumnDataPB {
             ptr: 0 as *const ColumnDataPB,
         };
         unsafe {
-            instance.get(|| {
-                ColumnDataPB {
-                    block: ::protobuf::SingularPtrField::none(),
-                    column_id: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ColumnDataPB::new)
         }
     }
 
@@ -85,6 +85,14 @@ impl ColumnDataPB {
         self.block.as_ref().unwrap_or_else(|| super::fs::BlockIdPB::default_instance())
     }
 
+    fn get_block_for_reflect(&self) -> &::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &self.block
+    }
+
+    fn mut_block_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &mut self.block
+    }
+
     // optional int32 column_id = 4;
 
     pub fn clear_column_id(&mut self) {
@@ -103,6 +111,14 @@ impl ColumnDataPB {
     pub fn get_column_id(&self) -> i32 {
         self.column_id.unwrap_or(0)
     }
+
+    fn get_column_id_for_reflect(&self) -> &::std::option::Option<i32> {
+        &self.column_id
+    }
+
+    fn mut_column_id_for_reflect(&mut self) -> &mut ::std::option::Option<i32> {
+        &mut self.column_id
+    }
 }
 
 impl ::protobuf::Message for ColumnDataPB {
@@ -114,21 +130,21 @@ impl ::protobuf::Message for ColumnDataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 2 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block)?;
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int32());
+                    let tmp = is.read_int32()?;
                     self.column_id = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -139,28 +155,28 @@ impl ::protobuf::Message for ColumnDataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.block.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.block.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.column_id.iter() {
-            my_size += ::protobuf::rt::value_size(4, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.column_id {
+            my_size += ::protobuf::rt::value_size(4, v, ::protobuf::wire_format::WireTypeVarint);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block.as_ref() {
-            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.column_id {
-            try!(w.write_int32(4, v));
+            os.write_int32(4, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -174,10 +190,6 @@ impl ::protobuf::Message for ColumnDataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ColumnDataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -208,15 +220,15 @@ impl ::protobuf::MessageStatic for ColumnDataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::fs::BlockIdPB>>(
                     "block",
-                    ColumnDataPB::has_block,
-                    ColumnDataPB::get_block,
+                    ColumnDataPB::get_block_for_reflect,
+                    ColumnDataPB::mut_block_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i32_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
                     "column_id",
-                    ColumnDataPB::has_column_id,
-                    ColumnDataPB::get_column_id,
+                    ColumnDataPB::get_column_id_for_reflect,
+                    ColumnDataPB::mut_column_id_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ColumnDataPB>(
                     "ColumnDataPB",
@@ -236,27 +248,25 @@ impl ::protobuf::Clear for ColumnDataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for ColumnDataPB {
-    fn eq(&self, other: &ColumnDataPB) -> bool {
-        self.block == other.block &&
-        self.column_id == other.column_id &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ColumnDataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for ColumnDataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct DeltaDataPB {
     // message fields
     block: ::protobuf::SingularPtrField<super::fs::BlockIdPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -273,13 +283,7 @@ impl DeltaDataPB {
             ptr: 0 as *const DeltaDataPB,
         };
         unsafe {
-            instance.get(|| {
-                DeltaDataPB {
-                    block: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(DeltaDataPB::new)
         }
     }
 
@@ -315,6 +319,14 @@ impl DeltaDataPB {
     pub fn get_block(&self) -> &super::fs::BlockIdPB {
         self.block.as_ref().unwrap_or_else(|| super::fs::BlockIdPB::default_instance())
     }
+
+    fn get_block_for_reflect(&self) -> &::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &self.block
+    }
+
+    fn mut_block_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &mut self.block
+    }
 }
 
 impl ::protobuf::Message for DeltaDataPB {
@@ -326,14 +338,14 @@ impl ::protobuf::Message for DeltaDataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 2 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.block)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -344,8 +356,8 @@ impl ::protobuf::Message for DeltaDataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.block.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.block.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -353,13 +365,13 @@ impl ::protobuf::Message for DeltaDataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.block.as_ref() {
-            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -373,10 +385,6 @@ impl ::protobuf::Message for DeltaDataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<DeltaDataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -407,10 +415,10 @@ impl ::protobuf::MessageStatic for DeltaDataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::fs::BlockIdPB>>(
                     "block",
-                    DeltaDataPB::has_block,
-                    DeltaDataPB::get_block,
+                    DeltaDataPB::get_block_for_reflect,
+                    DeltaDataPB::mut_block_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<DeltaDataPB>(
                     "DeltaDataPB",
@@ -429,20 +437,19 @@ impl ::protobuf::Clear for DeltaDataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for DeltaDataPB {
-    fn eq(&self, other: &DeltaDataPB) -> bool {
-        self.block == other.block &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for DeltaDataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for DeltaDataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct RowSetDataPB {
     // message fields
     id: ::std::option::Option<u64>,
@@ -454,7 +461,7 @@ pub struct RowSetDataPB {
     adhoc_index_block: ::protobuf::SingularPtrField<super::fs::BlockIdPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -471,19 +478,7 @@ impl RowSetDataPB {
             ptr: 0 as *const RowSetDataPB,
         };
         unsafe {
-            instance.get(|| {
-                RowSetDataPB {
-                    id: ::std::option::Option::None,
-                    last_durable_dms_id: ::std::option::Option::None,
-                    columns: ::protobuf::RepeatedField::new(),
-                    redo_deltas: ::protobuf::RepeatedField::new(),
-                    undo_deltas: ::protobuf::RepeatedField::new(),
-                    bloom_block: ::protobuf::SingularPtrField::none(),
-                    adhoc_index_block: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(RowSetDataPB::new)
         }
     }
 
@@ -506,6 +501,14 @@ impl RowSetDataPB {
         self.id.unwrap_or(0)
     }
 
+    fn get_id_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.id
+    }
+
+    fn mut_id_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.id
+    }
+
     // required int64 last_durable_dms_id = 2;
 
     pub fn clear_last_durable_dms_id(&mut self) {
@@ -523,6 +526,14 @@ impl RowSetDataPB {
 
     pub fn get_last_durable_dms_id(&self) -> i64 {
         self.last_durable_dms_id.unwrap_or(0)
+    }
+
+    fn get_last_durable_dms_id_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.last_durable_dms_id
+    }
+
+    fn mut_last_durable_dms_id_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.last_durable_dms_id
     }
 
     // repeated .kudu.tablet.ColumnDataPB columns = 3;
@@ -550,6 +561,14 @@ impl RowSetDataPB {
         &self.columns
     }
 
+    fn get_columns_for_reflect(&self) -> &::protobuf::RepeatedField<ColumnDataPB> {
+        &self.columns
+    }
+
+    fn mut_columns_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<ColumnDataPB> {
+        &mut self.columns
+    }
+
     // repeated .kudu.tablet.DeltaDataPB redo_deltas = 4;
 
     pub fn clear_redo_deltas(&mut self) {
@@ -575,6 +594,14 @@ impl RowSetDataPB {
         &self.redo_deltas
     }
 
+    fn get_redo_deltas_for_reflect(&self) -> &::protobuf::RepeatedField<DeltaDataPB> {
+        &self.redo_deltas
+    }
+
+    fn mut_redo_deltas_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<DeltaDataPB> {
+        &mut self.redo_deltas
+    }
+
     // repeated .kudu.tablet.DeltaDataPB undo_deltas = 5;
 
     pub fn clear_undo_deltas(&mut self) {
@@ -598,6 +625,14 @@ impl RowSetDataPB {
 
     pub fn get_undo_deltas(&self) -> &[DeltaDataPB] {
         &self.undo_deltas
+    }
+
+    fn get_undo_deltas_for_reflect(&self) -> &::protobuf::RepeatedField<DeltaDataPB> {
+        &self.undo_deltas
+    }
+
+    fn mut_undo_deltas_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<DeltaDataPB> {
+        &mut self.undo_deltas
     }
 
     // optional .kudu.BlockIdPB bloom_block = 6;
@@ -633,6 +668,14 @@ impl RowSetDataPB {
         self.bloom_block.as_ref().unwrap_or_else(|| super::fs::BlockIdPB::default_instance())
     }
 
+    fn get_bloom_block_for_reflect(&self) -> &::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &self.bloom_block
+    }
+
+    fn mut_bloom_block_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &mut self.bloom_block
+    }
+
     // optional .kudu.BlockIdPB adhoc_index_block = 7;
 
     pub fn clear_adhoc_index_block(&mut self) {
@@ -665,6 +708,14 @@ impl RowSetDataPB {
     pub fn get_adhoc_index_block(&self) -> &super::fs::BlockIdPB {
         self.adhoc_index_block.as_ref().unwrap_or_else(|| super::fs::BlockIdPB::default_instance())
     }
+
+    fn get_adhoc_index_block_for_reflect(&self) -> &::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &self.adhoc_index_block
+    }
+
+    fn mut_adhoc_index_block_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::fs::BlockIdPB> {
+        &mut self.adhoc_index_block
+    }
 }
 
 impl ::protobuf::Message for RowSetDataPB {
@@ -679,40 +730,40 @@ impl ::protobuf::Message for RowSetDataPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint64());
+                    let tmp = is.read_uint64()?;
                     self.id = ::std::option::Option::Some(tmp);
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.last_durable_dms_id = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.columns));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.columns)?;
                 },
                 4 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.redo_deltas));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.redo_deltas)?;
                 },
                 5 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.undo_deltas));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.undo_deltas)?;
                 },
                 6 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.bloom_block));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.bloom_block)?;
                 },
                 7 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.adhoc_index_block));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.adhoc_index_block)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -723,30 +774,30 @@ impl ::protobuf::Message for RowSetDataPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.id.iter() {
-            my_size += ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.id {
+            my_size += ::protobuf::rt::value_size(1, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.last_durable_dms_id.iter() {
-            my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.last_durable_dms_id {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.columns.iter() {
+        for value in &self.columns {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.redo_deltas.iter() {
+        for value in &self.redo_deltas {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.undo_deltas.iter() {
+        for value in &self.undo_deltas {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.bloom_block.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.bloom_block.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.adhoc_index_block.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.adhoc_index_block.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -754,39 +805,39 @@ impl ::protobuf::Message for RowSetDataPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.id {
-            try!(w.write_uint64(1, v));
+            os.write_uint64(1, v)?;
         };
         if let Some(v) = self.last_durable_dms_id {
-            try!(w.write_int64(2, v));
+            os.write_int64(2, v)?;
         };
-        for v in self.columns.iter() {
-            try!(w.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.columns {
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        for v in self.redo_deltas.iter() {
-            try!(w.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.redo_deltas {
+            os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        for v in self.undo_deltas.iter() {
-            try!(w.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.undo_deltas {
+            os.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.bloom_block.as_ref() {
-            try!(w.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.adhoc_index_block.as_ref() {
-            try!(w.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -800,10 +851,6 @@ impl ::protobuf::Message for RowSetDataPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<RowSetDataPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -834,37 +881,40 @@ impl ::protobuf::MessageStatic for RowSetDataPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "id",
-                    RowSetDataPB::has_id,
-                    RowSetDataPB::get_id,
+                    RowSetDataPB::get_id_for_reflect,
+                    RowSetDataPB::mut_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "last_durable_dms_id",
-                    RowSetDataPB::has_last_durable_dms_id,
-                    RowSetDataPB::get_last_durable_dms_id,
+                    RowSetDataPB::get_last_durable_dms_id_for_reflect,
+                    RowSetDataPB::mut_last_durable_dms_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ColumnDataPB>>(
                     "columns",
-                    RowSetDataPB::get_columns,
+                    RowSetDataPB::get_columns_for_reflect,
+                    RowSetDataPB::mut_columns_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<DeltaDataPB>>(
                     "redo_deltas",
-                    RowSetDataPB::get_redo_deltas,
+                    RowSetDataPB::get_redo_deltas_for_reflect,
+                    RowSetDataPB::mut_redo_deltas_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<DeltaDataPB>>(
                     "undo_deltas",
-                    RowSetDataPB::get_undo_deltas,
+                    RowSetDataPB::get_undo_deltas_for_reflect,
+                    RowSetDataPB::mut_undo_deltas_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::fs::BlockIdPB>>(
                     "bloom_block",
-                    RowSetDataPB::has_bloom_block,
-                    RowSetDataPB::get_bloom_block,
+                    RowSetDataPB::get_bloom_block_for_reflect,
+                    RowSetDataPB::mut_bloom_block_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::fs::BlockIdPB>>(
                     "adhoc_index_block",
-                    RowSetDataPB::has_adhoc_index_block,
-                    RowSetDataPB::get_adhoc_index_block,
+                    RowSetDataPB::get_adhoc_index_block_for_reflect,
+                    RowSetDataPB::mut_adhoc_index_block_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<RowSetDataPB>(
                     "RowSetDataPB",
@@ -889,26 +939,19 @@ impl ::protobuf::Clear for RowSetDataPB {
     }
 }
 
-impl ::std::cmp::PartialEq for RowSetDataPB {
-    fn eq(&self, other: &RowSetDataPB) -> bool {
-        self.id == other.id &&
-        self.last_durable_dms_id == other.last_durable_dms_id &&
-        self.columns == other.columns &&
-        self.redo_deltas == other.redo_deltas &&
-        self.undo_deltas == other.undo_deltas &&
-        self.bloom_block == other.bloom_block &&
-        self.adhoc_index_block == other.adhoc_index_block &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for RowSetDataPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for RowSetDataPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct TabletSuperBlockPB {
     // message fields
     table_id: ::protobuf::SingularField<::std::vec::Vec<u8>>,
@@ -927,7 +970,7 @@ pub struct TabletSuperBlockPB {
     tombstone_last_logged_opid: ::protobuf::SingularPtrField<super::opid::OpId>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -944,26 +987,7 @@ impl TabletSuperBlockPB {
             ptr: 0 as *const TabletSuperBlockPB,
         };
         unsafe {
-            instance.get(|| {
-                TabletSuperBlockPB {
-                    table_id: ::protobuf::SingularField::none(),
-                    tablet_id: ::protobuf::SingularField::none(),
-                    last_durable_mrs_id: ::std::option::Option::None,
-                    start_key: ::protobuf::SingularField::none(),
-                    end_key: ::protobuf::SingularField::none(),
-                    partition: ::protobuf::SingularPtrField::none(),
-                    rowsets: ::protobuf::RepeatedField::new(),
-                    table_name: ::protobuf::SingularField::none(),
-                    schema: ::protobuf::SingularPtrField::none(),
-                    schema_version: ::std::option::Option::None,
-                    partition_schema: ::protobuf::SingularPtrField::none(),
-                    tablet_data_state: ::std::option::Option::None,
-                    orphaned_blocks: ::protobuf::RepeatedField::new(),
-                    tombstone_last_logged_opid: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(TabletSuperBlockPB::new)
         }
     }
 
@@ -1003,6 +1027,14 @@ impl TabletSuperBlockPB {
         }
     }
 
+    fn get_table_id_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.table_id
+    }
+
+    fn mut_table_id_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.table_id
+    }
+
     // required bytes tablet_id = 2;
 
     pub fn clear_tablet_id(&mut self) {
@@ -1039,6 +1071,14 @@ impl TabletSuperBlockPB {
         }
     }
 
+    fn get_tablet_id_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.tablet_id
+    }
+
+    fn mut_tablet_id_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.tablet_id
+    }
+
     // required int64 last_durable_mrs_id = 3;
 
     pub fn clear_last_durable_mrs_id(&mut self) {
@@ -1056,6 +1096,14 @@ impl TabletSuperBlockPB {
 
     pub fn get_last_durable_mrs_id(&self) -> i64 {
         self.last_durable_mrs_id.unwrap_or(0)
+    }
+
+    fn get_last_durable_mrs_id_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.last_durable_mrs_id
+    }
+
+    fn mut_last_durable_mrs_id_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.last_durable_mrs_id
     }
 
     // optional bytes start_key = 4;
@@ -1094,6 +1142,14 @@ impl TabletSuperBlockPB {
         }
     }
 
+    fn get_start_key_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.start_key
+    }
+
+    fn mut_start_key_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.start_key
+    }
+
     // optional bytes end_key = 5;
 
     pub fn clear_end_key(&mut self) {
@@ -1130,6 +1186,14 @@ impl TabletSuperBlockPB {
         }
     }
 
+    fn get_end_key_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.end_key
+    }
+
+    fn mut_end_key_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.end_key
+    }
+
     // optional .kudu.PartitionPB partition = 13;
 
     pub fn clear_partition(&mut self) {
@@ -1163,6 +1227,14 @@ impl TabletSuperBlockPB {
         self.partition.as_ref().unwrap_or_else(|| super::common::PartitionPB::default_instance())
     }
 
+    fn get_partition_for_reflect(&self) -> &::protobuf::SingularPtrField<super::common::PartitionPB> {
+        &self.partition
+    }
+
+    fn mut_partition_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::common::PartitionPB> {
+        &mut self.partition
+    }
+
     // repeated .kudu.tablet.RowSetDataPB rowsets = 6;
 
     pub fn clear_rowsets(&mut self) {
@@ -1186,6 +1258,14 @@ impl TabletSuperBlockPB {
 
     pub fn get_rowsets(&self) -> &[RowSetDataPB] {
         &self.rowsets
+    }
+
+    fn get_rowsets_for_reflect(&self) -> &::protobuf::RepeatedField<RowSetDataPB> {
+        &self.rowsets
+    }
+
+    fn mut_rowsets_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<RowSetDataPB> {
+        &mut self.rowsets
     }
 
     // required string table_name = 7;
@@ -1224,6 +1304,14 @@ impl TabletSuperBlockPB {
         }
     }
 
+    fn get_table_name_for_reflect(&self) -> &::protobuf::SingularField<::std::string::String> {
+        &self.table_name
+    }
+
+    fn mut_table_name_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::string::String> {
+        &mut self.table_name
+    }
+
     // required .kudu.SchemaPB schema = 8;
 
     pub fn clear_schema(&mut self) {
@@ -1257,6 +1345,14 @@ impl TabletSuperBlockPB {
         self.schema.as_ref().unwrap_or_else(|| super::common::SchemaPB::default_instance())
     }
 
+    fn get_schema_for_reflect(&self) -> &::protobuf::SingularPtrField<super::common::SchemaPB> {
+        &self.schema
+    }
+
+    fn mut_schema_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::common::SchemaPB> {
+        &mut self.schema
+    }
+
     // required uint32 schema_version = 9;
 
     pub fn clear_schema_version(&mut self) {
@@ -1274,6 +1370,14 @@ impl TabletSuperBlockPB {
 
     pub fn get_schema_version(&self) -> u32 {
         self.schema_version.unwrap_or(0)
+    }
+
+    fn get_schema_version_for_reflect(&self) -> &::std::option::Option<u32> {
+        &self.schema_version
+    }
+
+    fn mut_schema_version_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
+        &mut self.schema_version
     }
 
     // optional .kudu.PartitionSchemaPB partition_schema = 14;
@@ -1309,6 +1413,14 @@ impl TabletSuperBlockPB {
         self.partition_schema.as_ref().unwrap_or_else(|| super::common::PartitionSchemaPB::default_instance())
     }
 
+    fn get_partition_schema_for_reflect(&self) -> &::protobuf::SingularPtrField<super::common::PartitionSchemaPB> {
+        &self.partition_schema
+    }
+
+    fn mut_partition_schema_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::common::PartitionSchemaPB> {
+        &mut self.partition_schema
+    }
+
     // optional .kudu.tablet.TabletDataState tablet_data_state = 10;
 
     pub fn clear_tablet_data_state(&mut self) {
@@ -1326,6 +1438,14 @@ impl TabletSuperBlockPB {
 
     pub fn get_tablet_data_state(&self) -> TabletDataState {
         self.tablet_data_state.unwrap_or(TabletDataState::TABLET_DATA_UNKNOWN)
+    }
+
+    fn get_tablet_data_state_for_reflect(&self) -> &::std::option::Option<TabletDataState> {
+        &self.tablet_data_state
+    }
+
+    fn mut_tablet_data_state_for_reflect(&mut self) -> &mut ::std::option::Option<TabletDataState> {
+        &mut self.tablet_data_state
     }
 
     // repeated .kudu.BlockIdPB orphaned_blocks = 11;
@@ -1351,6 +1471,14 @@ impl TabletSuperBlockPB {
 
     pub fn get_orphaned_blocks(&self) -> &[super::fs::BlockIdPB] {
         &self.orphaned_blocks
+    }
+
+    fn get_orphaned_blocks_for_reflect(&self) -> &::protobuf::RepeatedField<super::fs::BlockIdPB> {
+        &self.orphaned_blocks
+    }
+
+    fn mut_orphaned_blocks_for_reflect(&mut self) -> &mut ::protobuf::RepeatedField<super::fs::BlockIdPB> {
+        &mut self.orphaned_blocks
     }
 
     // optional .kudu.consensus.OpId tombstone_last_logged_opid = 12;
@@ -1385,6 +1513,14 @@ impl TabletSuperBlockPB {
     pub fn get_tombstone_last_logged_opid(&self) -> &super::opid::OpId {
         self.tombstone_last_logged_opid.as_ref().unwrap_or_else(|| super::opid::OpId::default_instance())
     }
+
+    fn get_tombstone_last_logged_opid_for_reflect(&self) -> &::protobuf::SingularPtrField<super::opid::OpId> {
+        &self.tombstone_last_logged_opid
+    }
+
+    fn mut_tombstone_last_logged_opid_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::opid::OpId> {
+        &mut self.tombstone_last_logged_opid
+    }
 }
 
 impl ::protobuf::Message for TabletSuperBlockPB {
@@ -1411,65 +1547,65 @@ impl ::protobuf::Message for TabletSuperBlockPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.table_id));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.table_id)?;
                 },
                 2 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.tablet_id));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.tablet_id)?;
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.last_durable_mrs_id = ::std::option::Option::Some(tmp);
                 },
                 4 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.start_key));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.start_key)?;
                 },
                 5 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.end_key));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.end_key)?;
                 },
                 13 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.partition));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.partition)?;
                 },
                 6 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.rowsets));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.rowsets)?;
                 },
                 7 => {
-                    try!(::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.table_name));
+                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.table_name)?;
                 },
                 8 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.schema));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.schema)?;
                 },
                 9 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint32());
+                    let tmp = is.read_uint32()?;
                     self.schema_version = ::std::option::Option::Some(tmp);
                 },
                 14 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.partition_schema));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.partition_schema)?;
                 },
                 10 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_enum());
+                    let tmp = is.read_enum()?;
                     self.tablet_data_state = ::std::option::Option::Some(tmp);
                 },
                 11 => {
-                    try!(::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.orphaned_blocks));
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.orphaned_blocks)?;
                 },
                 12 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.tombstone_last_logged_opid));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.tombstone_last_logged_opid)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -1480,52 +1616,52 @@ impl ::protobuf::Message for TabletSuperBlockPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.table_id.iter() {
-            my_size += ::protobuf::rt::bytes_size(1, &value);
+        if let Some(v) = self.table_id.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(1, &v);
         };
-        for value in self.tablet_id.iter() {
-            my_size += ::protobuf::rt::bytes_size(2, &value);
+        if let Some(v) = self.tablet_id.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(2, &v);
         };
-        for value in self.last_durable_mrs_id.iter() {
-            my_size += ::protobuf::rt::value_size(3, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.last_durable_mrs_id {
+            my_size += ::protobuf::rt::value_size(3, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.start_key.iter() {
-            my_size += ::protobuf::rt::bytes_size(4, &value);
+        if let Some(v) = self.start_key.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(4, &v);
         };
-        for value in self.end_key.iter() {
-            my_size += ::protobuf::rt::bytes_size(5, &value);
+        if let Some(v) = self.end_key.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(5, &v);
         };
-        for value in self.partition.iter() {
+        if let Some(v) = self.partition.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        for value in &self.rowsets {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.rowsets.iter() {
+        if let Some(v) = self.table_name.as_ref() {
+            my_size += ::protobuf::rt::string_size(7, &v);
+        };
+        if let Some(v) = self.schema.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        if let Some(v) = self.schema_version {
+            my_size += ::protobuf::rt::value_size(9, v, ::protobuf::wire_format::WireTypeVarint);
+        };
+        if let Some(v) = self.partition_schema.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        if let Some(v) = self.tablet_data_state {
+            my_size += ::protobuf::rt::enum_size(10, v);
+        };
+        for value in &self.orphaned_blocks {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.table_name.iter() {
-            my_size += ::protobuf::rt::string_size(7, &value);
-        };
-        for value in self.schema.iter() {
-            let len = value.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        };
-        for value in self.schema_version.iter() {
-            my_size += ::protobuf::rt::value_size(9, *value, ::protobuf::wire_format::WireTypeVarint);
-        };
-        for value in self.partition_schema.iter() {
-            let len = value.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        };
-        for value in self.tablet_data_state.iter() {
-            my_size += ::protobuf::rt::enum_size(10, *value);
-        };
-        for value in self.orphaned_blocks.iter() {
-            let len = value.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        };
-        for value in self.tombstone_last_logged_opid.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.tombstone_last_logged_opid.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -1533,62 +1669,62 @@ impl ::protobuf::Message for TabletSuperBlockPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.table_id.as_ref() {
-            try!(w.write_bytes(1, &v));
+            os.write_bytes(1, &v)?;
         };
         if let Some(v) = self.tablet_id.as_ref() {
-            try!(w.write_bytes(2, &v));
+            os.write_bytes(2, &v)?;
         };
         if let Some(v) = self.last_durable_mrs_id {
-            try!(w.write_int64(3, v));
+            os.write_int64(3, v)?;
         };
         if let Some(v) = self.start_key.as_ref() {
-            try!(w.write_bytes(4, &v));
+            os.write_bytes(4, &v)?;
         };
         if let Some(v) = self.end_key.as_ref() {
-            try!(w.write_bytes(5, &v));
+            os.write_bytes(5, &v)?;
         };
         if let Some(v) = self.partition.as_ref() {
-            try!(w.write_tag(13, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(13, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        for v in self.rowsets.iter() {
-            try!(w.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.rowsets {
+            os.write_tag(6, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.table_name.as_ref() {
-            try!(w.write_string(7, &v));
+            os.write_string(7, &v)?;
         };
         if let Some(v) = self.schema.as_ref() {
-            try!(w.write_tag(8, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(8, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.schema_version {
-            try!(w.write_uint32(9, v));
+            os.write_uint32(9, v)?;
         };
         if let Some(v) = self.partition_schema.as_ref() {
-            try!(w.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(14, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.tablet_data_state {
-            try!(w.write_enum(10, v.value()));
+            os.write_enum(10, v.value())?;
         };
-        for v in self.orphaned_blocks.iter() {
-            try!(w.write_tag(11, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+        for v in &self.orphaned_blocks {
+            os.write_tag(11, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.tombstone_last_logged_opid.as_ref() {
-            try!(w.write_tag(12, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(12, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -1602,10 +1738,6 @@ impl ::protobuf::Message for TabletSuperBlockPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<TabletSuperBlockPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -1636,73 +1768,75 @@ impl ::protobuf::MessageStatic for TabletSuperBlockPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "table_id",
-                    TabletSuperBlockPB::has_table_id,
-                    TabletSuperBlockPB::get_table_id,
+                    TabletSuperBlockPB::get_table_id_for_reflect,
+                    TabletSuperBlockPB::mut_table_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "tablet_id",
-                    TabletSuperBlockPB::has_tablet_id,
-                    TabletSuperBlockPB::get_tablet_id,
+                    TabletSuperBlockPB::get_tablet_id_for_reflect,
+                    TabletSuperBlockPB::mut_tablet_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "last_durable_mrs_id",
-                    TabletSuperBlockPB::has_last_durable_mrs_id,
-                    TabletSuperBlockPB::get_last_durable_mrs_id,
+                    TabletSuperBlockPB::get_last_durable_mrs_id_for_reflect,
+                    TabletSuperBlockPB::mut_last_durable_mrs_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "start_key",
-                    TabletSuperBlockPB::has_start_key,
-                    TabletSuperBlockPB::get_start_key,
+                    TabletSuperBlockPB::get_start_key_for_reflect,
+                    TabletSuperBlockPB::mut_start_key_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "end_key",
-                    TabletSuperBlockPB::has_end_key,
-                    TabletSuperBlockPB::get_end_key,
+                    TabletSuperBlockPB::get_end_key_for_reflect,
+                    TabletSuperBlockPB::mut_end_key_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::common::PartitionPB>>(
                     "partition",
-                    TabletSuperBlockPB::has_partition,
-                    TabletSuperBlockPB::get_partition,
+                    TabletSuperBlockPB::get_partition_for_reflect,
+                    TabletSuperBlockPB::mut_partition_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<RowSetDataPB>>(
                     "rowsets",
-                    TabletSuperBlockPB::get_rowsets,
+                    TabletSuperBlockPB::get_rowsets_for_reflect,
+                    TabletSuperBlockPB::mut_rowsets_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_string_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "table_name",
-                    TabletSuperBlockPB::has_table_name,
-                    TabletSuperBlockPB::get_table_name,
+                    TabletSuperBlockPB::get_table_name_for_reflect,
+                    TabletSuperBlockPB::mut_table_name_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::common::SchemaPB>>(
                     "schema",
-                    TabletSuperBlockPB::has_schema,
-                    TabletSuperBlockPB::get_schema,
+                    TabletSuperBlockPB::get_schema_for_reflect,
+                    TabletSuperBlockPB::mut_schema_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u32_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
                     "schema_version",
-                    TabletSuperBlockPB::has_schema_version,
-                    TabletSuperBlockPB::get_schema_version,
+                    TabletSuperBlockPB::get_schema_version_for_reflect,
+                    TabletSuperBlockPB::mut_schema_version_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::common::PartitionSchemaPB>>(
                     "partition_schema",
-                    TabletSuperBlockPB::has_partition_schema,
-                    TabletSuperBlockPB::get_partition_schema,
+                    TabletSuperBlockPB::get_partition_schema_for_reflect,
+                    TabletSuperBlockPB::mut_partition_schema_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_enum_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeEnum<TabletDataState>>(
                     "tablet_data_state",
-                    TabletSuperBlockPB::has_tablet_data_state,
-                    TabletSuperBlockPB::get_tablet_data_state,
+                    TabletSuperBlockPB::get_tablet_data_state_for_reflect,
+                    TabletSuperBlockPB::mut_tablet_data_state_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::fs::BlockIdPB>>(
                     "orphaned_blocks",
-                    TabletSuperBlockPB::get_orphaned_blocks,
+                    TabletSuperBlockPB::get_orphaned_blocks_for_reflect,
+                    TabletSuperBlockPB::mut_orphaned_blocks_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::opid::OpId>>(
                     "tombstone_last_logged_opid",
-                    TabletSuperBlockPB::has_tombstone_last_logged_opid,
-                    TabletSuperBlockPB::get_tombstone_last_logged_opid,
+                    TabletSuperBlockPB::get_tombstone_last_logged_opid_for_reflect,
+                    TabletSuperBlockPB::mut_tombstone_last_logged_opid_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<TabletSuperBlockPB>(
                     "TabletSuperBlockPB",
@@ -1734,29 +1868,15 @@ impl ::protobuf::Clear for TabletSuperBlockPB {
     }
 }
 
-impl ::std::cmp::PartialEq for TabletSuperBlockPB {
-    fn eq(&self, other: &TabletSuperBlockPB) -> bool {
-        self.table_id == other.table_id &&
-        self.tablet_id == other.tablet_id &&
-        self.last_durable_mrs_id == other.last_durable_mrs_id &&
-        self.start_key == other.start_key &&
-        self.end_key == other.end_key &&
-        self.partition == other.partition &&
-        self.rowsets == other.rowsets &&
-        self.table_name == other.table_name &&
-        self.schema == other.schema &&
-        self.schema_version == other.schema_version &&
-        self.partition_schema == other.partition_schema &&
-        self.tablet_data_state == other.tablet_data_state &&
-        self.orphaned_blocks == other.orphaned_blocks &&
-        self.tombstone_last_logged_opid == other.tombstone_last_logged_opid &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for TabletSuperBlockPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TabletSuperBlockPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 
@@ -1810,6 +1930,12 @@ impl ::protobuf::ProtobufEnum for TabletDataState {
 }
 
 impl ::std::marker::Copy for TabletDataState {
+}
+
+impl ::protobuf::reflect::ProtobufValue for TabletDataState {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
 }
 
 #[derive(Clone,PartialEq,Eq,Debug,Hash)]
@@ -1868,6 +1994,12 @@ impl ::protobuf::ProtobufEnum for TabletStatePB {
 }
 
 impl ::std::marker::Copy for TabletStatePB {
+}
+
+impl ::protobuf::reflect::ProtobufValue for TabletStatePB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
 }
 
 static file_descriptor_proto_data: &'static [u8] = &[

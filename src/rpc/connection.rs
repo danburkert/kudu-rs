@@ -491,9 +491,7 @@ impl Connection {
         trace!("{:?}: sending connection context to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-3);
-        let mut msg = rpc_header::ConnectionContextPB::new();
-        msg.mut_user_info().set_effective_user("user".to_string());
-        msg.mut_user_info().set_real_user("user".to_string());
+        let msg = rpc_header::ConnectionContextPB::new();
         self.buffer_message(&msg)
     }
 

@@ -7,17 +7,24 @@
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
+#![allow(box_pointers)]
 #![allow(dead_code)]
+#![allow(missing_docs)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(trivial_casts)]
+#![allow(unsafe_code)]
 #![allow(unused_imports)]
+#![allow(unused_results)]
+
+use std::io::Write;
 
 use protobuf::CodedOutputStream;
 use protobuf::Message as Message_imported_for_functions;
 use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 
-#[derive(Clone,Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ChecksumRequestPB {
     // message fields
     new_request: ::protobuf::SingularPtrField<super::tserver::NewScanRequestPB>,
@@ -27,7 +34,7 @@ pub struct ChecksumRequestPB {
     close_scanner: ::std::option::Option<bool>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -44,17 +51,7 @@ impl ChecksumRequestPB {
             ptr: 0 as *const ChecksumRequestPB,
         };
         unsafe {
-            instance.get(|| {
-                ChecksumRequestPB {
-                    new_request: ::protobuf::SingularPtrField::none(),
-                    continue_request: ::protobuf::SingularPtrField::none(),
-                    call_seq_id: ::std::option::Option::None,
-                    batch_size_bytes: ::std::option::Option::None,
-                    close_scanner: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ChecksumRequestPB::new)
         }
     }
 
@@ -91,6 +88,14 @@ impl ChecksumRequestPB {
         self.new_request.as_ref().unwrap_or_else(|| super::tserver::NewScanRequestPB::default_instance())
     }
 
+    fn get_new_request_for_reflect(&self) -> &::protobuf::SingularPtrField<super::tserver::NewScanRequestPB> {
+        &self.new_request
+    }
+
+    fn mut_new_request_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::tserver::NewScanRequestPB> {
+        &mut self.new_request
+    }
+
     // optional .kudu.tserver.ContinueChecksumRequestPB continue_request = 2;
 
     pub fn clear_continue_request(&mut self) {
@@ -124,6 +129,14 @@ impl ChecksumRequestPB {
         self.continue_request.as_ref().unwrap_or_else(|| ContinueChecksumRequestPB::default_instance())
     }
 
+    fn get_continue_request_for_reflect(&self) -> &::protobuf::SingularPtrField<ContinueChecksumRequestPB> {
+        &self.continue_request
+    }
+
+    fn mut_continue_request_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<ContinueChecksumRequestPB> {
+        &mut self.continue_request
+    }
+
     // optional uint32 call_seq_id = 3;
 
     pub fn clear_call_seq_id(&mut self) {
@@ -141,6 +154,14 @@ impl ChecksumRequestPB {
 
     pub fn get_call_seq_id(&self) -> u32 {
         self.call_seq_id.unwrap_or(0)
+    }
+
+    fn get_call_seq_id_for_reflect(&self) -> &::std::option::Option<u32> {
+        &self.call_seq_id
+    }
+
+    fn mut_call_seq_id_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
+        &mut self.call_seq_id
     }
 
     // optional uint32 batch_size_bytes = 4;
@@ -162,6 +183,14 @@ impl ChecksumRequestPB {
         self.batch_size_bytes.unwrap_or(0)
     }
 
+    fn get_batch_size_bytes_for_reflect(&self) -> &::std::option::Option<u32> {
+        &self.batch_size_bytes
+    }
+
+    fn mut_batch_size_bytes_for_reflect(&mut self) -> &mut ::std::option::Option<u32> {
+        &mut self.batch_size_bytes
+    }
+
     // optional bool close_scanner = 5;
 
     pub fn clear_close_scanner(&mut self) {
@@ -180,6 +209,14 @@ impl ChecksumRequestPB {
     pub fn get_close_scanner(&self) -> bool {
         self.close_scanner.unwrap_or(false)
     }
+
+    fn get_close_scanner_for_reflect(&self) -> &::std::option::Option<bool> {
+        &self.close_scanner
+    }
+
+    fn mut_close_scanner_for_reflect(&mut self) -> &mut ::std::option::Option<bool> {
+        &mut self.close_scanner
+    }
 }
 
 impl ::protobuf::Message for ChecksumRequestPB {
@@ -188,38 +225,38 @@ impl ::protobuf::Message for ChecksumRequestPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.new_request));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.new_request)?;
                 },
                 2 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.continue_request));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.continue_request)?;
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint32());
+                    let tmp = is.read_uint32()?;
                     self.call_seq_id = ::std::option::Option::Some(tmp);
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint32());
+                    let tmp = is.read_uint32()?;
                     self.batch_size_bytes = ::std::option::Option::Some(tmp);
                 },
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_bool());
+                    let tmp = is.read_bool()?;
                     self.close_scanner = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -230,21 +267,21 @@ impl ::protobuf::Message for ChecksumRequestPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.new_request.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.new_request.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.continue_request.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.continue_request.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.call_seq_id.iter() {
-            my_size += ::protobuf::rt::value_size(3, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.call_seq_id {
+            my_size += ::protobuf::rt::value_size(3, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.batch_size_bytes.iter() {
-            my_size += ::protobuf::rt::value_size(4, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.batch_size_bytes {
+            my_size += ::protobuf::rt::value_size(4, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        if self.close_scanner.is_some() {
+        if let Some(v) = self.close_scanner {
             my_size += 2;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -252,27 +289,27 @@ impl ::protobuf::Message for ChecksumRequestPB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.new_request.as_ref() {
-            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.continue_request.as_ref() {
-            try!(w.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.call_seq_id {
-            try!(w.write_uint32(3, v));
+            os.write_uint32(3, v)?;
         };
         if let Some(v) = self.batch_size_bytes {
-            try!(w.write_uint32(4, v));
+            os.write_uint32(4, v)?;
         };
         if let Some(v) = self.close_scanner {
-            try!(w.write_bool(5, v));
+            os.write_bool(5, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -286,10 +323,6 @@ impl ::protobuf::Message for ChecksumRequestPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ChecksumRequestPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -320,30 +353,30 @@ impl ::protobuf::MessageStatic for ChecksumRequestPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::tserver::NewScanRequestPB>>(
                     "new_request",
-                    ChecksumRequestPB::has_new_request,
-                    ChecksumRequestPB::get_new_request,
+                    ChecksumRequestPB::get_new_request_for_reflect,
+                    ChecksumRequestPB::mut_new_request_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ContinueChecksumRequestPB>>(
                     "continue_request",
-                    ChecksumRequestPB::has_continue_request,
-                    ChecksumRequestPB::get_continue_request,
+                    ChecksumRequestPB::get_continue_request_for_reflect,
+                    ChecksumRequestPB::mut_continue_request_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u32_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
                     "call_seq_id",
-                    ChecksumRequestPB::has_call_seq_id,
-                    ChecksumRequestPB::get_call_seq_id,
+                    ChecksumRequestPB::get_call_seq_id_for_reflect,
+                    ChecksumRequestPB::mut_call_seq_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u32_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
                     "batch_size_bytes",
-                    ChecksumRequestPB::has_batch_size_bytes,
-                    ChecksumRequestPB::get_batch_size_bytes,
+                    ChecksumRequestPB::get_batch_size_bytes_for_reflect,
+                    ChecksumRequestPB::mut_batch_size_bytes_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bool_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
                     "close_scanner",
-                    ChecksumRequestPB::has_close_scanner,
-                    ChecksumRequestPB::get_close_scanner,
+                    ChecksumRequestPB::get_close_scanner_for_reflect,
+                    ChecksumRequestPB::mut_close_scanner_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ChecksumRequestPB>(
                     "ChecksumRequestPB",
@@ -366,31 +399,26 @@ impl ::protobuf::Clear for ChecksumRequestPB {
     }
 }
 
-impl ::std::cmp::PartialEq for ChecksumRequestPB {
-    fn eq(&self, other: &ChecksumRequestPB) -> bool {
-        self.new_request == other.new_request &&
-        self.continue_request == other.continue_request &&
-        self.call_seq_id == other.call_seq_id &&
-        self.batch_size_bytes == other.batch_size_bytes &&
-        self.close_scanner == other.close_scanner &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ChecksumRequestPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for ChecksumRequestPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct ContinueChecksumRequestPB {
     // message fields
     scanner_id: ::protobuf::SingularField<::std::vec::Vec<u8>>,
     previous_checksum: ::std::option::Option<u64>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -407,14 +435,7 @@ impl ContinueChecksumRequestPB {
             ptr: 0 as *const ContinueChecksumRequestPB,
         };
         unsafe {
-            instance.get(|| {
-                ContinueChecksumRequestPB {
-                    scanner_id: ::protobuf::SingularField::none(),
-                    previous_checksum: ::std::option::Option::None,
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ContinueChecksumRequestPB::new)
         }
     }
 
@@ -454,6 +475,14 @@ impl ContinueChecksumRequestPB {
         }
     }
 
+    fn get_scanner_id_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.scanner_id
+    }
+
+    fn mut_scanner_id_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.scanner_id
+    }
+
     // required uint64 previous_checksum = 2;
 
     pub fn clear_previous_checksum(&mut self) {
@@ -472,6 +501,14 @@ impl ContinueChecksumRequestPB {
     pub fn get_previous_checksum(&self) -> u64 {
         self.previous_checksum.unwrap_or(0)
     }
+
+    fn get_previous_checksum_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.previous_checksum
+    }
+
+    fn mut_previous_checksum_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.previous_checksum
+    }
 }
 
 impl ::protobuf::Message for ContinueChecksumRequestPB {
@@ -486,21 +523,21 @@ impl ::protobuf::Message for ContinueChecksumRequestPB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.scanner_id));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.scanner_id)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint64());
+                    let tmp = is.read_uint64()?;
                     self.previous_checksum = ::std::option::Option::Some(tmp);
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -511,25 +548,25 @@ impl ::protobuf::Message for ContinueChecksumRequestPB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.scanner_id.iter() {
-            my_size += ::protobuf::rt::bytes_size(1, &value);
+        if let Some(v) = self.scanner_id.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(1, &v);
         };
-        for value in self.previous_checksum.iter() {
-            my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.previous_checksum {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.scanner_id.as_ref() {
-            try!(w.write_bytes(1, &v));
+            os.write_bytes(1, &v)?;
         };
         if let Some(v) = self.previous_checksum {
-            try!(w.write_uint64(2, v));
+            os.write_uint64(2, v)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -543,10 +580,6 @@ impl ::protobuf::Message for ContinueChecksumRequestPB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ContinueChecksumRequestPB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -577,15 +610,15 @@ impl ::protobuf::MessageStatic for ContinueChecksumRequestPB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "scanner_id",
-                    ContinueChecksumRequestPB::has_scanner_id,
-                    ContinueChecksumRequestPB::get_scanner_id,
+                    ContinueChecksumRequestPB::get_scanner_id_for_reflect,
+                    ContinueChecksumRequestPB::mut_scanner_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "previous_checksum",
-                    ContinueChecksumRequestPB::has_previous_checksum,
-                    ContinueChecksumRequestPB::get_previous_checksum,
+                    ContinueChecksumRequestPB::get_previous_checksum_for_reflect,
+                    ContinueChecksumRequestPB::mut_previous_checksum_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ContinueChecksumRequestPB>(
                     "ContinueChecksumRequestPB",
@@ -605,21 +638,19 @@ impl ::protobuf::Clear for ContinueChecksumRequestPB {
     }
 }
 
-impl ::std::cmp::PartialEq for ContinueChecksumRequestPB {
-    fn eq(&self, other: &ContinueChecksumRequestPB) -> bool {
-        self.scanner_id == other.scanner_id &&
-        self.previous_checksum == other.previous_checksum &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ContinueChecksumRequestPB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-#[derive(Clone,Default)]
+impl ::protobuf::reflect::ProtobufValue for ContinueChecksumRequestPB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
 pub struct ChecksumResponsePB {
     // message fields
     error: ::protobuf::SingularPtrField<super::tserver::TabletServerErrorPB>,
@@ -631,7 +662,7 @@ pub struct ChecksumResponsePB {
     resource_metrics: ::protobuf::SingularPtrField<super::tserver::ResourceMetricsPB>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
-    cached_size: ::std::cell::Cell<u32>,
+    cached_size: ::protobuf::CachedSize,
 }
 
 // see codegen.rs for the explanation why impl Sync explicitly
@@ -648,19 +679,7 @@ impl ChecksumResponsePB {
             ptr: 0 as *const ChecksumResponsePB,
         };
         unsafe {
-            instance.get(|| {
-                ChecksumResponsePB {
-                    error: ::protobuf::SingularPtrField::none(),
-                    checksum: ::std::option::Option::None,
-                    scanner_id: ::protobuf::SingularField::none(),
-                    has_more_results: ::std::option::Option::None,
-                    snap_timestamp: ::std::option::Option::None,
-                    rows_checksummed: ::std::option::Option::None,
-                    resource_metrics: ::protobuf::SingularPtrField::none(),
-                    unknown_fields: ::protobuf::UnknownFields::new(),
-                    cached_size: ::std::cell::Cell::new(0),
-                }
-            })
+            instance.get(ChecksumResponsePB::new)
         }
     }
 
@@ -697,6 +716,14 @@ impl ChecksumResponsePB {
         self.error.as_ref().unwrap_or_else(|| super::tserver::TabletServerErrorPB::default_instance())
     }
 
+    fn get_error_for_reflect(&self) -> &::protobuf::SingularPtrField<super::tserver::TabletServerErrorPB> {
+        &self.error
+    }
+
+    fn mut_error_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::tserver::TabletServerErrorPB> {
+        &mut self.error
+    }
+
     // optional uint64 checksum = 2;
 
     pub fn clear_checksum(&mut self) {
@@ -714,6 +741,14 @@ impl ChecksumResponsePB {
 
     pub fn get_checksum(&self) -> u64 {
         self.checksum.unwrap_or(0)
+    }
+
+    fn get_checksum_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.checksum
+    }
+
+    fn mut_checksum_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.checksum
     }
 
     // optional bytes scanner_id = 3;
@@ -752,6 +787,14 @@ impl ChecksumResponsePB {
         }
     }
 
+    fn get_scanner_id_for_reflect(&self) -> &::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &self.scanner_id
+    }
+
+    fn mut_scanner_id_for_reflect(&mut self) -> &mut ::protobuf::SingularField<::std::vec::Vec<u8>> {
+        &mut self.scanner_id
+    }
+
     // optional bool has_more_results = 4;
 
     pub fn clear_has_more_results(&mut self) {
@@ -769,6 +812,14 @@ impl ChecksumResponsePB {
 
     pub fn get_has_more_results(&self) -> bool {
         self.has_more_results.unwrap_or(false)
+    }
+
+    fn get_has_more_results_for_reflect(&self) -> &::std::option::Option<bool> {
+        &self.has_more_results
+    }
+
+    fn mut_has_more_results_for_reflect(&mut self) -> &mut ::std::option::Option<bool> {
+        &mut self.has_more_results
     }
 
     // optional fixed64 snap_timestamp = 5;
@@ -790,6 +841,14 @@ impl ChecksumResponsePB {
         self.snap_timestamp.unwrap_or(0)
     }
 
+    fn get_snap_timestamp_for_reflect(&self) -> &::std::option::Option<u64> {
+        &self.snap_timestamp
+    }
+
+    fn mut_snap_timestamp_for_reflect(&mut self) -> &mut ::std::option::Option<u64> {
+        &mut self.snap_timestamp
+    }
+
     // optional int64 rows_checksummed = 6;
 
     pub fn clear_rows_checksummed(&mut self) {
@@ -807,6 +866,14 @@ impl ChecksumResponsePB {
 
     pub fn get_rows_checksummed(&self) -> i64 {
         self.rows_checksummed.unwrap_or(0)
+    }
+
+    fn get_rows_checksummed_for_reflect(&self) -> &::std::option::Option<i64> {
+        &self.rows_checksummed
+    }
+
+    fn mut_rows_checksummed_for_reflect(&mut self) -> &mut ::std::option::Option<i64> {
+        &mut self.rows_checksummed
     }
 
     // optional .kudu.tserver.ResourceMetricsPB resource_metrics = 7;
@@ -841,6 +908,14 @@ impl ChecksumResponsePB {
     pub fn get_resource_metrics(&self) -> &super::tserver::ResourceMetricsPB {
         self.resource_metrics.as_ref().unwrap_or_else(|| super::tserver::ResourceMetricsPB::default_instance())
     }
+
+    fn get_resource_metrics_for_reflect(&self) -> &::protobuf::SingularPtrField<super::tserver::ResourceMetricsPB> {
+        &self.resource_metrics
+    }
+
+    fn mut_resource_metrics_for_reflect(&mut self) -> &mut ::protobuf::SingularPtrField<super::tserver::ResourceMetricsPB> {
+        &mut self.resource_metrics
+    }
 }
 
 impl ::protobuf::Message for ChecksumResponsePB {
@@ -849,48 +924,48 @@ impl ::protobuf::Message for ChecksumResponsePB {
     }
 
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !try!(is.eof()) {
-            let (field_number, wire_type) = try!(is.read_tag_unpack());
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.error));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.error)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_uint64());
+                    let tmp = is.read_uint64()?;
                     self.checksum = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    try!(::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.scanner_id));
+                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.scanner_id)?;
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_bool());
+                    let tmp = is.read_bool()?;
                     self.has_more_results = ::std::option::Option::Some(tmp);
                 },
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_fixed64());
+                    let tmp = is.read_fixed64()?;
                     self.snap_timestamp = ::std::option::Option::Some(tmp);
                 },
                 6 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     };
-                    let tmp = try!(is.read_int64());
+                    let tmp = is.read_int64()?;
                     self.rows_checksummed = ::std::option::Option::Some(tmp);
                 },
                 7 => {
-                    try!(::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.resource_metrics));
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.resource_metrics)?;
                 },
                 _ => {
-                    try!(::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields()));
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
@@ -901,27 +976,27 @@ impl ::protobuf::Message for ChecksumResponsePB {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        for value in self.error.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        for value in self.checksum.iter() {
-            my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.checksum {
+            my_size += ::protobuf::rt::value_size(2, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.scanner_id.iter() {
-            my_size += ::protobuf::rt::bytes_size(3, &value);
+        if let Some(v) = self.scanner_id.as_ref() {
+            my_size += ::protobuf::rt::bytes_size(3, &v);
         };
-        if self.has_more_results.is_some() {
+        if let Some(v) = self.has_more_results {
             my_size += 2;
         };
-        if self.snap_timestamp.is_some() {
+        if let Some(v) = self.snap_timestamp {
             my_size += 9;
         };
-        for value in self.rows_checksummed.iter() {
-            my_size += ::protobuf::rt::value_size(6, *value, ::protobuf::wire_format::WireTypeVarint);
+        if let Some(v) = self.rows_checksummed {
+            my_size += ::protobuf::rt::value_size(6, v, ::protobuf::wire_format::WireTypeVarint);
         };
-        for value in self.resource_metrics.iter() {
-            let len = value.compute_size();
+        if let Some(v) = self.resource_metrics.as_ref() {
+            let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -929,33 +1004,33 @@ impl ::protobuf::Message for ChecksumResponsePB {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, mut w: &mut ::std::io::Write) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, mut os: &mut Write) -> ::protobuf::ProtobufResult<()> {
         if let Some(v) = self.error.as_ref() {
-            try!(w.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
         if let Some(v) = self.checksum {
-            try!(w.write_uint64(2, v));
+            os.write_uint64(2, v)?;
         };
         if let Some(v) = self.scanner_id.as_ref() {
-            try!(w.write_bytes(3, &v));
+            os.write_bytes(3, &v)?;
         };
         if let Some(v) = self.has_more_results {
-            try!(w.write_bool(4, v));
+            os.write_bool(4, v)?;
         };
         if let Some(v) = self.snap_timestamp {
-            try!(w.write_fixed64(5, v));
+            os.write_fixed64(5, v)?;
         };
         if let Some(v) = self.rows_checksummed {
-            try!(w.write_int64(6, v));
+            os.write_int64(6, v)?;
         };
         if let Some(v) = self.resource_metrics.as_ref() {
-            try!(w.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited));
-            try!(w.write_raw_varint32(v.get_cached_size()));
-            try!(v.write_to_with_cached_sizes(w));
+            os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         };
-        try!(w.write_unknown_fields(self.get_unknown_fields()));
+        os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
 
@@ -969,10 +1044,6 @@ impl ::protobuf::Message for ChecksumResponsePB {
 
     fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
         &mut self.unknown_fields
-    }
-
-    fn type_id(&self) -> ::std::any::TypeId {
-        ::std::any::TypeId::of::<ChecksumResponsePB>()
     }
 
     fn as_any(&self) -> &::std::any::Any {
@@ -1003,40 +1074,40 @@ impl ::protobuf::MessageStatic for ChecksumResponsePB {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::tserver::TabletServerErrorPB>>(
                     "error",
-                    ChecksumResponsePB::has_error,
-                    ChecksumResponsePB::get_error,
+                    ChecksumResponsePB::get_error_for_reflect,
+                    ChecksumResponsePB::mut_error_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                     "checksum",
-                    ChecksumResponsePB::has_checksum,
-                    ChecksumResponsePB::get_checksum,
+                    ChecksumResponsePB::get_checksum_for_reflect,
+                    ChecksumResponsePB::mut_checksum_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bytes_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
                     "scanner_id",
-                    ChecksumResponsePB::has_scanner_id,
-                    ChecksumResponsePB::get_scanner_id,
+                    ChecksumResponsePB::get_scanner_id_for_reflect,
+                    ChecksumResponsePB::mut_scanner_id_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_bool_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
                     "has_more_results",
-                    ChecksumResponsePB::has_has_more_results,
-                    ChecksumResponsePB::get_has_more_results,
+                    ChecksumResponsePB::get_has_more_results_for_reflect,
+                    ChecksumResponsePB::mut_has_more_results_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_u64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeFixed64>(
                     "snap_timestamp",
-                    ChecksumResponsePB::has_snap_timestamp,
-                    ChecksumResponsePB::get_snap_timestamp,
+                    ChecksumResponsePB::get_snap_timestamp_for_reflect,
+                    ChecksumResponsePB::mut_snap_timestamp_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_i64_accessor(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                     "rows_checksummed",
-                    ChecksumResponsePB::has_rows_checksummed,
-                    ChecksumResponsePB::get_rows_checksummed,
+                    ChecksumResponsePB::get_rows_checksummed_for_reflect,
+                    ChecksumResponsePB::mut_rows_checksummed_for_reflect,
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_message_accessor(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<super::tserver::ResourceMetricsPB>>(
                     "resource_metrics",
-                    ChecksumResponsePB::has_resource_metrics,
-                    ChecksumResponsePB::get_resource_metrics,
+                    ChecksumResponsePB::get_resource_metrics_for_reflect,
+                    ChecksumResponsePB::mut_resource_metrics_for_reflect,
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ChecksumResponsePB>(
                     "ChecksumResponsePB",
@@ -1061,22 +1132,15 @@ impl ::protobuf::Clear for ChecksumResponsePB {
     }
 }
 
-impl ::std::cmp::PartialEq for ChecksumResponsePB {
-    fn eq(&self, other: &ChecksumResponsePB) -> bool {
-        self.error == other.error &&
-        self.checksum == other.checksum &&
-        self.scanner_id == other.scanner_id &&
-        self.has_more_results == other.has_more_results &&
-        self.snap_timestamp == other.snap_timestamp &&
-        self.rows_checksummed == other.rows_checksummed &&
-        self.resource_metrics == other.resource_metrics &&
-        self.unknown_fields == other.unknown_fields
-    }
-}
-
 impl ::std::fmt::Debug for ChecksumResponsePB {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ChecksumResponsePB {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
 }
 

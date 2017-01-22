@@ -4,23 +4,31 @@ set -euo pipefail
 IFS=$'\n\t'
 set -x
 
-PROTOC=${PROTOC:-$KUDU_HOME/thirdparty/installed-deps/bin/protoc}
+PROTOC=${PROTOC:-$KUDU_HOME/thirdparty/installed/uninstrumented/bin/protoc}
+PROTO_INCLUDE=${PROTO_INCLUDE:-$KUDU_HOME/thirdparty/src/protobuf-2.6.1/src}
 
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/client/client.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/common.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/common/wire_protocol.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/opid.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/fs/fs.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/master/master.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $KUDU_HOME/thirdparty/protobuf-2.6.1/src $KUDU_HOME/src/kudu/rpc/rpc_header.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/tablet.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tserver/tserver.proto
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $KUDU_HOME/thirdparty/protobuf-2.6.1/src $KUDU_HOME/src/kudu/tserver/tserver_service.proto
+PROTOS="
+client/client.proto
+common/common.proto
+common/wire_protocol.proto
+consensus/opid.proto
+fs/fs.proto
+master/master.proto
+rpc/rpc_header.proto
+tablet/tablet.proto
+tserver/tserver.proto
+tserver/tserver_service.proto
+"
 
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/consensus/metadata.proto
+for PROTO in $PROTOS;
+do
+  $PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $PROTO_INCLUDE $KUDU_HOME/src/kudu/$PROTO
+done
+
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $PROTO_INCLUDE $KUDU_HOME/src/kudu/consensus/metadata.proto
 mv src/metadata.rs src/consensus_metadata.rs
 
-$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ $KUDU_HOME/src/kudu/tablet/metadata.proto
+$PROTOC --rust_out src/ --proto_path $KUDU_HOME/src/ --proto_path $PROTO_INCLUDE $KUDU_HOME/src/kudu/tablet/metadata.proto
 mv src/metadata.rs src/tablet_metadata.rs
 
 sed -i.bak 's/metadata/consensus_metadata/' src/wire_protocol.rs

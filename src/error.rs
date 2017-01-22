@@ -230,6 +230,9 @@ pub enum RpcErrorCode {
     /// The request parameter was not parseable, was missing required fields,
     /// or the server does not support the required feature flags.
     InvalidRequest,
+    /// The server might have previously received this request but its response is no longer
+    /// cached. It's unknown whether the request was executed or not.
+    StaleRequest,
 
     // Fatal errors indicate that the client should shut down the connection.
 
@@ -283,6 +286,7 @@ impl error::Error for RpcError {
             RpcErrorCode::ServerTooBusy => "server too busy",
             RpcErrorCode::InvalidRequest => "invalid request",
             RpcErrorCode::FatalUnknown => "unknown error",
+            RpcErrorCode::StaleRequest => "stale request",
             RpcErrorCode::FatalServerShuttingDown => "server shutting down",
             RpcErrorCode::FatalInvalidRpcHeader => "invalid RPC header",
             RpcErrorCode::FatalDeserializingRequest => "error deserializing request",
@@ -305,6 +309,7 @@ impl From<RpcErrorPB> for RpcError {
             RpcErrorCodePB::ERROR_NO_SUCH_SERVICE => RpcErrorCode::NoSuchService,
             RpcErrorCodePB::ERROR_SERVER_TOO_BUSY => RpcErrorCode::ServerTooBusy,
             RpcErrorCodePB::ERROR_INVALID_REQUEST => RpcErrorCode::InvalidRequest,
+            RpcErrorCodePB::ERROR_REQUEST_STALE => RpcErrorCode::StaleRequest,
             RpcErrorCodePB::FATAL_SERVER_SHUTTING_DOWN => RpcErrorCode::FatalServerShuttingDown,
             RpcErrorCodePB::FATAL_INVALID_RPC_HEADER => RpcErrorCode::FatalInvalidRpcHeader,
             RpcErrorCodePB::FATAL_DESERIALIZING_REQUEST => RpcErrorCode::FatalDeserializingRequest,
@@ -322,7 +327,6 @@ impl From<RpcErrorPB> for RpcError {
         }
     }
 }
-
 
 impl fmt::Display for RpcError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -573,8 +577,9 @@ pub enum MasterErrorCode {
     /// The operation attempted can only be invoked against either the leader or a single
     /// non-distributed master, which this node isn't.
     NotTheLeader,
-    /// The number of replicas requested is greater than the number of live servers in the cluster.
-    ReplicationFactorTooHigh,
+    /// The replication factor is invalid, either because it is too low, too high, or an even
+    /// number.
+    InvalidReplicationFactor,
     /// A tablet involved in the operation is not running.
     TabletNotRunning,
 }
@@ -589,8 +594,10 @@ impl From<MasterErrorCodePB> for MasterErrorCode {
             MasterErrorCodePB::TOO_MANY_TABLETS => MasterErrorCode::TooManyTablets,
             MasterErrorCodePB::CATALOG_MANAGER_NOT_INITIALIZED => MasterErrorCode::CatalogManagerNotInitialized,
             MasterErrorCodePB::NOT_THE_LEADER => MasterErrorCode::NotTheLeader,
-            MasterErrorCodePB::REPLICATION_FACTOR_TOO_HIGH => MasterErrorCode::ReplicationFactorTooHigh,
+            MasterErrorCodePB::REPLICATION_FACTOR_TOO_HIGH => MasterErrorCode::InvalidReplicationFactor,
             MasterErrorCodePB::TABLET_NOT_RUNNING => MasterErrorCode::TabletNotRunning,
+            MasterErrorCodePB::EVEN_REPLICATION_FACTOR => MasterErrorCode::InvalidReplicationFactor,
+            MasterErrorCodePB::ILLEGAL_REPLICATION_FACTOR => MasterErrorCode::InvalidReplicationFactor,
         }
     }
 }
@@ -626,7 +633,7 @@ impl error::Error for MasterError {
             MasterErrorCode::TooManyTablets => "too many tablets",
             MasterErrorCode::CatalogManagerNotInitialized => "catalog manager not initialized",
             MasterErrorCode::NotTheLeader => "not the leader",
-            MasterErrorCode::ReplicationFactorTooHigh => "replication factor too high",
+            MasterErrorCode::InvalidReplicationFactor => "invalid replication factor",
             MasterErrorCode::TabletNotRunning => "tablet not running",
         }
     }
