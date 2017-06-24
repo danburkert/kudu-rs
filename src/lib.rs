@@ -12,7 +12,7 @@ extern crate itertools;
 extern crate kudu_pb;
 extern crate netbuf;
 extern crate parking_lot;
-extern crate protobuf;
+extern crate proto;
 extern crate rand;
 extern crate slab;
 extern crate take_mut;
@@ -110,33 +110,33 @@ impl DataType {
         }
     }
 
-    fn to_pb(self) -> kudu_pb::common::DataType {
+    fn to_pb(self) -> kudu_pb::DataType {
         match self {
-            DataType::Bool => kudu_pb::common::DataType::BOOL,
-            DataType::Int8 => kudu_pb::common::DataType::INT8,
-            DataType::Int16 => kudu_pb::common::DataType::INT16,
-            DataType::Int32 => kudu_pb::common::DataType::INT32,
-            DataType::Int64 => kudu_pb::common::DataType::INT64,
-            DataType::Timestamp => kudu_pb::common::DataType::TIMESTAMP,
-            DataType::Float => kudu_pb::common::DataType::FLOAT,
-            DataType::Double => kudu_pb::common::DataType::DOUBLE,
-            DataType::Binary => kudu_pb::common::DataType::BINARY,
-            DataType::String => kudu_pb::common::DataType::STRING,
+            DataType::Bool => kudu_pb::DataType::Bool,
+            DataType::Int8 => kudu_pb::DataType::Int8,
+            DataType::Int16 => kudu_pb::DataType::Int16,
+            DataType::Int32 => kudu_pb::DataType::Int32,
+            DataType::Int64 => kudu_pb::DataType::Int64,
+            DataType::Timestamp => kudu_pb::DataType::Timestamp,
+            DataType::Float => kudu_pb::DataType::Float,
+            DataType::Double => kudu_pb::DataType::Double,
+            DataType::Binary => kudu_pb::DataType::Binary,
+            DataType::String => kudu_pb::DataType::String,
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::DataType) -> Result<DataType> {
+    fn from_pb(pb: kudu_pb::DataType) -> Result<DataType> {
         match pb {
-            kudu_pb::common::DataType::BOOL => Ok(DataType::Bool),
-            kudu_pb::common::DataType::INT8 => Ok(DataType::Int8),
-            kudu_pb::common::DataType::INT16 => Ok(DataType::Int16),
-            kudu_pb::common::DataType::INT32 => Ok(DataType::Int32),
-            kudu_pb::common::DataType::INT64 => Ok(DataType::Int64),
-            kudu_pb::common::DataType::TIMESTAMP => Ok(DataType::Timestamp),
-            kudu_pb::common::DataType::FLOAT => Ok(DataType::Float),
-            kudu_pb::common::DataType::DOUBLE => Ok(DataType::Double),
-            kudu_pb::common::DataType::BINARY => Ok(DataType::Binary),
-            kudu_pb::common::DataType::STRING => Ok(DataType::String),
+            kudu_pb::DataType::BOOL => Ok(DataType::Bool),
+            kudu_pb::DataType::INT8 => Ok(DataType::Int8),
+            kudu_pb::DataType::INT16 => Ok(DataType::Int16),
+            kudu_pb::DataType::INT32 => Ok(DataType::Int32),
+            kudu_pb::DataType::INT64 => Ok(DataType::Int64),
+            kudu_pb::DataType::TIMESTAMP => Ok(DataType::Timestamp),
+            kudu_pb::DataType::FLOAT => Ok(DataType::Float),
+            kudu_pb::DataType::DOUBLE => Ok(DataType::Double),
+            kudu_pb::DataType::BINARY => Ok(DataType::Binary),
+            kudu_pb::DataType::STRING => Ok(DataType::String),
             _ => Err(Error::Serialization("unknown data type".to_string())),
         }
     }
@@ -185,27 +185,27 @@ pub enum EncodingType {
 }
 
 impl EncodingType {
-    fn to_pb(self) -> kudu_pb::common::EncodingType {
+    fn to_pb(self) -> kudu_pb::EncodingType {
         match self {
-            EncodingType::Auto => kudu_pb::common::EncodingType::AUTO_ENCODING,
-            EncodingType::Plain => kudu_pb::common::EncodingType::PLAIN_ENCODING,
-            EncodingType::Prefix => kudu_pb::common::EncodingType::PREFIX_ENCODING,
-            EncodingType::GroupVarint => kudu_pb::common::EncodingType::GROUP_VARINT,
-            EncodingType::RunLength => kudu_pb::common::EncodingType::RLE,
-            EncodingType::Dictionary => kudu_pb::common::EncodingType::DICT_ENCODING,
-            EncodingType::BitShuffle => kudu_pb::common::EncodingType::BIT_SHUFFLE,
+            EncodingType::Auto => kudu_pb::EncodingType::AutoEncoding,
+            EncodingType::Plain => kudu_pb::EncodingType::PlainEncoding,
+            EncodingType::Prefix => kudu_pb::EncodingType::PrefixEncoding,
+            EncodingType::GroupVarint => kudu_pb::EncodingType::GroupVarint,
+            EncodingType::RunLength => kudu_pb::EncodingType::Rle,
+            EncodingType::Dictionary => kudu_pb::EncodingType::DictEncoding,
+            EncodingType::BitShuffle => kudu_pb::EncodingType::BitShuffle,
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::EncodingType) -> Result<EncodingType> {
+    fn from_pb(pb: kudu_pb::EncodingType) -> Result<EncodingType> {
         match pb {
-            kudu_pb::common::EncodingType::AUTO_ENCODING => Ok(EncodingType::Auto),
-            kudu_pb::common::EncodingType::PLAIN_ENCODING => Ok(EncodingType::Plain),
-            kudu_pb::common::EncodingType::PREFIX_ENCODING => Ok(EncodingType::Prefix),
-            kudu_pb::common::EncodingType::GROUP_VARINT => Ok(EncodingType::GroupVarint),
-            kudu_pb::common::EncodingType::RLE => Ok(EncodingType::RunLength),
-            kudu_pb::common::EncodingType::DICT_ENCODING => Ok(EncodingType::Dictionary),
-            kudu_pb::common::EncodingType::BIT_SHUFFLE => Ok(EncodingType::BitShuffle),
+            kudu_pb::EncodingType::AutoEncoding => Ok(EncodingType::Auto),
+            kudu_pb::EncodingType::PlainEncoding => Ok(EncodingType::Plain),
+            kudu_pb::EncodingType::PrefixEncoding => Ok(EncodingType::Prefix),
+            kudu_pb::EncodingType::GroupVarint => Ok(EncodingType::GroupVarint),
+            kudu_pb::EncodingType::Rle => Ok(EncodingType::RunLength),
+            kudu_pb::EncodingType::DictEncoding => Ok(EncodingType::Dictionary),
+            kudu_pb::EncodingType::BitShuffle => Ok(EncodingType::BitShuffle),
             _ => Err(Error::Serialization("unknown encoding type".to_string())),
         }
     }
@@ -250,23 +250,23 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    fn to_pb(self) -> kudu_pb::common::CompressionType {
+    fn to_pb(self) -> kudu_pb::CompressionType {
         match self {
-            CompressionType::Default => kudu_pb::common::CompressionType::DEFAULT_COMPRESSION,
-            CompressionType::None => kudu_pb::common::CompressionType::NO_COMPRESSION,
-            CompressionType::Snappy => kudu_pb::common::CompressionType::SNAPPY,
-            CompressionType::Lz4 => kudu_pb::common::CompressionType::LZ4,
-            CompressionType::Zlib => kudu_pb::common::CompressionType::ZLIB,
+            CompressionType::Default => kudu_pb::CompressionType::DEFAULT_COMPRESSION,
+            CompressionType::None => kudu_pb::CompressionType::NO_COMPRESSION,
+            CompressionType::Snappy => kudu_pb::CompressionType::SNAPPY,
+            CompressionType::Lz4 => kudu_pb::CompressionType::LZ4,
+            CompressionType::Zlib => kudu_pb::CompressionType::ZLIB,
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::CompressionType) -> Result<CompressionType> {
+    fn from_pb(pb: kudu_pb::CompressionType) -> Result<CompressionType> {
         match pb {
-            kudu_pb::common::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
-            kudu_pb::common::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
-            kudu_pb::common::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
-            kudu_pb::common::CompressionType::LZ4 => Ok(CompressionType::Lz4),
-            kudu_pb::common::CompressionType::ZLIB => Ok(CompressionType::Zlib),
+            kudu_pb::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
+            kudu_pb::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
+            kudu_pb::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
+            kudu_pb::CompressionType::LZ4 => Ok(CompressionType::Lz4),
+            kudu_pb::CompressionType::ZLIB => Ok(CompressionType::Zlib),
             _ => Err(Error::Serialization("unknown compression type".to_string())),
         }
     }
@@ -313,7 +313,7 @@ pub struct HostPort {
 }
 
 impl HostPort {
-    pub fn from_pb(mut pb: kudu_pb::common::HostPortPB) -> HostPort {
+    pub fn from_pb(mut pb: kudu_pb::HostPortPB) -> HostPort {
         HostPort {
             host: pb.take_host(),
             port: pb.get_port() as u16,

@@ -21,7 +21,7 @@ use kudu_pb::master::{
     ListTabletServersRequestPB, ListTabletServersResponsePB,
     PingRequestPB, PingResponsePB,
 };
-use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
+use kudu_pb::{ServerEntryPB as MasterEntry};
 use futures::sync::{mpsc, oneshot};
 use tokio::reactor::Handle;
 use tokio_timer;
@@ -29,7 +29,7 @@ use tokio_timer;
 use backoff::Backoff;
 use dns::Resolver;
 use list_masters::find_leader_master;
-use protobuf::Message;
+use proto::Message;
 use rpc::{
     Connection,
     Rpc,

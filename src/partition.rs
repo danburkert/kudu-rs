@@ -4,12 +4,12 @@ use std::fmt;
 use std::cmp;
 
 use byteorder::{BigEndian, ByteOrder};
-use kudu_pb::common::{
+use kudu_pb::{
     PartitionPB,
     PartitionSchemaPB,
-    PartitionSchemaPB_ColumnIdentifierPB as ColumnIdentifierPB,
     SchemaPB,
 };
+use kudu_pb::partition_schema_pb::ColumnIdentifierPB;
 
 use Error;
 use Result;

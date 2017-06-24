@@ -1,14 +1,12 @@
 use std::time::Instant;
 
 use kudu_pb::tserver::{
-    PingRequestPB, PingResponsePB,
-    WriteRequestPB, WriteResponsePB,
-    ScanRequestPB, ScanResponsePB,
-    ScannerKeepAliveRequestPB, ScannerKeepAliveResponsePB,
-    ListTabletsRequestPB, ListTabletsResponsePB,
-};
-use kudu_pb::tserver_service::{
     ChecksumRequestPB, ChecksumResponsePB,
+    ListTabletsRequestPB, ListTabletsResponsePB,
+    PingRequestPB, PingResponsePB,
+    ScannerKeepAliveRequestPB, ScannerKeepAliveResponsePB,
+    ScanRequestPB, ScanResponsePB,
+    WriteRequestPB, WriteResponsePB,
 };
 use protobuf::Message;
 

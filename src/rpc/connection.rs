@@ -9,10 +9,10 @@ use std::time::Instant;
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use kudu_pb::rpc_header::{self, ErrorStatusPB, SaslMessagePB_SaslState as SaslState};
+use kudu_pb::rpc::{self, ErrorStatusPB};
+use kudu_pb::rpc::sasl_message_pb::SaslState;
 use netbuf::Buf;
-use protobuf::rt::ProtobufVarint;
-use protobuf::{parse_length_delimited_from_bytes, Clear, CodedInputStream, Message};
+use proto::{parse_length_delimited_from_bytes, Clear, CodedInputStream, Message};
 use tokio::net::TcpStream;
 use tokio::reactor::Handle;
 
@@ -55,7 +55,7 @@ impl Default for ConnectionOptions {
 /// Does not flush the buffer.
 ///
 /// If an error is returned, the connection should be torn down.
-fn buffer_message(header: &rpc_header::RequestHeader, msg: &Message, buf: &mut Buf) -> Result<()> {
+fn buffer_message(header: &rpc::RequestHeader, msg: &Message, buf: &mut Buf) -> Result<()> {
     let header_len = header.compute_size();
     let msg_len = msg.compute_size();
     let len = header_len + header_len.len_varint() + msg_len + msg_len.len_varint();
@@ -84,7 +84,7 @@ fn read_at_least(stream: &mut TcpStream, buf: &mut Buf, min: usize) -> Poll<(), 
 fn poll_read_message<'a>(options: &ConnectionOptions,
                          stream: &mut TcpStream,
                          buf: &'a mut Buf)
-                         -> Poll<(rpc_header::ResponseHeader, Buf), Error> {
+                         -> Poll<(rpc::ResponseHeader, Buf), Error> {
     // Read, or continue reading, an RPC response message from the socket into the read buffer.
     // Every RPC response is prefixed with a 4 bytes length header.
     if buf.len() < 4 {
@@ -103,7 +103,7 @@ fn poll_read_message<'a>(options: &ConnectionOptions,
         try_ready!(read_at_least(stream, buf, needed));
     }
 
-    let mut header = rpc_header::ResponseHeader::new();
+    let mut header = rpc::ResponseHeader::new();
 
     let header_len = {
         header.clear();
@@ -216,8 +216,8 @@ impl <S> Connection<S> {
     /// If an error is returned, the connection should be torn down.
     fn buffer_connection_context(&mut self) -> Result<()> {
         trace!("{:?}: sending connection context to server", self);
-        let mut header = rpc_header::RequestHeader::new();
-        let mut message = rpc_header::ConnectionContextPB::new();
+        let mut header = rpc::RequestHeader::new();
+        let mut message = rpc::ConnectionContextPB::new();
         header.set_call_id(-3);
         message.mut_user_info().set_effective_user("user".to_string());
         message.mut_user_info().set_real_user("user".to_string());
@@ -307,7 +307,7 @@ impl <S> Sink for Connection<S> {
             self.fail_rpc(rpc, Error::TimedOut);
         } else {
             let call_id = self.next_call_id();
-            let mut header = rpc_header::RequestHeader::new();
+            let mut header = rpc::RequestHeader::new();
             header.set_call_id(call_id);
             header.mut_remote_method().mut_service_name().push_str(rpc.service());
             header.mut_remote_method().mut_method_name().push_str(rpc.method());
@@ -485,8 +485,8 @@ impl Negotiate {
     /// If an error is returned, the connection should be torn down.
     fn buffer_sasl_negotiate(&mut self) -> Result<()> {
         // Write the SASL negotiate message to the send buffer.
-        let mut header = rpc_header::RequestHeader::new();
-        let mut message = rpc_header::SaslMessagePB::new();
+        let mut header = rpc::RequestHeader::new();
+        let mut message = rpc::SaslMessagePB::new();
         header.set_call_id(-33);
         message.set_state(SaslState::NEGOTIATE);
         buffer_message(&header, &message, &mut self.buf)
@@ -499,12 +499,12 @@ impl Negotiate {
     /// If an error is returned, the connection should be torn down.
     fn buffer_sasl_initiate(&mut self) -> Result<()> {
         trace!("{:?}: sending SASL INITIATE request to server", self);
-        let mut header = rpc_header::RequestHeader::new();
-        let mut message = rpc_header::SaslMessagePB::new();
+        let mut header = rpc::RequestHeader::new();
+        let mut message = rpc::SaslMessagePB::new();
         header.set_call_id(-33);
         message.set_state(SaslState::INITIATE);
         message.mut_token().extend_from_slice(b"\0user\0");
-        let mut auth = rpc_header::SaslMessagePB_SaslAuth::new();
+        let mut auth = rpc::SaslMessagePB_SaslAuth::new();
         auth.mut_mechanism().push_str("PLAIN");
         message.mut_auths().push(auth);
         buffer_message(&header, &message, &mut self.buf)
@@ -513,7 +513,7 @@ impl Negotiate {
     /// Reads a negotiation message from the socket.
     ///
     /// If an error is returned, the connection should be torn down.
-    fn poll_recv(&mut self) -> Poll<rpc_header::SaslMessagePB, Error> {
+    fn poll_recv(&mut self) -> Poll<rpc::SaslMessagePB, Error> {
         let (header, body) = try_ready!(poll_read_message(&self.options,
                                                           self.stream.as_mut().unwrap(),
                                                           &mut self.buf));

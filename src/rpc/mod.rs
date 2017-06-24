@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt;
 use std::time::Instant;
 
-use protobuf::Message;
+use proto::Message;
 
 //pub use rpc::messenger::Messenger;
 pub use rpc::connection::ConnectionOptions;

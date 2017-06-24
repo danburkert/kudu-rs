@@ -3,7 +3,7 @@ use std::fmt;
 use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
-use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationType};
+use kudu_pb::row_operations_pb::{Type as OperationType};
 
 use bit_set::BitSet;
 use vec_map::VecMap;

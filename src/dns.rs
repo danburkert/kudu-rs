@@ -3,7 +3,7 @@ use std::vec;
 
 use futures::Future;
 use futures_cpupool::CpuPool;
-use kudu_pb::common::HostPortPB;
+use kudu_pb::HostPortPB;
 
 use HostPort;
 use Error;

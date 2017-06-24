@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use kudu_pb::common::{ColumnSchemaPB, SchemaPB};
+use kudu_pb::{ColumnSchemaPB, SchemaPB};
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
 use CompressionType;

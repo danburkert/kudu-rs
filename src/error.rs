@@ -6,23 +6,14 @@ use std::result;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
-use kudu_pb::master::{
-    MasterErrorPB,
-    MasterErrorPB_Code as MasterErrorCodePB,
-};
-use kudu_pb::rpc_header::{
-    ErrorStatusPB as RpcErrorPB,
-    ErrorStatusPB_RpcErrorCodePB as RpcErrorCodePB
-};
-use kudu_pb::tserver::{
-    TabletServerErrorPB,
-    TabletServerErrorPB_Code as TabletServerErrorCodePB,
-};
-use kudu_pb::wire_protocol::{
-    AppStatusPB as StatusPB,
-    AppStatusPB_ErrorCode as StatusCodePB,
-};
-use protobuf::ProtobufError;
+use kudu_pb::master::master_error_pb::{Code as MasterErrorCodePB};
+use kudu_pb::master::MasterErrorPB;
+use kudu_pb::rpc::error_status_pb::RpcErrorCodePB;
+use kudu_pb::rpc::{ErrorStatusPB as RpcErrorPB};
+use kudu_pb::tserver::tablet_server_error_pb::{Code as TabletServerErrorCodePB};
+use kudu_pb::tserver::TabletServerErrorPB;
+use kudu_pb::{AppStatusPB as StatusPB};
+use kudu_pb::app_status_pb::{ErrorCode as StatusCodePB};
 
 pub type Result<T> = result::Result<T, Error>;
 

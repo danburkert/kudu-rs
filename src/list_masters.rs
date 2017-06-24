@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use futures::future::join_all;
 use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
-use kudu_pb::consensus_metadata::{RaftPeerPB_Role as Role};
 use kudu_pb::master::{
     ListMastersResponsePB,
     ListMastersRequestPB,
@@ -21,6 +20,7 @@ use rpc::Connection;
 use rpc::ConnectionOptions;
 use rpc::master;
 use util;
+use Role;
 
 pub enum ListMastersResponse<S> where S: Send {
 

@@ -1,14 +1,37 @@
-extern crate protobuf;
+extern crate bytes;
+extern crate prost;
+#[macro_use] extern crate prost_derive;
 
-pub mod client;
-pub mod common;
-pub mod consensus_metadata;
-pub mod fs;
-pub mod master;
-pub mod opid;
-pub mod rpc_header;
-pub mod tablet;
-pub mod tablet_metadata;
-pub mod tserver;
-pub mod tserver_service;
-pub mod wire_protocol;
+mod kudu {
+    include!(concat!(env!("OUT_DIR"), "/kudu.rs"));
+
+    pub mod client {
+        include!(concat!(env!("OUT_DIR"), "/client.rs"));
+    }
+    pub mod consensus {
+        include!(concat!(env!("OUT_DIR"), "/consensus.rs"));
+    }
+    pub mod master {
+        include!(concat!(env!("OUT_DIR"), "/master.rs"));
+    }
+    pub mod rpc {
+        include!(concat!(env!("OUT_DIR"), "/rpc.rs"));
+    }
+    pub mod tablet {
+        include!(concat!(env!("OUT_DIR"), "/tablet.rs"));
+    }
+    pub mod security {
+        include!(concat!(env!("OUT_DIR"), "/security.rs"));
+    }
+    pub mod tserver {
+        include!(concat!(env!("OUT_DIR"), "/tserver.rs"));
+    }
+}
+
+pub mod google {
+    pub mod protobuf {
+        include!(concat!(env!("OUT_DIR"), "/protobuf.rs"));
+    }
+}
+
+pub use kudu::*;

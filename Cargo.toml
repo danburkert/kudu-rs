@@ -21,7 +21,7 @@ lazy_static = "0.2"
 log = "0.3"
 netbuf = "0.3"
 parking_lot = "0.3"
-protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
+prost = "0.1"
 quickcheck = { version = "0.3", optional = true }
 rand = "0.3.14"
 slab = "0.3"

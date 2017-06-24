@@ -1,7 +1,17 @@
 [package]
 name = "kudu-pb"
 version = "0.1.0"
-authors = ["Dan Burkert <dan@cloudera.com>"]
+authors = ["Dan Burkert <dan@danburkert.com>"]
 
 [dependencies]
-protobuf = { git = "https://github.com/danburkert/rust-protobuf" }
+bytes = "0.4"
+prost = "0.1"
+prost-derive = "0.1"
+
+[build-dependencies]
+prost-build = "0.1"
+curl = "0.4"
+env_logger = "0.4"
+flate2 = "0.2"
+num_cpus = "1"
+tar = "0.4"
