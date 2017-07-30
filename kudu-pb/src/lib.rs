@@ -5,6 +5,9 @@ extern crate prost;
 mod kudu {
     include!(concat!(env!("OUT_DIR"), "/kudu.rs"));
 
+    fn foo(foo: ReadMode) {
+    }
+
     pub mod client {
         include!(concat!(env!("OUT_DIR"), "/client.rs"));
     }
@@ -12,19 +15,19 @@ mod kudu {
         include!(concat!(env!("OUT_DIR"), "/consensus.rs"));
     }
     pub mod master {
-        include!(concat!(env!("OUT_DIR"), "/master.rs"));
+        //include!(concat!(env!("OUT_DIR"), "/master.rs"));
     }
     pub mod rpc {
-        include!(concat!(env!("OUT_DIR"), "/rpc.rs"));
+        //include!(concat!(env!("OUT_DIR"), "/rpc.rs"));
     }
     pub mod tablet {
-        include!(concat!(env!("OUT_DIR"), "/tablet.rs"));
+        //include!(concat!(env!("OUT_DIR"), "/tablet.rs"));
     }
     pub mod security {
-        include!(concat!(env!("OUT_DIR"), "/security.rs"));
+        //include!(concat!(env!("OUT_DIR"), "/security.rs"));
     }
     pub mod tserver {
-        include!(concat!(env!("OUT_DIR"), "/tserver.rs"));
+        //include!(concat!(env!("OUT_DIR"), "/tserver.rs"));
     }
 }
 

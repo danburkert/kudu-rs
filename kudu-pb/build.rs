@@ -48,6 +48,5 @@ fn main() {
                                   dir.join("src/kudu/master/master.proto"),
                                   dir.join("src/kudu/rpc/rpc_header.proto"),
                                   dir.join("src/kudu/tserver/tserver_service.proto")],
-                                &[dir.join("src")],
-                                None).unwrap();
+                                &[dir.join("src")]).unwrap();
 }

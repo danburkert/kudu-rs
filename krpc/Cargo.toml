@@ -1,17 +1,18 @@
 [package]
-name = "kudu-pb"
+name = "krpc"
 version = "0.1.0"
 authors = ["Dan Burkert <dan@danburkert.com>"]
 
 [dependencies]
 bytes = "0.4"
 prost = { git = "https://github.com/danburkert/prost" }
+prost-build = { git = "https://github.com/danburkert/prost" }
 prost-derive = { git = "https://github.com/danburkert/prost" }
+tokio-core = "0.1"
+tokio-io = "0.1"
+tokio-proto = "0.1"
 
 [build-dependencies]
 prost-build = { git = "https://github.com/danburkert/prost" }
 curl = "0.4"
-env_logger = "0.4"
-flate2 = "0.2"
-num_cpus = "1"
-tar = "0.4"
+tempdir = "0.3"
