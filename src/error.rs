@@ -284,7 +284,6 @@ impl From<RpcErrorPB> for RpcError {
     }
 }
 
-
 impl fmt::Display for RpcError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(self, f)

@@ -77,5 +77,4 @@ fn download_protos(target: &Path) {
     }
 
     fs::rename(&tempdir.into_path(), target).expect("unable to move temporary directory");
-
 }
