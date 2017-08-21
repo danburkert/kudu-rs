@@ -58,7 +58,7 @@ fn download_protos(target: &Path) {
         let mut handle = Easy::new();
 
         handle.url(&format!("{url_base}/{version}/src/kudu/{proto}",
-                            url_base = URL_BASE,
+                            url_base=URL_BASE,
                             version=VERSION,
                             proto=proto))
               .expect("failed to configure Kudu URL");

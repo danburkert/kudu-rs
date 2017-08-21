@@ -12,24 +12,34 @@ use std::process::{
 };
 
 #[must_use]
-struct CalculatorServer {
+pub struct CalculatorServer {
     process: Child,
+    addr: SocketAddr,
 }
 
 impl CalculatorServer {
-
-    fn start() -> CalculatorServer {
-        let bin = get_executable_path("calculator-server");
-
+    pub fn start() -> CalculatorServer {
         let mut command = Command::new(get_executable_path(&"calculator-server"));
-        command.arg("--addr").arg(&get_unbound_address().to_string());
+        let addr = get_unbound_address();
+        command.arg("--addr").arg(&addr.to_string());
 
         command.stderr(Stdio::piped());
-        let mut process = command.spawn().expect("spawn");
+        let process = command.spawn().expect("spawn");
 
         CalculatorServer {
-            process: process,
+            process,
+            addr,
         }
+    }
+
+    pub fn addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+}
+
+impl Drop for CalculatorServer {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
     }
 }
 

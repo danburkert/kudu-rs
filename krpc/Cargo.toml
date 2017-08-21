@@ -18,5 +18,5 @@ tokio-proto = "0.1"
 
 [build-dependencies]
 curl = "0.4"
-prost-build = { path = "/Users/dan/src/rust/prost/prost-build" }
+prost-build = { git = "https://github.com/danburkert/prost" }
 tempdir = "0.3"

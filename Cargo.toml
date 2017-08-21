@@ -8,8 +8,9 @@ keywords = ["kudu", "database"]
 
 [workspace]
 members = [
-  "kudu-pb",
   "krpc",
+  "krpc/tests",
+  "kudu-pb",
 ]
 
 [dependencies]

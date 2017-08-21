@@ -14,9 +14,6 @@ mod codec;
 mod error;
 pub mod pb; // TODO: make private
 
-#[cfg(test)]
-mod calculator_server;
-
 use std::fmt;
 use std::time::Instant;
 

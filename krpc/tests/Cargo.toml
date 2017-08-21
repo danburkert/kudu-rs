@@ -1,0 +1,26 @@
+[package]
+name = "krpc-tests"
+version = "0.0.0"
+authors = ["Dan Burkert <dan@danburkert.com>"]
+publish = false
+
+# Cargo treats the tests/ directory as an integration-tests folder[1], so to
+# avoid Cargo executing the build.rs as an integration test, move it into a
+# subdirectory.
+# [1]: http://doc.crates.io/manifest.html#integration-tests
+build = "src/build.rs"
+
+[lib]
+doctest = false
+
+[dependencies]
+bytes = "0.4"
+krpc = { path = ".." }
+prost = { git = "https://github.com/danburkert/prost" }
+prost-derive = { git = "https://github.com/danburkert/prost" }
+prost-types = { git = "https://github.com/danburkert/prost" }
+
+[build-dependencies]
+prost-build = { git = "https://github.com/danburkert/prost", branch = "substitutions" }
+env_logger = "0.4"
+
