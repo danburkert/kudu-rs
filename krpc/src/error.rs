@@ -151,7 +151,7 @@ impl error::Error for RpcError {
 
 impl From<ErrorStatusPb> for RpcError {
     fn from(error: ErrorStatusPb) -> RpcError {
-        let code = error.code().unwrap_or_default();
+        let code = error.code();
         let message = error.message;
         let unsupported_feature_flags = error.unsupported_feature_flags;
 

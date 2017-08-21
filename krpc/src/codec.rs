@@ -51,6 +51,7 @@ struct Codec {
 }
 
 impl Codec {
+
     fn new() -> Codec {
         Codec {
             max_message_length: 5 * 1024 * 1024,
@@ -64,8 +65,8 @@ impl Codec {
 
     /// Increments `next_call_id` and returns the current call ID.
     pub fn increment_call_id(&mut self) -> i32 {
-        // Wrap back to 0 on overflow. The server will probably complain about this, but there
-        // isn't much we can do other than shut down the connection anyway.
+        // Wrap back to 0 on overflow.
+        // TODO: check if the server allows this, otherwise torn down the connection on overflow.
         let call_id = self.next_call_id;
         self.next_call_id = call_id.checked_add(1).unwrap_or(0);
         call_id
@@ -110,7 +111,7 @@ impl Encoder for Codec {
                 response: Err(RpcError {
                     code: RpcErrorCode::ErrorInvalidRequest,
                     message: format!("RPC request is too long: length: {}, max length: {}",
-                                    len, self.max_message_length),
+                                     len, self.max_message_length),
                     unsupported_feature_flags: Vec::new(),
                 }.into()),
             });
@@ -152,7 +153,8 @@ impl Decoder for Codec {
 }
 
 fn duration_to_ms(duration: Duration) -> u32 {
-    let millis = duration.as_secs().saturating_mul(1000)
+    let millis = duration.as_secs()
+                         .saturating_mul(1000)
                          .saturating_add(duration.subsec_nanos() as u64 / 1000_000);
     if millis > u32::MAX as u64 {
         u32::MAX
