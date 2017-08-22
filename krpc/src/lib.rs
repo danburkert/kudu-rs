@@ -3,14 +3,13 @@ extern crate bytes;
 extern crate fnv;
 extern crate prost;
 extern crate prost_types;
-extern crate tokio_io;
 
 #[macro_use] extern crate futures;
 #[macro_use] extern crate log;
 #[macro_use] extern crate prost_derive;
 #[macro_use] extern crate tokio_core as tokio;
 
-mod codec;
+//mod codec;
 mod error;
 mod negotiation;
 mod transport;
@@ -101,6 +100,7 @@ pub struct Rpc {
     pub response: Result<Response, Error>,
 }
 
+/*
 /// An in-flight RPC.
 struct InFlightRpc {
     pub request: Request,
@@ -137,3 +137,4 @@ impl InFlightRpc {
         self.sender.poll_cancel().unwrap() == Async::Ready(())
     }
 }
+*/

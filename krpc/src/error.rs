@@ -18,8 +18,8 @@ pub enum Error {
     /// An I/O error.
     Io(io::Error),
 
-    /// An error occured decoding a response.
-    Decode(prost::DecodeError),
+    /// An error serializing, deserializing, encoding, or decoding data.
+    Serialization(String),
 
     /// The RPC timed out.
     TimedOut,
@@ -33,11 +33,13 @@ impl Clone for Error {
         match *self {
             Error::Rpc(ref error) => Error::Rpc(error.clone()),
             Error::Io(ref error) => {
-                // krpc (and its dependencies) never creates an IO error with a
-                // boxed error object, so this unwrap is ok.
-                Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
+                match error.raw_os_error() {
+                    Some(error) => Error::Io(io::Error::from_raw_os_error(error)),
+                    // TODO: this is not a full copy in all cases.
+                    None => Error::Io(io::Error::from(error.kind())),
+                }
             },
-            Error::Decode(ref error) => Error::Decode(error.clone()),
+            Error::Serialization(ref error) => Error::Serialization(error.clone()),
             Error::TimedOut => Error::TimedOut,
             Error::NegotiationError(error) => Error::NegotiationError(error),
         }
@@ -49,7 +51,7 @@ impl error::Error for Error {
         match *self {
             Error::Rpc(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
-            Error::Decode(ref error) => error.description(),
+            Error::Serialization(ref error) => error,
             Error::TimedOut => "RPC timed out",
             Error::NegotiationError(error) => error,
         }
@@ -77,7 +79,7 @@ impl From<io::Error> for Error {
 
 impl From<prost::DecodeError> for Error {
     fn from(error: prost::DecodeError) -> Error {
-        Error::Decode(error)
+        Error::Serialization(error.to_string())
     }
 }
 
