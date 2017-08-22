@@ -72,4 +72,3 @@ fn get_executable_path(executable: &str) -> PathBuf {
 fn get_unbound_address() -> SocketAddr {
     TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("local_addr")
 }
-

@@ -9,7 +9,8 @@ keywords = ["kudu", "database"]
 [workspace]
 members = [
   "krpc",
-  "krpc/tests",
+  "krpc-build",
+  "krpc-tests",
   "kudu-pb",
 ]
 

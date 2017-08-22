@@ -1,3 +1,4 @@
+extern crate krpc_build;
 extern crate prost_build;
 
 use std::env;
@@ -10,8 +11,7 @@ fn main() {
     let src = kudu_home.join("src");
 
     prost_build::Config::new()
-                        .type_substitutions(vec![(".kudu.rpc.UserInformationPB",
-                                                  "::krpc::pb::rpc::UserInformationPb")])
+                        .service_generator(Box::new(krpc_build::KrpcServiceGenerator))
                         .compile_protos(&[rtest], &[src])
                         .unwrap();
 }

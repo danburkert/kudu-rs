@@ -12,6 +12,8 @@ extern crate tokio_io;
 
 mod codec;
 mod error;
+mod negotiation;
+mod transport;
 pub mod pb; // TODO: make private
 
 use std::fmt;
