@@ -24,7 +24,6 @@ use transport::{
     Transport,
 };
 use Error;
-use RequestBody;
 
 const NEGOTIATION_CALL_ID: i32 = -33;
 const CONNECTION_CONTEXT_CALL_ID: i32 = -3;
@@ -33,8 +32,8 @@ const SASL: authentication_type_pb::Type = authentication_type_pb::Type::Sasl(au
 #[derive(Debug)]
 enum AuthenticationType {
     Sasl(SaslMechanism),
-    Token,
-    Certificate,
+    _Token,
+    _Certificate,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -190,22 +189,25 @@ impl Inner {
 
     fn send_connection_context(&mut self) -> Result<(), Error> {
         let context = ConnectionContextPb::default();
-        self.transport.send(CONNECTION_CONTEXT_CALL_ID, "", "", &[], &self.pb, self.deadline)
+        self.transport.send(CONNECTION_CONTEXT_CALL_ID, "", "", &[], &context, self.deadline)
     }
 }
 
-pub struct Negotiator {
+pub(crate) struct Negotiator {
     inner: Option<Inner>,
 }
 
 impl Negotiator {
-    fn new(transport: Transport, deadline: Instant) -> Inner {
-        Inner {
+    pub fn negotiate(transport: Transport, deadline: Instant) -> Negotiator {
+        let inner = Inner {
             pb: NegotiatePb::default(),
             transport,
             deadline,
             authentication: None,
             supported_features: Vec::new(),
+        };
+        Negotiator {
+            inner: Some(inner)
         }
     }
 }

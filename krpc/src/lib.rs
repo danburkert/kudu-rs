@@ -23,8 +23,6 @@ use bytes::{
     BytesMut,
 };
 use prost::Message;
-use futures::sync::oneshot::{Sender, Receiver};
-use futures::{Async, Sink};
 
 pub use connection::Connection;
 pub use error::{Error, RpcError, RpcErrorCode};
@@ -87,7 +85,7 @@ impl fmt::Debug for Request {
 
 /// The response to an RPC request.
 #[derive(Debug, Clone)]
-pub struct Response<S> {
+pub struct Response {
     /// The response body.
     pub body: Bytes,
     /// The response sidecars.
@@ -95,7 +93,7 @@ pub struct Response<S> {
 }
 
 /// A completed RPC.
-pub struct Rpc {
+pub struct Rpc<S> {
     /// The request.
     pub request: Request,
     /// The paired state.
@@ -105,7 +103,7 @@ pub struct Rpc {
 }
 
 /// An in-flight RPC.
-struct <S> InFlightRpc<S> {
+struct InFlightRpc<S> {
     /// The request.
     pub request: Request,
     /// The paired state.
@@ -114,31 +112,53 @@ struct <S> InFlightRpc<S> {
 
 impl <S> InFlightRpc<S> {
 
-    fn fail(self, error: Error) {
-        let rpc = Rpc {
+    pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) -> Rpc<S> {
+        Rpc {
             request: self.request,
-            response: Err(error),
-        };
-        let _ = self.sender.send(rpc);
+            state: self.state,
+            response: Ok(Response { body, sidecars }),
+        }
     }
 
-    fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
-        let rpc = Rpc {
+    pub fn fail(self, error: Error) -> Rpc<S> {
+        Rpc {
             request: self.request,
-            response: Ok(Response { body, sidecars }),
-        };
-        let _ = self.sender.send(rpc);
+            state: self.state,
+            response: Err(error),
+        }
     }
 
     /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
     pub fn timed_out(&self, now: Instant) -> bool {
         self.request.deadline <= now
     }
+}
 
-    /// Returns `true` if the RPC has been cancelled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionOptions {
+    /// Maximum number of outstandings RPCs to allow in the connection.
     ///
-    /// This method must be called in the context of a task (like `poll`).
-    pub fn cancelled(&mut self) -> bool {
-        self.sender.poll_cancel().unwrap() == Async::Ready(())
+    /// Defaults to 32.
+    pub max_rpcs_in_flight: u32,
+
+    /// Maximum allowable message length.
+    ///
+    /// Defaults to 5 MiB.
+    pub max_message_length: u32,
+
+    /// Whether to disable Nagle's algorithm.
+    ///
+    /// Defaults to true.
+    pub nodelay: bool,
+}
+
+impl Default for ConnectionOptions {
+    fn default() -> ConnectionOptions {
+        ConnectionOptions {
+            max_rpcs_in_flight: 32,
+            max_message_length: 5 * 1024 * 1024,
+            nodelay: true,
+        }
     }
 }
+

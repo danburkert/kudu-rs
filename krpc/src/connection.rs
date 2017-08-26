@@ -1,51 +1,27 @@
 use std::cmp;
 use std::fmt;
-use std::io::Write;
-use std::io;
-use std::mem;
-use std::net::{Shutdown, SocketAddr};
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use fnv::FnvHashMap;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::{
+    Async,
+    Future,
+    Poll,
+    Sink,
+    StartSend,
+    Stream,
+};
+use tokio::reactor::Handle;
 
 use Error;
-use error::RpcError;
 use Rpc;
 use transport::Transport;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectionOptions {
-    /// Maximum number of outstandings RPCs to allow in the connection.
-    ///
-    /// Defaults to 32.
-    pub max_rpcs_in_flight: u32,
-
-    /// Maximum allowable message length.
-    ///
-    /// Defaults to 5 MiB.
-    pub max_message_length: u32,
-
-    /// Whether to disable Nagle's algorithm.
-    ///
-    /// Defaults to true.
-    pub nodelay: bool,
-}
-
-impl Default for ConnectionOptions {
-    fn default() -> ConnectionOptions {
-        ConnectionOptions {
-            max_rpcs_in_flight: 32,
-            max_message_length: 5 * 1024 * 1024,
-            nodelay: true,
-        }
-    }
-}
+use InFlightRpc;
+use ConnectionOptions;
+use negotiator::Negotiator;
 
 pub struct Connection<S> {
-
-    /// The connection options.
-    options: ConnectionOptions,
 
     /// The transport wraps the underlying TCP stream.
     transport: Transport,
@@ -64,14 +40,34 @@ pub struct Connection<S> {
 
     /// The next call id.
     next_call_id: i32,
-
-    is_shutdown: bool,
 }
 
 impl <S> Connection <S> {
 
+    pub fn connect(addr: SocketAddr,
+                   options: ConnectionOptions,
+                   deadline: Instant,
+                   handle: &Handle) -> Box<Future<Item=Connection<S>, Error=Error>> {
+        Box::new(
+            Transport::connect(addr, options, handle)
+                .map_err(Into::into)
+                .and_then(move |transport| {
+                    Negotiator::negotiate(transport, deadline)
+                })
+                .map(|transport| {
+                    let throttle = transport.options().max_rpcs_in_flight;
+                    Connection {
+                        transport,
+                        in_flight_rpcs: FnvHashMap::default(),
+                        failed_rpcs: Vec::new(),
+                        throttle,
+                        next_call_id: 0,
+                    }
+                }))
+    }
+
     pub fn throttle(&mut self) {
-        self.throttle = cmp::min(self.throttle, self.options.max_rpcs_in_flight) / 2;
+        self.throttle = cmp::min(self.throttle, self.transport.options().max_rpcs_in_flight) / 2;
     }
 
     fn next_call_id(&mut self) -> i32 {
@@ -104,7 +100,7 @@ impl <S> Connection <S> {
 }
 
 impl <S> Sink for Connection<S> {
-    type SinkItem = Rpc;
+    type SinkItem = Rpc<S>;
     type SinkError = Error;
 
     /// Attempt to send an RPC to a remote server. The RPC may only be buffered by the connection;
@@ -119,7 +115,7 @@ impl <S> Sink for Connection<S> {
     ///     * `Err(..)`
     ///         The connection has been shutdown and no further RPCs may be sent. The RPC can be
     ///         retrieved via `poll`.
-    fn start_send(&mut self, rpc: Rpc) -> StartSend<Rpc, Error> {
+    fn start_send(&mut self, rpc: Rpc<S>) -> StartSend<Rpc<S>, Error> {
         trace!("{:?}: start_send", self);
         unimplemented!()
     }
@@ -131,7 +127,7 @@ impl <S> Sink for Connection<S> {
 }
 
 impl <S> Stream for Connection<S> {
-    type Item = Rpc;
+    type Item = Rpc<S>;
     type Error = Error;
 
     /// Reads an RPC messsage from the socket.
@@ -159,13 +155,15 @@ impl <S> Stream for Connection<S> {
 impl <S> fmt::Debug for Connection<S>  {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut debug = f.debug_struct("Connection");
+        debug.field("addr", &self.transport.addr());
+        debug.field("in-flight", &self.in_flight_rpcs.len());
 
-         .field("addr", 
-        match self.stream.peer_addr() {
-            Ok(addr) => write!(f, "Connection {{ addr: {}, in-flight: {}, buf (tx/rx): {}/{} }}",
-                               addr, self.recv_queue.len(), self.write_buf.len(), self.read_buf.len()),
-            Err(error) => write!(f, "Connection {{ addr: {}, in-flight: {}, buf (tx/rx): {}/{} }}",
-                                 error, self.recv_queue.len(), self.write_buf.len(), self.read_buf.len()),
+        let failed_rpcs = self.failed_rpcs.len();
+        if failed_rpcs > 0 {
+            debug.field("failed-rpcs", &failed_rpcs);
         }
+
+        debug.field("buf (tx/rx)", &format_args!("{}/{}", self.transport.send_buf_len(), self.transport.recv_buf_len()));
+        debug.finish()
     }
 }

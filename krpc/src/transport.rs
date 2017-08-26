@@ -20,6 +20,7 @@ use bytes::{
 use futures::{
     Async,
     Future,
+    Poll,
 };
 use prost::Message;
 use prost::encoding::encoded_len_varint;
@@ -29,11 +30,12 @@ use tokio::net::{
 };
 use tokio::reactor::Handle;
 
-use RpcError;
-use RpcErrorCode;
+use ConnectionOptions;
 use Error;
 use Request;
 use RequestBody;
+use RpcError;
+use RpcErrorCode;
 use pb::rpc::{
     ErrorStatusPb,
     RemoteMethodPb,
@@ -57,6 +59,7 @@ pub(crate) enum TransportResponse {
 }
 
 pub(crate) struct Transport {
+    addr: SocketAddr,
     options: ConnectionOptions,
     stream: TcpStream,
     send_buf: BytesMut,
@@ -67,12 +70,14 @@ pub(crate) struct Transport {
 
 impl Transport {
 
-    pub(crate) fn connect(options: ConnectionOptions,
-                          addr: &SocketAddr,
-                          handle: &Handle) -> TransportNew {
+    pub fn connect(addr: SocketAddr,
+                   options: ConnectionOptions,
+                   handle: &Handle) -> TransportNew {
+        let stream = TcpStream::connect(&addr, handle);
         TransportNew {
+            addr,
             options,
-            stream: TcpStream::connect(addr, handle),
+            stream,
         }
     }
 
@@ -80,7 +85,7 @@ impl Transport {
     ///
     /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
     /// is returned, the RPC should be failed.
-    pub(crate) fn start_send(&mut self, call_id: i32, request: &Request) -> Poll<(), Error> {
+    pub fn start_send(&mut self, call_id: i32, request: &Request) -> Poll<(), Error> {
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then apply backpressure (reject the send).
         if self.send_buf.len() >= BACKPRESSURE_BOUNDARY {
@@ -107,13 +112,13 @@ impl Transport {
     ///
     /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
     /// is returned, the RPC should be failed.
-    pub(crate) fn send(&mut self,
-                       call_id: i32,
-                       service: &str,
-                       method: &str,
-                       required_feature_flags: &[u32],
-                       body: &RequestBody,
-                       deadline: Instant) -> Result<(), Error> {
+    pub fn send(&mut self,
+                call_id: i32,
+                service: &str,
+                method: &str,
+                required_feature_flags: &[u32],
+                body: &RequestBody,
+                deadline: Instant) -> Result<(), Error> {
         let now = Instant::now();
         if deadline < now {
             return Err(Error::TimedOut);
@@ -155,7 +160,7 @@ impl Transport {
     }
 
     /// Attempts to receive a response from the peer.
-    pub(crate) fn poll(&mut self) -> Poll<TransportResponse, Error> {
+    pub fn poll(&mut self) -> Poll<TransportResponse, Error> {
         self.poll_flush()?;
         self.poll_recv()
     }
@@ -266,11 +271,28 @@ impl Transport {
 
         Ok(Async::Ready(()))
     }
+
+    pub fn addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+
+    pub fn options(&self) -> &ConnectionOptions {
+        &self.options
+    }
+
+    pub fn send_buf_len(&self) -> usize {
+        self.send_buf.len()
+    }
+
+    pub fn recv_buf_len(&self) -> usize {
+        self.recv_buf.len()
+    }
 }
 
 /// Future returned by `Transport::connect` which will resolve to a `Transport` when the TCP stream
 /// is connected.
 pub(crate) struct TransportNew {
+    addr: SocketAddr,
     options: ConnectionOptions,
     stream: TcpStreamNew,
 }
@@ -288,6 +310,7 @@ impl Future for TransportNew {
         send_buf.put_slice(b"hrpc\x09\0\0");
 
         Ok(Async::Ready(Transport {
+            addr: self.addr,
             options: self.options.clone(),
             stream,
             send_buf,
