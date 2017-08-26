@@ -25,7 +25,7 @@ pub enum Error {
     TimedOut,
 
     /// Negotiation with the remote server failed.
-    NegotiationError(&'static str),
+    Negotiation(String),
 }
 
 impl Clone for Error {
@@ -41,7 +41,7 @@ impl Clone for Error {
             },
             Error::Serialization(ref error) => Error::Serialization(error.clone()),
             Error::TimedOut => Error::TimedOut,
-            Error::NegotiationError(error) => Error::NegotiationError(error),
+            Error::Negotiation(ref error) => Error::Negotiation(error.clone()),
         }
     }
 }
@@ -53,7 +53,7 @@ impl error::Error for Error {
             Error::Io(ref error) => error.description(),
             Error::Serialization(ref error) => error,
             Error::TimedOut => "RPC timed out",
-            Error::NegotiationError(error) => error,
+            Error::Negotiation(ref error) => error,
         }
     }
 

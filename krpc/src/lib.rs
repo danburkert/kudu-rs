@@ -11,7 +11,7 @@ extern crate prost_types;
 
 //mod codec;
 mod error;
-mod negotiation;
+mod negotiator;
 mod transport;
 pub mod pb; // TODO: make private
 

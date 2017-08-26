@@ -33,6 +33,7 @@ use RpcError;
 use RpcErrorCode;
 use Error;
 use Request;
+use RequestBody;
 use pb::rpc::{
     ErrorStatusPb,
     RemoteMethodPb,
@@ -66,7 +67,7 @@ impl Default for TransportOptions {
     }
 }
 
-enum Response {
+pub enum Response {
     Ok {
         call_id: i32,
         body: Bytes,
@@ -111,25 +112,41 @@ impl Transport {
             }
         }
 
+        self.send(call_id,
+                  request.service,
+                  request.method,
+                  request.required_feature_flags,
+                  &*request.body,
+                  request.deadline)?;
+        Ok(Async::Ready(()))
+    }
+
+    pub(crate) fn send(&mut self,
+                       call_id: i32,
+                       service: &str,
+                       method: &str,
+                       required_feature_flags: &[u32],
+                       body: &RequestBody,
+                       deadline: Instant) -> Result<(), Error> {
         let now = Instant::now();
-        if request.deadline < now {
+        if deadline < now {
             return Err(Error::TimedOut);
         }
 
         // Set the header fields.
         self.request_header.call_id = call_id;
         {
-            let mut remote_method = self.request_header.remote_method.get_or_insert(RemoteMethodPb::default());
+            let remote_method = self.request_header.remote_method.get_or_insert(RemoteMethodPb::default());
             remote_method.clear();
-            remote_method.service_name.push_str(request.service);
-            remote_method.method_name.push_str(request.method);
+            remote_method.service_name.push_str(service);
+            remote_method.method_name.push_str(method);
         }
-        self.request_header.timeout_millis = Some(duration_to_ms(request.deadline - now));
+        self.request_header.timeout_millis = Some(duration_to_ms(deadline - now));
         self.request_header.required_feature_flags.clear();
-        self.request_header.required_feature_flags.extend_from_slice(request.required_feature_flags);
+        self.request_header.required_feature_flags.extend_from_slice(required_feature_flags);
 
-        let header_len = self.request_header.encoded_len();
-        let body_len = request.body.encoded_len();
+        let header_len = Message::encoded_len(&self.request_header);
+        let body_len = body.encoded_len();
         let len = encoded_len_varint(header_len as u64)
                 + encoded_len_varint(body_len as u64)
                 + header_len
@@ -145,10 +162,10 @@ impl Transport {
         }
 
         self.send_buf.put_u32::<BigEndian>(len as u32);
-        self.request_header.encode_length_delimited(&mut self.send_buf);
-        request.body.encode_length_delimited(&mut self.send_buf);
+        Message::encode_length_delimited(&self.request_header, &mut self.send_buf).unwrap();
+        body.encode_length_delimited(&mut self.send_buf);
 
-        Ok(Async::Ready(()))
+        Ok(())
     }
 
     pub fn poll(&mut self) -> Result<Async<Response>, Error> {
