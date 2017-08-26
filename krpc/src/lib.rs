@@ -9,7 +9,7 @@ extern crate prost_types;
 #[macro_use] extern crate prost_derive;
 #[macro_use] extern crate tokio_core as tokio;
 
-//mod codec;
+mod connection;
 mod error;
 mod negotiator;
 mod transport;
@@ -26,6 +26,7 @@ use prost::Message;
 use futures::sync::oneshot::{Sender, Receiver};
 use futures::{Async, Sink};
 
+pub use connection::Connection;
 pub use error::{Error, RpcError, RpcErrorCode};
 pub use pb::rpc::{RequestIdPb as RequestId};
 
@@ -86,28 +87,32 @@ impl fmt::Debug for Request {
 
 /// The response to an RPC request.
 #[derive(Debug, Clone)]
-pub struct Response {
+pub struct Response<S> {
     /// The response body.
     pub body: Bytes,
-
     /// The response sidecars.
     pub sidecars: Vec<Bytes>,
 }
 
 /// A completed RPC.
 pub struct Rpc {
+    /// The request.
     pub request: Request,
+    /// The paired state.
+    pub state: S,
+    /// The response.
     pub response: Result<Response, Error>,
 }
 
-/*
 /// An in-flight RPC.
-struct InFlightRpc {
+struct <S> InFlightRpc<S> {
+    /// The request.
     pub request: Request,
-    pub sender: Sender<Rpc>,
+    /// The paired state.
+    pub state: S,
 }
 
-impl InFlightRpc {
+impl <S> InFlightRpc<S> {
 
     fn fail(self, error: Error) {
         let rpc = Rpc {
@@ -137,4 +142,3 @@ impl InFlightRpc {
         self.sender.poll_cancel().unwrap() == Async::Ready(())
     }
 }
-*/

@@ -44,30 +44,7 @@ use pb::rpc::{
 const INITIAL_CAPACITY: usize = 8 * 1024;
 const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TransportOptions {
-
-    /// Maximum allowable message length.
-    ///
-    /// Defaults to 5 MiB.
-    pub max_message_length: u32,
-
-    /// Whether to disable Nagle's algorithm.
-    ///
-    /// Defaults to true.
-    pub nodelay: bool,
-}
-
-impl Default for TransportOptions {
-    fn default() -> TransportOptions {
-        TransportOptions {
-            max_message_length: 5 * 1024 * 1024,
-            nodelay: true,
-        }
-    }
-}
-
-pub enum Response {
+pub(crate) enum TransportResponse {
     Ok {
         call_id: i32,
         body: Bytes,
@@ -79,8 +56,8 @@ pub enum Response {
     },
 }
 
-pub struct Transport {
-    options: TransportOptions,
+pub(crate) struct Transport {
+    options: ConnectionOptions,
     stream: TcpStream,
     send_buf: BytesMut,
     recv_buf: BytesMut,
@@ -90,18 +67,20 @@ pub struct Transport {
 
 impl Transport {
 
-    pub fn connect(options: TransportOptions, addr: &SocketAddr, handle: &Handle) -> TransportNew {
+    pub(crate) fn connect(options: ConnectionOptions,
+                          addr: &SocketAddr,
+                          handle: &Handle) -> TransportNew {
         TransportNew {
             options,
             stream: TcpStream::connect(addr, handle),
         }
     }
 
-    /// Start sending an RPC on the transport.
+    /// Send an RPC to the peer.
     ///
     /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
     /// is returned, the RPC should be failed.
-    pub fn start_send(&mut self, call_id: i32, request: &Request) -> Result<Async<()>, Error> {
+    pub(crate) fn start_send(&mut self, call_id: i32, request: &Request) -> Poll<(), Error> {
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then apply backpressure (reject the send).
         if self.send_buf.len() >= BACKPRESSURE_BOUNDARY {
@@ -121,6 +100,13 @@ impl Transport {
         Ok(Async::Ready(()))
     }
 
+    /// Sends an RPC to the peer.
+    ///
+    /// Unlike `start_send`, this method does not provide backpressure. It should only be
+    /// used in situations where backpressure is not expected and can not be handled.
+    ///
+    /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
+    /// is returned, the RPC should be failed.
     pub(crate) fn send(&mut self,
                        call_id: i32,
                        service: &str,
@@ -168,12 +154,14 @@ impl Transport {
         Ok(())
     }
 
-    pub fn poll(&mut self) -> Result<Async<Response>, Error> {
+    /// Attempts to receive a response from the peer.
+    pub(crate) fn poll(&mut self) -> Poll<TransportResponse, Error> {
         self.poll_flush()?;
         self.poll_recv()
     }
 
-    fn poll_recv(&mut self) -> Result<Async<Response>, Error> {
+    /// Attempts to read a response from the TCP stream.
+    fn poll_recv(&mut self) -> Poll<TransportResponse, Error> {
         // Read, or continue reading, an RPC response message from the socket into the receive
         // buffer. Every RPC response is prefixed with a 4 bytes length header.
         if self.recv_buf.len() < 4 {
@@ -206,12 +194,12 @@ impl Transport {
         let call_id = self.response_header.call_id;
         if self.response_header.is_error() {
             let error = ErrorStatusPb::decode_length_delimited(buf)?.into();
-            Ok(Async::Ready(Response::Err {
+            Ok(Async::Ready(TransportResponse::Err {
                 call_id,
                 error,
             }))
         } else if self.response_header.sidecar_offsets.is_empty() {
-            Ok(Async::Ready(Response::Ok {
+            Ok(Async::Ready(TransportResponse::Ok {
                 call_id,
                 body: buf,
                 sidecars: Vec::new(),
@@ -228,7 +216,7 @@ impl Transport {
             }
             sidecars.push(buf);
 
-            Ok(Async::Ready(Response::Ok {
+            Ok(Async::Ready(TransportResponse::Ok {
                 call_id,
                 body,
                 sidecars,
@@ -282,8 +270,8 @@ impl Transport {
 
 /// Future returned by `Transport::connect` which will resolve to a `Transport` when the TCP stream
 /// is connected.
-pub struct TransportNew {
-    options: TransportOptions,
+pub(crate) struct TransportNew {
+    options: ConnectionOptions,
     stream: TcpStreamNew,
 }
 
@@ -310,6 +298,7 @@ impl Future for TransportNew {
     }
 }
 
+/// Converts a duration to milliseconds.
 fn duration_to_ms(duration: Duration) -> u32 {
     let millis = duration.as_secs()
                          .saturating_mul(1000)

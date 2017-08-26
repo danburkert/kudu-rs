@@ -20,7 +20,7 @@ use pb::rpc::negotiate_pb::{
     SaslMechanism as SaslMechanismPb,
 };
 use transport::{
-    Response,
+    TransportResponse,
     Transport,
 };
 use Error;
@@ -90,7 +90,7 @@ impl Inner {
 
     fn recv_negotiate_pb(&mut self) -> Result<Async<()>, Error> {
         match try_ready!(self.transport.poll()) {
-            Response::Ok { call_id, body, sidecars } => {
+            TransportResponse::Ok { call_id, body, sidecars } => {
                 if call_id != NEGOTIATION_CALL_ID {
                     return Err(Error::Negotiation(format!(
                                 "Received illegal call-id during negotiation: {}",
@@ -104,7 +104,7 @@ impl Inner {
                 self.pb.merge_length_delimited(body)?;
                 Ok(Async::Ready(()))
             },
-            Response::Err { call_id, error } => Err(error.into()),
+            TransportResponse::Err { call_id, error } => Err(error.into()),
         }
     }
 
