@@ -28,6 +28,18 @@ pub enum Error {
     Negotiation(String),
 }
 
+impl Error {
+    pub fn is_fatal(&self) -> bool {
+        match *self {
+            Error::Rpc(ref error) => error.is_fatal(),
+            Error::Io(_) => true,
+            Error::Serialization(_) => true,
+            Error::TimedOut => false,
+            Error::Negotiation(_) => true,
+        }
+    }
+}
+
 impl Clone for Error {
     fn clone(&self) -> Error {
         match *self {

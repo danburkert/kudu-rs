@@ -12,8 +12,8 @@ extern crate prost_types;
 mod connection;
 mod error;
 mod negotiator;
+mod pb;
 mod transport;
-pub mod pb; // TODO: make private
 
 use std::fmt;
 use std::time::Instant;
@@ -43,37 +43,54 @@ impl <M> RequestBody for M where M: Message {
 }
 
 /// An RPC request builder.
-pub struct Request {
+pub struct Request<S> {
     service: &'static str,
     method: &'static str,
     required_feature_flags: &'static [u32],
     body: Box<RequestBody>,
+    state: S,
     deadline: Instant,
 }
 
-impl Request {
+impl <S> Request<S> {
     /// Creates a new [Request].
     pub fn new(service: &'static str,
                method: &'static str,
                body: Box<RequestBody>,
-               deadline: Instant) -> Request {
+               state: S,
+               deadline: Instant) -> Request<S> {
         Request {
             service,
             method,
             required_feature_flags: &[],
             body,
+            state,
             deadline,
         }
     }
 
     /// Sets the required feature flags of the request.
-    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Request {
+    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Request<S> {
         self.required_feature_flags = required_feature_flags;
         self
     }
+
+    pub(crate) fn complete(self, response: Response) -> Rpc<S> {
+        Rpc {
+            request: self,
+            response: Ok(response),
+        }
+    }
+
+    pub(crate) fn fail(self, error: Error) -> Rpc<S> {
+        Rpc {
+            request: self,
+            response: Err(error),
+        }
+    }
 }
 
-impl fmt::Debug for Request {
+impl <S> fmt::Debug for Request<S>  {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Request")
          .field("service", &self.service)
@@ -95,43 +112,9 @@ pub struct Response {
 /// A completed RPC.
 pub struct Rpc<S> {
     /// The request.
-    pub request: Request,
-    /// The paired state.
-    pub state: S,
+    pub request: Request<S> ,
     /// The response.
     pub response: Result<Response, Error>,
-}
-
-/// An in-flight RPC.
-struct InFlightRpc<S> {
-    /// The request.
-    pub request: Request,
-    /// The paired state.
-    pub state: S,
-}
-
-impl <S> InFlightRpc<S> {
-
-    pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) -> Rpc<S> {
-        Rpc {
-            request: self.request,
-            state: self.state,
-            response: Ok(Response { body, sidecars }),
-        }
-    }
-
-    pub fn fail(self, error: Error) -> Rpc<S> {
-        Rpc {
-            request: self.request,
-            state: self.state,
-            response: Err(error),
-        }
-    }
-
-    /// Returns `true` if the provided instant is greater than or equal to this RPC's deadline.
-    pub fn timed_out(&self, now: Instant) -> bool {
-        self.request.deadline <= now
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

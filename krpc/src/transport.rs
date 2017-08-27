@@ -3,7 +3,10 @@ use std::io::{
     Read,
     Write,
 };
-use std::net::SocketAddr;
+use std::net::{
+    Shutdown,
+    SocketAddr,
+};
 use std::time::{
     Instant,
     Duration,
@@ -13,7 +16,6 @@ use std::u32;
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{
     BufMut,
-    Bytes,
     BytesMut,
     IntoBuf,
 };
@@ -32,8 +34,8 @@ use tokio::reactor::Handle;
 
 use ConnectionOptions;
 use Error;
-use Request;
 use RequestBody;
+use Response;
 use RpcError;
 use RpcErrorCode;
 use pb::rpc::{
@@ -45,18 +47,6 @@ use pb::rpc::{
 
 const INITIAL_CAPACITY: usize = 8 * 1024;
 const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
-
-pub(crate) enum TransportResponse {
-    Ok {
-        call_id: i32,
-        body: Bytes,
-        sidecars: Vec<Bytes>,
-    },
-    Err {
-        call_id: i32,
-        error: RpcError,
-    },
-}
 
 pub(crate) struct Transport {
     addr: SocketAddr,
@@ -81,37 +71,35 @@ impl Transport {
         }
     }
 
-    /// Send an RPC to the peer.
-    ///
-    /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
-    /// is returned, the RPC should be failed.
-    pub fn start_send(&mut self, call_id: i32, request: &Request) -> Poll<(), Error> {
-        // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
-        // *still* over 8KiB, then apply backpressure (reject the send).
-        if self.send_buf.len() >= BACKPRESSURE_BOUNDARY {
-            self.poll_flush()?;
-
+    /// Returns `true` if the transport is ready to send another RPC to the peer.
+    pub fn poll_ready(&mut self) -> Poll<(), Error> {
+        let result = || -> Poll<(), Error> {
+            // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
+            // *still* over 8KiB, then apply backpressure (reject the send).
             if self.send_buf.len() >= BACKPRESSURE_BOUNDARY {
-                return Ok(Async::NotReady);
+                self.poll_flush()?;
+
+                if self.send_buf.len() >= BACKPRESSURE_BOUNDARY {
+                    return Ok(Async::NotReady);
+                }
             }
+            Ok(Async::Ready(()))
+        }();
+
+        if result.is_err() {
+            let _ = self.stream.shutdown(Shutdown::Both);
         }
 
-        self.send(call_id,
-                  request.service,
-                  request.method,
-                  request.required_feature_flags,
-                  &*request.body,
-                  request.deadline)?;
-        Ok(Async::Ready(()))
+        result
     }
 
     /// Sends an RPC to the peer.
     ///
-    /// Unlike `start_send`, this method does not provide backpressure. It should only be
-    /// used in situations where backpressure is not expected and can not be handled.
+    /// This method does not provide backpressure, so callers should always check that `poll_ready`
+    /// indicates that there is send capacity available.
     ///
-    /// If a fatal error is returned, the transport must be torn down. If a non-fatal error
-    /// is returned, the RPC should be failed.
+    /// If a fatal error is returned the transport is shut down. If a non-fatal error is returned,
+    /// the RPC should be failed.
     pub fn send(&mut self,
                 call_id: i32,
                 service: &str,
@@ -119,114 +107,124 @@ impl Transport {
                 required_feature_flags: &[u32],
                 body: &RequestBody,
                 deadline: Instant) -> Result<(), Error> {
-        let now = Instant::now();
-        if deadline < now {
-            return Err(Error::TimedOut);
+        let result = || -> Result<(), Error> {
+            let now = Instant::now();
+            if deadline < now {
+                return Err(Error::TimedOut);
+            }
+
+            // Set the header fields.
+            self.request_header.call_id = call_id;
+            {
+                let remote_method = self.request_header.remote_method.get_or_insert(RemoteMethodPb::default());
+                remote_method.clear();
+                remote_method.service_name.push_str(service);
+                remote_method.method_name.push_str(method);
+            }
+            self.request_header.timeout_millis = Some(duration_to_ms(deadline - now));
+            self.request_header.required_feature_flags.clear();
+            self.request_header.required_feature_flags.extend_from_slice(required_feature_flags);
+
+            let header_len = Message::encoded_len(&self.request_header);
+            let body_len = body.encoded_len();
+            let len = encoded_len_varint(header_len as u64)
+                    + encoded_len_varint(body_len as u64)
+                    + header_len
+                    + body_len;
+
+            if len > self.options.max_message_length as usize {
+                return Err(RpcError {
+                    code: RpcErrorCode::ErrorInvalidRequest,
+                    message: format!("RPC request exceeds maximum length ({}/{})",
+                    len, self.options.max_message_length),
+                    unsupported_feature_flags: Vec::new(),
+                }.into());
+            }
+
+            self.send_buf.put_u32::<BigEndian>(len as u32);
+            Message::encode_length_delimited(&self.request_header, &mut self.send_buf).unwrap();
+            body.encode_length_delimited(&mut self.send_buf);
+            Ok(())
+        }();
+
+        if let Err(ref error) = result {
+            if error.is_fatal() {
+                let _ = self.stream.shutdown(Shutdown::Both);
+            }
         }
-
-        // Set the header fields.
-        self.request_header.call_id = call_id;
-        {
-            let remote_method = self.request_header.remote_method.get_or_insert(RemoteMethodPb::default());
-            remote_method.clear();
-            remote_method.service_name.push_str(service);
-            remote_method.method_name.push_str(method);
-        }
-        self.request_header.timeout_millis = Some(duration_to_ms(deadline - now));
-        self.request_header.required_feature_flags.clear();
-        self.request_header.required_feature_flags.extend_from_slice(required_feature_flags);
-
-        let header_len = Message::encoded_len(&self.request_header);
-        let body_len = body.encoded_len();
-        let len = encoded_len_varint(header_len as u64)
-                + encoded_len_varint(body_len as u64)
-                + header_len
-                + body_len;
-
-        if len > self.options.max_message_length as usize {
-            return Err(RpcError {
-                code: RpcErrorCode::ErrorInvalidRequest,
-                message: format!("RPC request exceeds maximum length ({}/{})",
-                len, self.options.max_message_length),
-                unsupported_feature_flags: Vec::new(),
-            }.into());
-        }
-
-        self.send_buf.put_u32::<BigEndian>(len as u32);
-        Message::encode_length_delimited(&self.request_header, &mut self.send_buf).unwrap();
-        body.encode_length_delimited(&mut self.send_buf);
-
-        Ok(())
+        result
     }
 
     /// Attempts to receive a response from the peer.
-    pub fn poll(&mut self) -> Poll<TransportResponse, Error> {
+    pub fn poll(&mut self) -> Poll<(i32, Result<Response, Error>), Error> {
         self.poll_flush()?;
         self.poll_recv()
     }
 
     /// Attempts to read a response from the TCP stream.
-    fn poll_recv(&mut self) -> Poll<TransportResponse, Error> {
-        // Read, or continue reading, an RPC response message from the socket into the receive
-        // buffer. Every RPC response is prefixed with a 4 bytes length header.
-        if self.recv_buf.len() < 4 {
-            let needed = 4 - self.recv_buf.len();
-            try_ready!(self.poll_fill(needed));
-        }
-
-        let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
-        if msg_len > self.options.max_message_length as usize {
-            return Err(Error::Serialization(format!(
-                       "RPC response exceeds maximum length ({}/{})",
-                       msg_len, self.options.max_message_length)));
-        }
-        if self.recv_buf.len() - 4 < msg_len {
-            let needed = msg_len + 4 - self.recv_buf.len();
-            try_ready!(self.poll_fill(needed));
-        }
-        let _ = self.recv_buf.split_to(4);
-        let buf = self.recv_buf.split_to(msg_len).freeze();
-
-        // Decode the header.
-        let header_len = {
-            let mut cursor = buf.clone().into_buf();
-            self.response_header.clear();
-            self.response_header.merge_length_delimited(&mut cursor)?;
-            cursor.position() as usize
-        };
-
-        let mut buf = buf.slice_from(header_len);
-        let call_id = self.response_header.call_id;
-        if self.response_header.is_error() {
-            let error = ErrorStatusPb::decode_length_delimited(buf)?.into();
-            Ok(Async::Ready(TransportResponse::Err {
-                call_id,
-                error,
-            }))
-        } else if self.response_header.sidecar_offsets.is_empty() {
-            Ok(Async::Ready(TransportResponse::Ok {
-                call_id,
-                body: buf,
-                sidecars: Vec::new(),
-            }))
-        } else {
-            let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
-            let body = buf.split_to(prev_offset);
-
-            let mut sidecars = Vec::new();
-            for &offset in &self.response_header.sidecar_offsets[1..] {
-                let offset = offset as usize;
-                sidecars.push(buf.split_to(offset - prev_offset));
-                prev_offset = offset;
+    fn poll_recv(&mut self) -> Poll<(i32, Result<Response, Error>), Error> {
+        let result = || -> Poll<(i32, Result<Response, Error>), Error> {
+            // Read, or continue reading, an RPC response message from the socket into the receive
+            // buffer. Every RPC response is prefixed with a 4 bytes length header.
+            if self.recv_buf.len() < 4 {
+                let needed = 4 - self.recv_buf.len();
+                try_ready!(self.poll_fill(needed));
             }
-            sidecars.push(buf);
 
-            Ok(Async::Ready(TransportResponse::Ok {
-                call_id,
-                body,
-                sidecars,
-            }))
+            let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
+            if msg_len > self.options.max_message_length as usize {
+                return Err(Error::Serialization(format!(
+                        "RPC response exceeds maximum length ({}/{})",
+                        msg_len, self.options.max_message_length)));
+            }
+            if self.recv_buf.len() - 4 < msg_len {
+                let needed = msg_len + 4 - self.recv_buf.len();
+                try_ready!(self.poll_fill(needed));
+            }
+            let _ = self.recv_buf.split_to(4);
+            let buf = self.recv_buf.split_to(msg_len).freeze();
+
+            // Decode the header.
+            let header_len = {
+                let mut cursor = buf.clone().into_buf();
+                self.response_header.clear();
+                self.response_header.merge_length_delimited(&mut cursor)?;
+                cursor.position() as usize
+            };
+
+            let mut buf = buf.slice_from(header_len);
+            let call_id = self.response_header.call_id;
+            if self.response_header.is_error() {
+                let error = Error::Rpc(ErrorStatusPb::decode_length_delimited(buf)?.into());
+                Ok(Async::Ready((call_id, Err(error))))
+            } else if self.response_header.sidecar_offsets.is_empty() {
+                Ok(Async::Ready((call_id, Ok(Response { body: buf, sidecars: Vec::new() }))))
+            } else {
+                let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
+                let body = buf.split_to(prev_offset);
+
+                let mut sidecars = Vec::new();
+                for &offset in &self.response_header.sidecar_offsets[1..] {
+                    let offset = offset as usize;
+                    sidecars.push(buf.split_to(offset - prev_offset));
+                    prev_offset = offset;
+                }
+                sidecars.push(buf);
+
+                Ok(Async::Ready((call_id, Ok(Response { body, sidecars }))))
+            }
+        }();
+
+        let is_fatal = match result {
+            Ok(Async::Ready((_, Err(ref error)))) => error.is_fatal(),
+            Err(_) => true,
+            _ => false,
+        };
+        if is_fatal {
+            let _ = self.stream.shutdown(Shutdown::Both);
         }
+
+        result
     }
 
     /// Reads at least `at_least` bytes into the receive buffer.

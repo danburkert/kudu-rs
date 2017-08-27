@@ -19,11 +19,9 @@ use pb::rpc::negotiate_pb::{
     NegotiateStep,
     SaslMechanism as SaslMechanismPb,
 };
-use transport::{
-    TransportResponse,
-    Transport,
-};
+use transport::Transport;
 use Error;
+use Response;
 
 const NEGOTIATION_CALL_ID: i32 = -33;
 const CONNECTION_CONTEXT_CALL_ID: i32 = -3;
@@ -88,13 +86,14 @@ impl Inner {
     }
 
     fn recv_negotiate_pb(&mut self) -> Result<Async<()>, Error> {
-        match try_ready!(self.transport.poll()) {
-            TransportResponse::Ok { call_id, body, sidecars } => {
-                if call_id != NEGOTIATION_CALL_ID {
-                    return Err(Error::Negotiation(format!(
-                                "Received illegal call-id during negotiation: {}",
-                                call_id)));
-                }
+        let (call_id, response) = try_ready!(self.transport.poll());
+        if call_id != NEGOTIATION_CALL_ID {
+            return Err(Error::Negotiation(format!("Received illegal call-id during negotiation: {}",
+                                                  call_id)));
+        }
+
+        match response {
+            Ok(Response { body, sidecars }) => {
                 if !sidecars.is_empty() {
                     return Err(Error::Negotiation(
                             "Received illegal RPC sidecars during negotiation".to_string()));
@@ -103,7 +102,7 @@ impl Inner {
                 self.pb.merge_length_delimited(body)?;
                 Ok(Async::Ready(()))
             },
-            TransportResponse::Err { call_id, error } => Err(error.into()),
+            Err(error) => Err(error),
         }
     }
 
