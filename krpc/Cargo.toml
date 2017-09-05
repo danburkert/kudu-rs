@@ -15,6 +15,7 @@ prost-types = { git = "https://github.com/danburkert/prost" }
 tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-proto = "0.1"
+either = "1.0"
 
 [build-dependencies]
 curl = "0.4"

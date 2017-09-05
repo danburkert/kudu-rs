@@ -1,5 +1,6 @@
 extern crate byteorder;
 extern crate bytes;
+extern crate either;
 extern crate fnv;
 extern crate prost;
 extern crate prost_types;
@@ -13,6 +14,7 @@ mod connection;
 mod error;
 mod negotiator;
 mod pb;
+mod proxy;
 mod transport;
 
 use std::fmt;
@@ -22,13 +24,14 @@ use bytes::{
     Bytes,
     BytesMut,
 };
+use futures::sync::oneshot;
 use prost::Message;
 
-pub use connection::Connection;
 pub use error::{Error, RpcError, RpcErrorCode};
 pub use pb::rpc::{RequestIdPb as RequestId};
+pub use proxy::{Proxy, AsyncSend};
 
-pub trait RequestBody {
+pub trait RequestBody: Send {
     fn encoded_len(&self) -> usize;
     fn encode_length_delimited(&self, dst: &mut BytesMut);
 }
@@ -43,54 +46,37 @@ impl <M> RequestBody for M where M: Message {
 }
 
 /// An RPC request builder.
-pub struct Request<S> {
-    service: &'static str,
-    method: &'static str,
-    required_feature_flags: &'static [u32],
-    body: Box<RequestBody>,
-    state: S,
-    deadline: Instant,
+pub struct Request {
+    pub service: &'static str,
+    pub method: &'static str,
+    pub required_feature_flags: &'static [u32],
+    pub body: Box<RequestBody>,
+    pub deadline: Instant,
 }
 
-impl <S> Request<S> {
+impl Request {
     /// Creates a new [Request].
     pub fn new(service: &'static str,
                method: &'static str,
                body: Box<RequestBody>,
-               state: S,
-               deadline: Instant) -> Request<S> {
+               deadline: Instant) -> Request {
         Request {
             service,
             method,
             required_feature_flags: &[],
             body,
-            state,
             deadline,
         }
     }
 
     /// Sets the required feature flags of the request.
-    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Request<S> {
+    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Request {
         self.required_feature_flags = required_feature_flags;
         self
     }
-
-    pub(crate) fn complete(self, response: Response) -> Rpc<S> {
-        Rpc {
-            request: self,
-            response: Ok(response),
-        }
-    }
-
-    pub(crate) fn fail(self, error: Error) -> Rpc<S> {
-        Rpc {
-            request: self,
-            response: Err(error),
-        }
-    }
 }
 
-impl <S> fmt::Debug for Request<S>  {
+impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Request")
          .field("service", &self.service)
@@ -101,25 +87,61 @@ impl <S> fmt::Debug for Request<S>  {
 }
 
 /// The response to an RPC request.
-#[derive(Debug, Clone)]
-pub struct Response {
-    /// The response body.
-    pub body: Bytes,
-    /// The response sidecars.
-    pub sidecars: Vec<Bytes>,
+#[derive(Debug)]
+pub enum Response {
+    /// A successful RPC response.
+    Ok {
+        /// The response body.
+        body: Bytes,
+        /// The response sidecars.
+        sidecars: Vec<Bytes>,
+    },
+    /// A failed RPC response.
+    Err {
+        request: Request,
+        error: Error,
+    },
 }
 
-/// A completed RPC.
-pub struct Rpc<S> {
+/// An in-flight RPC.
+#[derive(Debug)]
+struct Rpc {
     /// The request.
-    pub request: Request<S> ,
-    /// The response.
-    pub response: Result<Response, Error>,
+    request: Request,
+
+    /// The completer.
+    completer: oneshot::Sender<Response>,
+}
+
+impl Rpc {
+
+    /// Returns `true` if the RPC has been cancelled by the caller.
+    pub fn is_canceled(&self) -> bool {
+        self.completer.is_canceled()
+    }
+
+    /// Returns `true` if the RPC is timed out.
+    pub fn is_timed_out(&self, now: Instant) -> bool {
+        self.request.deadline <= now
+    }
+
+    /// Completes the RPC.
+    pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
+        let _ = self.completer.send(Response::Ok { body, sidecars });
+    }
+
+    /// Fails the RPC.
+    fn fail(self, error: Error) {
+        let _ = self.completer.send(Response::Err {
+            request: self.request,
+            error,
+        });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectionOptions {
-    /// Maximum number of outstandings RPCs to allow in the connection.
+pub struct Options {
+    /// Maximum number of outstandings RPCs to allow per connection.
     ///
     /// Defaults to 32.
     pub max_rpcs_in_flight: u32,
@@ -135,13 +157,12 @@ pub struct ConnectionOptions {
     pub nodelay: bool,
 }
 
-impl Default for ConnectionOptions {
-    fn default() -> ConnectionOptions {
-        ConnectionOptions {
+impl Default for Options {
+    fn default() -> Options {
+        Options {
             max_rpcs_in_flight: 32,
             max_message_length: 5 * 1024 * 1024,
             nodelay: true,
         }
     }
 }
-

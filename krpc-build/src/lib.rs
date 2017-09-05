@@ -7,7 +7,7 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
     fn generate(&self, service: prost_build::Service, buf: &mut String) {
             // Generate a trait for the service.
             service.comments.append_with_indent(0, buf);
-            buf.push_str(&format!("trait {} {{\n", &service.name));
+            buf.push_str(&format!("pub trait {} {{\n", &service.name));
 
             // Generate the service methods.
             for method in service.methods {

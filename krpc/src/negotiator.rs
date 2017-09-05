@@ -1,6 +1,6 @@
 use std::ascii::AsciiExt;
 use std::collections::HashSet;
-use std::time::Instant;
+use std::fmt;
 
 use futures::{
     Async,
@@ -63,7 +63,6 @@ impl SaslMechanism {
 pub struct Inner {
     pb: NegotiatePb,
     transport: Transport,
-    deadline: Instant,
     /// The authentication type used by the connection. Filled in during negotiation.
     authentication: Option<AuthenticationType>,
     /// The features supported by the server. Filled in during negotiation.
@@ -82,7 +81,7 @@ impl Inner {
     }
 
     fn send_negotiate_pb(&mut self) -> Result<(), Error> {
-        self.transport.send(NEGOTIATION_CALL_ID, "", "", &[], &self.pb, self.deadline)
+        self.transport.send(NEGOTIATION_CALL_ID, "", "", &[], &self.pb, None)
     }
 
     fn recv_negotiate_pb(&mut self) -> Result<Async<()>, Error> {
@@ -93,7 +92,7 @@ impl Inner {
         }
 
         match response {
-            Ok(Response { body, sidecars }) => {
+            Ok((body, sidecars)) => {
                 if !sidecars.is_empty() {
                     return Err(Error::Negotiation(
                             "Received illegal RPC sidecars during negotiation".to_string()));
@@ -188,7 +187,7 @@ impl Inner {
 
     fn send_connection_context(&mut self) -> Result<(), Error> {
         let context = ConnectionContextPb::default();
-        self.transport.send(CONNECTION_CONTEXT_CALL_ID, "", "", &[], &context, self.deadline)
+        self.transport.send(CONNECTION_CONTEXT_CALL_ID, "", "", &[], &context, None)
     }
 }
 
@@ -197,11 +196,10 @@ pub(crate) struct Negotiator {
 }
 
 impl Negotiator {
-    pub fn negotiate(transport: Transport, deadline: Instant) -> Negotiator {
+    pub fn negotiate(transport: Transport) -> Negotiator {
         let inner = Inner {
             pb: NegotiatePb::default(),
             transport,
-            deadline,
             authentication: None,
             supported_features: Vec::new(),
         };
@@ -223,5 +221,26 @@ impl Future for Negotiator {
 
         let Inner { transport, ..  } = self.inner.take().unwrap();
         Ok(Async::Ready(transport))
+    }
+}
+
+impl fmt::Debug for Negotiator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+
+        match self.inner {
+            Some(ref inner) => {
+                let mut debug = f.debug_struct("Negotiator");
+                debug.field("addr", &inner.transport.addr());
+                debug.field("step", &inner.pb.step());
+                if let Some(ref authentication) = inner.authentication {
+                    debug.field("authentication", authentication);
+                }
+                if !inner.supported_features.is_empty() {
+                    debug.field("supported-features", &inner.supported_features);
+                }
+                debug.finish()
+            },
+            None => write!(f, "FinishedNegotiator"),
+        }
     }
 }

@@ -16,6 +16,7 @@ use std::u32;
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{
     BufMut,
+    Bytes,
     BytesMut,
     IntoBuf,
 };
@@ -32,7 +33,7 @@ use tokio::net::{
 };
 use tokio::reactor::Handle;
 
-use ConnectionOptions;
+use Options;
 use Error;
 use RequestBody;
 use Response;
@@ -48,9 +49,11 @@ use pb::rpc::{
 const INITIAL_CAPACITY: usize = 8 * 1024;
 const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
 
+pub type TransportResponse = (Bytes, Vec<Bytes>);
+
 pub(crate) struct Transport {
     addr: SocketAddr,
-    options: ConnectionOptions,
+    options: Options,
     stream: TcpStream,
     send_buf: BytesMut,
     recv_buf: BytesMut,
@@ -61,7 +64,7 @@ pub(crate) struct Transport {
 impl Transport {
 
     pub fn connect(addr: SocketAddr,
-                   options: ConnectionOptions,
+                   options: Options,
                    handle: &Handle) -> TransportNew {
         let stream = TcpStream::connect(&addr, handle);
         TransportNew {
@@ -106,12 +109,15 @@ impl Transport {
                 method: &str,
                 required_feature_flags: &[u32],
                 body: &RequestBody,
-                deadline: Instant) -> Result<(), Error> {
+                timeout: Option<Duration>) -> Result<(), Error> {
         let result = || -> Result<(), Error> {
+            // TODO: timeouts.
+            /*
             let now = Instant::now();
             if deadline < now {
                 return Err(Error::TimedOut);
             }
+            */
 
             // Set the header fields.
             self.request_header.call_id = call_id;
@@ -121,7 +127,9 @@ impl Transport {
                 remote_method.service_name.push_str(service);
                 remote_method.method_name.push_str(method);
             }
-            self.request_header.timeout_millis = Some(duration_to_ms(deadline - now));
+            if let Some(timeout) = timeout {
+                self.request_header.timeout_millis = Some(duration_to_ms(timeout));
+            }
             self.request_header.required_feature_flags.clear();
             self.request_header.required_feature_flags.extend_from_slice(required_feature_flags);
 
@@ -156,14 +164,14 @@ impl Transport {
     }
 
     /// Attempts to receive a response from the peer.
-    pub fn poll(&mut self) -> Poll<(i32, Result<Response, Error>), Error> {
+    pub fn poll(&mut self) -> Poll<(i32, Result<TransportResponse, Error>), Error> {
         self.poll_flush()?;
         self.poll_recv()
     }
 
     /// Attempts to read a response from the TCP stream.
-    fn poll_recv(&mut self) -> Poll<(i32, Result<Response, Error>), Error> {
-        let result = || -> Poll<(i32, Result<Response, Error>), Error> {
+    fn poll_recv(&mut self) -> Poll<(i32, Result<TransportResponse, Error>), Error> {
+        let result = || -> Poll<(i32, Result<TransportResponse, Error>), Error> {
             // Read, or continue reading, an RPC response message from the socket into the receive
             // buffer. Every RPC response is prefixed with a 4 bytes length header.
             if self.recv_buf.len() < 4 {
@@ -198,7 +206,7 @@ impl Transport {
                 let error = Error::Rpc(ErrorStatusPb::decode_length_delimited(buf)?.into());
                 Ok(Async::Ready((call_id, Err(error))))
             } else if self.response_header.sidecar_offsets.is_empty() {
-                Ok(Async::Ready((call_id, Ok(Response { body: buf, sidecars: Vec::new() }))))
+                Ok(Async::Ready((call_id, Ok((buf, Vec::new())))))
             } else {
                 let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
                 let body = buf.split_to(prev_offset);
@@ -211,7 +219,7 @@ impl Transport {
                 }
                 sidecars.push(buf);
 
-                Ok(Async::Ready((call_id, Ok(Response { body, sidecars }))))
+                Ok(Async::Ready((call_id, Ok((body, sidecars)))))
             }
         }();
 
@@ -274,7 +282,7 @@ impl Transport {
         &self.addr
     }
 
-    pub fn options(&self) -> &ConnectionOptions {
+    pub fn options(&self) -> &Options {
         &self.options
     }
 
@@ -291,7 +299,7 @@ impl Transport {
 /// is connected.
 pub(crate) struct TransportNew {
     addr: SocketAddr,
-    options: ConnectionOptions,
+    options: Options,
     stream: TcpStreamNew,
 }
 

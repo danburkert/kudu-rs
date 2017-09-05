@@ -4,5 +4,4 @@ version = "0.1.0"
 authors = ["Dan Burkert <dan@danburkert.com>"]
 
 [dependencies]
-#prost-build = { git = "https://github.com/danburkert/prost" }
-prost-build = { path = "../../prost/prost-build" }
+prost-build = { git = "https://github.com/danburkert/prost" }
