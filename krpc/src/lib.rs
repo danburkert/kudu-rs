@@ -87,19 +87,43 @@ impl fmt::Debug for Request {
 
 /// The response to an RPC request.
 #[derive(Debug)]
-pub enum Response {
+pub enum Response<Body> {
     /// A successful RPC response.
     Ok {
         /// The response body.
-        body: Bytes,
+        body: Body,
         /// The response sidecars.
         sidecars: Vec<Bytes>,
+        /// The request.
+        request: Request,
     },
+
     /// A failed RPC response.
     Err {
-        request: Request,
+        /// The error.
         error: Error,
+        /// The request.
+        request: Request,
     },
+}
+
+/// An undecoded response.
+pub type RawResponse = Response<Bytes>;
+/// A future which resolves to an undecoded response.
+pub type RawResponseFuture = oneshot::Receiver<RawResponse>;
+/// A future which resolves to a response.
+pub type ResponseFuture<T> = futures::Map<RawResponseFuture, fn (RawResponse) -> Response<T>>;
+
+impl RawResponse {
+    pub fn decode<T>(self) -> Response<T> where T: Message + Default {
+        match self {
+            Response::Ok { body, sidecars, request } => match T::decode_length_delimited(&body) {
+                Ok(body) => Response::Ok { body, sidecars, request },
+                Err(error) => Response::Err { error: error.into(), request },
+            },
+            Response::Err { error, request} => Response::Err { error, request },
+        }
+    }
 }
 
 /// An in-flight RPC.
@@ -109,7 +133,7 @@ struct Rpc {
     request: Request,
 
     /// The completer.
-    completer: oneshot::Sender<Response>,
+    completer: oneshot::Sender<RawResponse>,
 }
 
 impl Rpc {
@@ -126,7 +150,7 @@ impl Rpc {
 
     /// Completes the RPC.
     pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
-        let _ = self.completer.send(Response::Ok { body, sidecars });
+        let _ = self.completer.send(Response::Ok { body, sidecars, request: self.request });
     }
 
     /// Fails the RPC.

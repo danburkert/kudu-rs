@@ -10,15 +10,45 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
             buf.push_str(&format!("pub trait {} {{\n", &service.name));
 
             // Generate the service methods.
-            for method in service.methods {
+            for method in &service.methods {
                 method.comments.append_with_indent(1, buf);
-                buf.push_str(&format!("    fn {}({}) -> {};\n",
-                                      method.name,
-                                      method.input_type,
-                                      method.output_type));
+                buf.push_str(&format!("    fn {}(\n", method.name));
+                buf.push_str("        &mut self,\n");
+                buf.push_str(&format!("        request: {},\n", method.input_type));
+                buf.push_str("        deadline: ::std::time::Instant,\n");
+                buf.push_str("        required_feature_flags: &'static [u32],\n");
+                buf.push_str(&format!("    ) -> ::krpc::ResponseFuture<{}>;\n", method.output_type));
             }
 
             // Close out the trait.
+            buf.push_str("}\n");
+
+            // Impl the trait for Proxy.
+            buf.push_str(&format!("impl {} for ::krpc::Proxy {{\n", &service.name));
+
+            // Generate the method implementations.
+            for method in &service.methods {
+                method.comments.append_with_indent(1, buf);
+                buf.push_str(&format!("    fn {}(\n", method.name));
+                buf.push_str("        &mut self,\n");
+                buf.push_str(&format!("        request: {},\n", method.input_type));
+                buf.push_str("        deadline: ::std::time::Instant,\n");
+                buf.push_str("        required_feature_flags: &'static [u32],\n");
+                buf.push_str(&format!("    ) -> ::krpc::ResponseFuture<{}> {{\n", method.output_type));
+
+                buf.push_str("        use ::futures::future::Future;\n");
+                buf.push_str("        let request = ::krpc::Request {\n");
+                buf.push_str(&format!("            service: \"{}.{}\",\n", service.package, service.proto_name));
+                buf.push_str(&format!("            method: \"{}\",\n", method.proto_name));
+                buf.push_str("            required_feature_flags,\n");
+                buf.push_str("            body: ::std::boxed::Box::new(request),\n");
+                buf.push_str("            deadline,\n");
+                buf.push_str("        };\n");
+                buf.push_str(&format!("        self.send(request).map(::krpc::Response::decode::<{}>)\n", method.output_type));
+                buf.push_str("    }\n");
+            }
+
+            // Close out the impl block.
             buf.push_str("}\n");
     }
 }

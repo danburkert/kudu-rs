@@ -16,11 +16,11 @@ use tokio::reactor::{
 };
 
 use Options;
+use RawResponse;
+use RawResponseFuture;
 use Request;
-use Response;
 use Rpc;
 use connection::{Connection, ConnectionNew};
-use negotiator::Negotiator;
 
 #[derive(Clone, Debug)]
 pub struct Proxy {
@@ -32,25 +32,12 @@ pub struct Proxy {
 #[derive(Debug)]
 pub enum AsyncSend {
     /// The RPC was sent. The response will be returned through the included future.
-    Ready(oneshot::Receiver<Response>),
+    Ready(oneshot::Receiver<RawResponse>),
     /// The connection is not ready.
     ///
     /// The current task will be scheduled to receive a notification when the `Proxy` is ready to
     /// send.
     NotReady(Request),
-}
-
-pub struct Send<'a> {
-    sender: &'a mut mpsc::Sender<Rpc>,
-    request: Option<Request>,
-}
-
-impl <'a> Future for Send<'a> {
-    type Item = ();
-    type Error = ();
-    fn poll(&mut self) -> Result<Async<()>, ()> {
-        Ok(Async::NotReady)
-    }
 }
 
 impl Proxy {
@@ -86,7 +73,7 @@ impl Proxy {
     ///
     /// Typically users will not call this directly, but rather through a generated service trait
     /// implemented by `Proxy`.
-    pub fn send(&mut self, request: Request) -> oneshot::Receiver<Response> {
+    pub fn send(&mut self, request: Request) -> RawResponseFuture {
         let (completer, receiver) = oneshot::channel();
         let rpc = Rpc {
             request,
@@ -94,7 +81,7 @@ impl Proxy {
         };
 
         match self.sender.start_send(rpc) {
-            Ok(_) => (),
+            Ok(AsyncSink::Ready) => (),
             Ok(AsyncSink::NotReady(_)) => panic!("Proxy not ready"),
             Err(..) => unreachable!(),
         }

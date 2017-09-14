@@ -1,6 +1,5 @@
 #![feature(proc_macro, conservative_impl_trait, generators)]
 
-extern crate bytes;
 extern crate futures_await as futures;
 extern crate krpc;
 extern crate tokio_core as tokio;
@@ -10,19 +9,13 @@ extern crate env_logger;
 
 mod calculator_server;
 
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::prelude::*;
-use futures::future;
 use tokio::reactor::Core;
 
 use krpc::{
     Options,
     Proxy,
-    Request,
     Response,
 };
 
@@ -42,23 +35,22 @@ pub mod security {
 }
 
 #[test]
-fn ping() {
+fn add() {
+    use rpc_tests::CalculatorService;
     let _ = env_logger::init();
     let server = CalculatorServer::start();
-    thread::sleep(::std::time::Duration::from_secs(2));
 
     let mut reactor = Core::new().unwrap();
     let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
 
-    let request = Request {
-        service: "FooService",
-        method: "foo",
-        required_feature_flags: &[],
-        body: Box::new(rpc_tests::AddRequestPb::default()),
-        deadline: Instant::now() + Duration::from_secs(10),
+    let request = rpc_tests::AddRequestPb { x: 42, y: 18 };
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    let (response, sidecars) = match reactor.run(proxy.add(request, deadline, &[])).unwrap() {
+        Response::Ok { body, sidecars, .. } => (body, sidecars),
+        Response::Err { error, .. } => panic!("add request failed: {}", error),
     };
 
-    let response = reactor.run(proxy.send(request)).unwrap();
-
-    panic!()
+    assert_eq!(0, sidecars.len());
+    assert_eq!(60, response.result);
 }

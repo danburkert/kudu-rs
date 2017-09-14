@@ -47,3 +47,7 @@ quickcheck = "0.3"
 
 [replace]
 "futures:0.1.15" = { git = "https://github.com/alexcrichton/futures-rs" }
+"prost-build:0.2.0" = { git = "https://github.com/danburkert/prost", branch = "service-package" }
+"prost-derive:0.2.0" = { git = "https://github.com/danburkert/prost", branch = "service-package" }
+"prost-types:0.2.0" = { git = "https://github.com/danburkert/prost", branch = "service-package" }
+"prost:0.2.0" = { git = "https://github.com/danburkert/prost", branch = "service-package" }

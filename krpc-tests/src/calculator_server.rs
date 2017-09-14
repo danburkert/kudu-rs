@@ -4,7 +4,6 @@ use std::net::{
     Ipv4Addr,
     SocketAddr,
     SocketAddrV4,
-    TcpListener,
 };
 use std::io::{
     BufReader,
@@ -34,7 +33,7 @@ impl CalculatorServer {
 
         let stdout = process.stdout.take().unwrap();
         let mut port = String::new();
-        BufReader::new(stdout).read_line(&mut port);
+        BufReader::new(stdout).read_line(&mut port).unwrap();
         let port: u16 = port.trim().parse().unwrap();
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
 
@@ -78,9 +77,4 @@ fn get_executable_path(executable: &str) -> PathBuf {
     PathBuf::from(path.lines().next().expect(
             &format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
                      executable)))
-}
-
-/// Attempts to get local unbound socket address for testing.
-fn get_unbound_address() -> SocketAddr {
-    TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("local_addr")
 }
