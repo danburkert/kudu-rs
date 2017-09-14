@@ -1,8 +1,14 @@
 use std::env;
 use std::ffi::CString;
 use std::net::{
+    Ipv4Addr,
     SocketAddr,
+    SocketAddrV4,
     TcpListener,
+};
+use std::io::{
+    BufReader,
+    BufRead,
 };
 use std::path::PathBuf;
 use std::process::{
@@ -20,11 +26,17 @@ pub struct CalculatorServer {
 impl CalculatorServer {
     pub fn start() -> CalculatorServer {
         let mut command = Command::new(get_executable_path(&"calculator-server"));
-        let addr = get_unbound_address();
-        command.arg("--addr").arg(&addr.to_string());
+        command.arg("--rpc-trace-negotiation").arg("true");
 
-        command.stderr(Stdio::piped());
-        let process = command.spawn().expect("spawn");
+        command.stdout(Stdio::piped());
+
+        let mut process = command.spawn().expect("spawn");
+
+        let stdout = process.stdout.take().unwrap();
+        let mut port = String::new();
+        BufReader::new(stdout).read_line(&mut port);
+        let port: u16 = port.trim().parse().unwrap();
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
 
         CalculatorServer {
             process,
@@ -32,8 +44,8 @@ impl CalculatorServer {
         }
     }
 
-    pub fn addr(&self) -> &SocketAddr {
-        &self.addr
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
     }
 }
 

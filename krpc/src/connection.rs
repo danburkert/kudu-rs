@@ -1,7 +1,6 @@
 use std::cmp;
 use std::convert::Into;
 use std::fmt;
-use std::io;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -10,17 +9,20 @@ use futures::{
     Async,
     Future,
     Poll,
-    self,
 };
 use tokio::reactor::Handle;
 
 use Options;
 use Error;
-use Request;
 use Rpc;
 use negotiator::Negotiator;
-use transport::{Transport, TransportNew};
+use transport::Transport;
 
+/// `Connection` manages in-flight RPCs and throttling on a single KRPC connection.
+///
+/// The connection wraps a transport. When the transport is shutdown, the connection should no
+/// longer be used. Connection shutdown is indicated by a fatal error being returned from
+/// `poll_ready()`, `send()`, or `poll()`.
 pub(crate) struct Connection {
 
     /// The transport wraps the underlying TCP stream.
@@ -43,6 +45,7 @@ pub(crate) type ConnectionNew = Box<Future<Item=Connection, Error=Error>>;
 
 impl Connection {
 
+    /// Returns a future which will yield a new transport.
     pub fn connect(addr: SocketAddr,
                    options: Options,
                    handle: &Handle) -> ConnectionNew {
@@ -82,6 +85,7 @@ impl Connection {
     }
 
     pub fn poll_ready(&mut self) -> Poll<(), Error> {
+        trace!("{:?}: poll_ready", self);
         // Make sure the transport is ready.
         try_ready!(self.transport.poll_ready().map_err(|error| self.shutdown(error)));
 
@@ -89,11 +93,18 @@ impl Connection {
         if self.in_flight_rpcs.len() < self.throttle as usize {
             Ok(Async::Ready(()))
         } else {
-            Ok(Async::NotReady)
+            // Try to clear the in-flight RPCs.
+            self.poll()?;
+            if self.in_flight_rpcs.len() < self.throttle as usize {
+                Ok(Async::Ready(()))
+            } else {
+                Ok(Async::NotReady)
+            }
         }
     }
 
     pub fn send(&mut self, rpc: Rpc) -> Result<(), Error> {
+        trace!("{:?}: send: {:?}", self, rpc);
         let now = Instant::now();
         if rpc.request.deadline < now {
             rpc.fail(Error::TimedOut);
@@ -116,22 +127,28 @@ impl Connection {
         Ok(())
     }
 
-    pub fn poll(&mut self) {
-        match self.transport.poll() {
-            Ok(Async::Ready((call_id, Ok((body, sidecars))))) => {
-                if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
-                    rpc.complete(body, sidecars);
-                }
-            },
-            Ok(Async::Ready((call_id, Err(error)))) => {
-                if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
-                    rpc.fail(error);
-                }
-            },
-            Ok(Async::NotReady) => (),
-            Err(error) => {
-                self.shutdown(error);
-            },
+    pub fn poll(&mut self) -> Result<(), Error> {
+        trace!("{:?}: poll", self);
+        loop {
+            match self.transport.poll() {
+                Ok(Async::Ready((call_id, Ok((body, sidecars))))) => {
+                    // TODO: unthrottle?
+                    if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
+                        rpc.complete(body, sidecars);
+                    }
+                },
+                Ok(Async::Ready((call_id, Err(error)))) => {
+                    // TODO: throttle.
+                    if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
+                        rpc.fail(error);
+                    }
+                },
+                Ok(Async::NotReady) => return Ok(()),
+                Err(error) => {
+                    self.shutdown(error.clone());
+                    return Err(error);
+                },
+            }
         }
     }
 }

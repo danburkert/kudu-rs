@@ -1,7 +1,10 @@
+#![feature(proc_macro, conservative_impl_trait, generators)]
+
 extern crate bytes;
+extern crate futures_await as futures;
 extern crate krpc;
-extern crate prost;
 extern crate tokio_core as tokio;
+extern crate env_logger;
 
 #[macro_use] extern crate prost_derive;
 
@@ -9,14 +12,18 @@ mod calculator_server;
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::thread;
 use std::time::{Duration, Instant};
 
+use futures::prelude::*;
+use futures::future;
 use tokio::reactor::Core;
 
 use krpc::{
     Options,
     Proxy,
     Request,
+    Response,
 };
 
 use calculator_server::CalculatorServer;
@@ -36,13 +43,12 @@ pub mod security {
 
 #[test]
 fn ping() {
-    //let _server = CalculatorServer::start();
+    let _ = env_logger::init();
+    let server = CalculatorServer::start();
+    thread::sleep(::std::time::Duration::from_secs(2));
 
-    let reactor = Core::new().unwrap();
-
-    let mut proxy = Proxy::spawn(SocketAddr::from_str("127.0.0.1:12345").unwrap(),
-                                 Options::default(),
-                                 &reactor.remote());
+    let mut reactor = Core::new().unwrap();
+    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
 
     let request = Request {
         service: "FooService",
@@ -52,5 +58,7 @@ fn ping() {
         deadline: Instant::now() + Duration::from_secs(10),
     };
 
-    proxy.send(request);
+    let response = reactor.run(proxy.send(request)).unwrap();
+
+    panic!()
 }

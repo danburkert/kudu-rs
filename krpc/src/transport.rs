@@ -8,7 +8,6 @@ use std::net::{
     SocketAddr,
 };
 use std::time::{
-    Instant,
     Duration,
 };
 use std::u32;
@@ -36,7 +35,6 @@ use tokio::reactor::Handle;
 use Options;
 use Error;
 use RequestBody;
-use Response;
 use RpcError;
 use RpcErrorCode;
 use pb::rpc::{
@@ -51,6 +49,14 @@ const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
 
 pub type TransportResponse = (Bytes, Vec<Bytes>);
 
+/// `Transport` handles sending and receiving raw KRPC messages to a TCP stream.
+///
+/// The transport manages send and receive buffers, encoding and decoding of messages, message
+/// framing, headers, and RPC errors.
+///
+/// The transport wraps a single TCP connection. When the TCP connection is shutdown or fails, the
+/// transport should no longer be used. TCP connection shutdown is indicated by a fatal error being
+/// returned from `poll_ready()`, `send()`, or `poll()`.
 pub(crate) struct Transport {
     addr: SocketAddr,
     options: Options,
@@ -63,6 +69,7 @@ pub(crate) struct Transport {
 
 impl Transport {
 
+    /// Returns a future which will yield a new transport.
     pub fn connect(addr: SocketAddr,
                    options: Options,
                    handle: &Handle) -> TransportNew {
@@ -74,7 +81,9 @@ impl Transport {
         }
     }
 
-    /// Returns `true` if the transport is ready to send another RPC to the peer.
+    /// Returns `true` if the transport is ready to send an RPC to the peer.
+    ///
+    /// An error return indicates a fatal error.
     pub fn poll_ready(&mut self) -> Poll<(), Error> {
         let result = || -> Poll<(), Error> {
             // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
@@ -264,6 +273,8 @@ impl Transport {
     ///
     /// Based on tokio-io's [`FramedWrite`][1].
     /// [1]: https://github.com/tokio-rs/tokio-io/blob/0.1.3/src/framed_write.rs#L202-L225
+    ///
+    /// An error return indicates a fatal error.
     fn poll_flush(&mut self) -> Result<Async<()>, io::Error> {
         while !self.send_buf.is_empty() {
             let n = try_nb!(self.stream.write(&self.send_buf));

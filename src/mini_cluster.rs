@@ -56,7 +56,6 @@ impl Node {
             for line in stderr.lines() {
                 debug!("({}): {}", name, line.unwrap());
             }
-
         });
         self.process = Some(process);
     }

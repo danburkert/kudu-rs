@@ -1,6 +1,5 @@
 extern crate byteorder;
 extern crate bytes;
-extern crate either;
 extern crate fnv;
 extern crate prost;
 extern crate prost_types;

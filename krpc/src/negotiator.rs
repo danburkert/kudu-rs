@@ -21,7 +21,6 @@ use pb::rpc::negotiate_pb::{
 };
 use transport::Transport;
 use Error;
-use Response;
 
 const NEGOTIATION_CALL_ID: i32 = -33;
 const CONNECTION_CONTEXT_CALL_ID: i32 = -3;
@@ -81,12 +80,15 @@ impl Inner {
     }
 
     fn send_negotiate_pb(&mut self) -> Result<(), Error> {
+        trace!("{:?}: send_negotiate_pb", self);
         self.transport.send(NEGOTIATION_CALL_ID, "", "", &[], &self.pb, None)
     }
 
     fn recv_negotiate_pb(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: recv_negotiate_pb", self);
         let (call_id, response) = try_ready!(self.transport.poll());
         if call_id != NEGOTIATION_CALL_ID {
+            error!("{:?}: received illegal call-id during negotiation: {}", self, call_id);
             return Err(Error::Negotiation(format!("Received illegal call-id during negotiation: {}",
                                                   call_id)));
         }
@@ -94,18 +96,24 @@ impl Inner {
         match response {
             Ok((body, sidecars)) => {
                 if !sidecars.is_empty() {
+                    error!("{:?}: received illegal RPC sidecars during negotiation", self);
                     return Err(Error::Negotiation(
                             "Received illegal RPC sidecars during negotiation".to_string()));
                 }
                 self.pb.clear();
                 self.pb.merge_length_delimited(body)?;
+                info!("{:?}: received negotiation message: {:?}", self, self.pb);
                 Ok(Async::Ready(()))
             },
-            Err(error) => Err(error),
+            Err(error) => {
+                error!("{:?}: received error negotiation: {:?}", self, error);
+                Err(error)
+            }
         }
     }
 
     fn do_initial_step(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: do_initial_step", self);
         self.pb.clear();
         self.pb.supported_features.push(RpcFeatureFlag::ApplicationFeatureFlags as i32);
         self.pb.step = NegotiateStep::Negotiate as i32;
@@ -119,6 +127,7 @@ impl Inner {
     }
 
     fn do_negotiate_step(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: do_negotiate_step", self);
         try_ready!(self.recv_negotiate_pb());
 
         if self.pb.step() != NegotiateStep::Negotiate {
@@ -148,6 +157,7 @@ impl Inner {
     }
 
     fn do_sasl_initiate(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: do_sasl_initiate", self);
         // Determine which mechanism to use.
         let server_mechs = self.pb
                                .sasl_mechanisms
@@ -166,6 +176,7 @@ impl Inner {
     }
 
     fn do_sasl_plain_initiate(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: do_sasl_plain_initiate", self);
         self.pb.step = NegotiateStep::SaslInitiate as i32;
         self.pb.token = Some(b"\0kudu-rs-user\0".to_vec());
         self.pb.sasl_mechanisms = vec![SaslMechanism::Plain.to_pb()];
@@ -174,6 +185,7 @@ impl Inner {
     }
 
     fn do_sasl_plain_step(&mut self) -> Result<Async<()>, Error> {
+        trace!("{:?}: do_sasl_plain_step", self);
         try_ready!(self.recv_negotiate_pb());
 
         if self.pb.step() != NegotiateStep::SaslSuccess {
@@ -186,8 +198,24 @@ impl Inner {
     }
 
     fn send_connection_context(&mut self) -> Result<(), Error> {
+        trace!("{:?}: send_connection_context", self);
         let context = ConnectionContextPb::default();
         self.transport.send(CONNECTION_CONTEXT_CALL_ID, "", "", &[], &context, None)
+    }
+}
+
+impl fmt::Debug for Inner {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut debug = f.debug_struct("Negotiator");
+        debug.field("addr", &format_args!("{}", &self.transport.addr()));
+        debug.field("step", &self.pb.step());
+        if let Some(ref authentication) = self.authentication {
+            debug.field("authentication", authentication);
+        }
+        if !self.supported_features.is_empty() {
+            debug.field("supported-features", &self.supported_features);
+        }
+        debug.finish()
     }
 }
 
@@ -214,6 +242,7 @@ impl Future for Negotiator {
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Transport>, Error> {
+        debug!("{:?}: poll", self);
         match self.inner {
             Some(ref mut inner) => try_ready!(inner.poll()),
             None => return Ok(Async::NotReady),
@@ -226,20 +255,8 @@ impl Future for Negotiator {
 
 impl fmt::Debug for Negotiator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-
         match self.inner {
-            Some(ref inner) => {
-                let mut debug = f.debug_struct("Negotiator");
-                debug.field("addr", &inner.transport.addr());
-                debug.field("step", &inner.pb.step());
-                if let Some(ref authentication) = inner.authentication {
-                    debug.field("authentication", authentication);
-                }
-                if !inner.supported_features.is_empty() {
-                    debug.field("supported-features", &inner.supported_features);
-                }
-                debug.finish()
-            },
+            Some(ref inner) => inner.fmt(f),
             None => write!(f, "FinishedNegotiator"),
         }
     }

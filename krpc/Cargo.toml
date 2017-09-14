@@ -9,15 +9,14 @@ bytes = "0.4"
 fnv = "1"
 futures = "0.1"
 log = "0.3"
-prost = { git = "https://github.com/danburkert/prost" }
-prost-derive = { git = "https://github.com/danburkert/prost" }
-prost-types = { git = "https://github.com/danburkert/prost" }
+prost = "0.2"
+prost-derive = "0.2"
+prost-types = "0.2"
 tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-proto = "0.1"
-either = "1.0"
 
 [build-dependencies]
 curl = "0.4"
-prost-build = { git = "https://github.com/danburkert/prost" }
+prost-build = "0.2"
 tempdir = "0.3"

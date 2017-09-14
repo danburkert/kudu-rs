@@ -5,11 +5,11 @@ authors = ["Dan Burkert <dan@danburkert.com>"]
 
 [dependencies]
 bytes = "0.4"
-prost = { git = "https://github.com/danburkert/prost" }
-prost-derive = { git = "https://github.com/danburkert/prost" }
+prost = "0.2"
+prost-derive = "0.2"
 
 [build-dependencies]
-prost-build = { git = "https://github.com/danburkert/prost" }
+prost-build = "0.2"
 curl = "0.4"
 env_logger = "0.4"
 flate2 = "0.2"
