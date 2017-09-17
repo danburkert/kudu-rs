@@ -1,7 +1,6 @@
 extern crate curl;
 extern crate env_logger;
 extern crate flate2;
-extern crate num_cpus;
 extern crate prost_build;
 extern crate tar;
 

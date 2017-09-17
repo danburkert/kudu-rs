@@ -14,7 +14,7 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
                 method.comments.append_with_indent(1, buf);
                 buf.push_str(&format!("    fn {}(\n", method.name));
                 buf.push_str("        &mut self,\n");
-                buf.push_str(&format!("        request: {},\n", method.input_type));
+                buf.push_str(&format!("        request: ::std::boxed::Box<{}>,\n", method.input_type));
                 buf.push_str("        deadline: ::std::time::Instant,\n");
                 buf.push_str("        required_feature_flags: &'static [u32],\n");
                 buf.push_str(&format!("    ) -> ::krpc::ResponseFuture<{}>;\n", method.output_type));
@@ -31,7 +31,7 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
                 method.comments.append_with_indent(1, buf);
                 buf.push_str(&format!("    fn {}(\n", method.name));
                 buf.push_str("        &mut self,\n");
-                buf.push_str(&format!("        request: {},\n", method.input_type));
+                buf.push_str(&format!("        request: ::std::boxed::Box<{}>,\n", method.input_type));
                 buf.push_str("        deadline: ::std::time::Instant,\n");
                 buf.push_str("        required_feature_flags: &'static [u32],\n");
                 buf.push_str(&format!("    ) -> ::krpc::ResponseFuture<{}> {{\n", method.output_type));
@@ -41,7 +41,7 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
                 buf.push_str(&format!("            service: \"{}.{}\",\n", service.package, service.proto_name));
                 buf.push_str(&format!("            method: \"{}\",\n", method.proto_name));
                 buf.push_str("            required_feature_flags,\n");
-                buf.push_str("            body: ::std::boxed::Box::new(request),\n");
+                buf.push_str("            body: request,\n");
                 buf.push_str("            deadline,\n");
                 buf.push_str("        };\n");
                 buf.push_str(&format!("        self.send(request).map(::krpc::Response::decode::<{}>)\n", method.output_type));

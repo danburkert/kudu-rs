@@ -9,9 +9,8 @@ prost = "0.2"
 prost-derive = "0.2"
 
 [build-dependencies]
-prost-build = "0.2"
 curl = "0.4"
 env_logger = "0.4"
 flate2 = "0.2"
-num_cpus = "1"
+prost-build = "0.2"
 tar = "0.4"
