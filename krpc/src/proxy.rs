@@ -10,6 +10,7 @@ use futures::{
     Stream,
 };
 use futures::sync::{mpsc, oneshot};
+use tacho;
 use tokio::reactor::{
     Handle,
     Remote,
@@ -21,6 +22,8 @@ use RawResponseFuture;
 use Request;
 use Rpc;
 use connection::{Connection, ConnectionNew};
+use transport::{Transport, TransportNew};
+use negotiator::Negotiator;
 
 #[derive(Clone, Debug)]
 pub struct Proxy {
@@ -45,12 +48,14 @@ impl Proxy {
     pub fn spawn(addr: SocketAddr, options: Options, remote: &Remote) -> Proxy {
         trace!("spawn!");
         let (sender, receiver) = mpsc::channel(options.max_rpcs_in_flight as usize);
+        let metrics = options.scope.as_ref().map(|scope| Metrics::new(&addr, scope.clone()));
         remote.spawn(move |handle| ProxyTask {
-            addr: addr.clone(),
-            options: options.clone(),
+            addr: addr,
+            options: options,
             handle: handle.clone(),
             receiver,
             connection_state: ConnectionState::Quiesced,
+            metrics,
         });
         Proxy { sender }
     }
@@ -94,8 +99,9 @@ enum ConnectionState {
     Quiesced,
     // TODO:
     // Resolving,
-    Connecting(ConnectionNew),
-    Active(Connection),
+    Connecting(TransportNew),
+    Negotiating(Negotiator),
+    Connected(Connection),
 }
 
 impl fmt::Debug for ConnectionState {
@@ -103,7 +109,8 @@ impl fmt::Debug for ConnectionState {
         match *self {
             ConnectionState::Quiesced => write!(f, "Quiesced"),
             ConnectionState::Connecting(_) => write!(f, "Connecting"),
-            ConnectionState::Active(ref connection) => connection.fmt(f),
+            ConnectionState::Negotiating(_) => write!(f, "Negotiating"),
+            ConnectionState::Connected(ref connection) => connection.fmt(f),
         }
     }
 }
@@ -114,6 +121,7 @@ struct ProxyTask {
     handle: Handle,
     receiver: mpsc::Receiver<Rpc>,
     connection_state: ConnectionState,
+    metrics: Option<Metrics>,
 }
 
 impl Future for ProxyTask {
@@ -122,29 +130,54 @@ impl Future for ProxyTask {
 
     fn poll(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll", self);
-        let ProxyTask { addr, ref options, ref handle, ref mut receiver, ref mut connection_state } = *self;
+        let ProxyTask { addr,
+                        ref options,
+                        ref handle,
+                        ref mut receiver,
+                        ref mut connection_state,
+                        ref mut metrics } = *self;
         use self::ConnectionState::*;
         // NLL hack.
         loop {
             let state = match *connection_state {
                 Quiesced => {
                     // Assume wakeup due to an RPC being ready to send.
-                    Connecting(Connection::connect(addr, options.clone(), handle))
+                    Connecting(Transport::connect(addr, options.clone(), handle))
                 },
                 Connecting(ref mut new) => {
                     match new.poll() {
-                        Ok(Async::Ready(conn)) => {
-                            Active(conn)
+                        Ok(Async::Ready(transport)) => {
+                            Negotiating(Negotiator::negotiate(transport))
                         },
                         Ok(Async::NotReady) => return Ok(Async::NotReady),
                         Err(error) => {
                             error!("connect error: {}", error);
+                            if let Some(ref mut metrics) = *metrics {
+                                metrics.connecting_errors.incr(1);
+                            }
                             // TODO: log and reconnect
                             unimplemented!()
                         }
                     }
                 },
-                Active(ref mut conn) => {
+                Negotiating(ref mut negotiator) => {
+                    match negotiator.poll() {
+                        Ok(Async::Ready(transport)) => {
+                            Connected(Connection::new(transport))
+                        },
+                        Ok(Async::NotReady) => return Ok(Async::NotReady),
+                        Err(error) => {
+                            error!("negotiation error: {}", error);
+                            if let Some(ref mut metrics) = *metrics {
+                                metrics.connecting_errors.incr(1);
+                            }
+                            // TODO: log and reconnect
+                            unimplemented!()
+
+                        },
+                    }
+                },
+                Connected(ref mut conn) => {
                     // Send all queued messages.
                     loop {
                         match conn.poll_ready() {
@@ -189,8 +222,36 @@ impl fmt::Debug for ProxyTask {
         match self.connection_state {
             ConnectionState::Quiesced => debug.field("state", &self.connection_state),
             ConnectionState::Connecting(_) => debug.field("state", &self.connection_state),
-            ConnectionState::Active(ref connection) => debug.field("connection", connection),
+            ConnectionState::Negotiating(_) => debug.field("state", &self.connection_state),
+            ConnectionState::Connected(ref connection) => debug.field("connection", connection),
         };
         debug.finish()
+    }
+}
+
+struct Metrics {
+    /// Number of failures while attempting to connect.
+    connecting_errors: tacho::Counter,
+
+    /// Number of failures while negotiating.
+    negotiating_errors: tacho::Counter,
+
+    /// Number of failures while connected.
+    connected_errors: tacho::Counter,
+}
+
+impl Metrics {
+    fn new(addr: &SocketAddr, scope: tacho::Scope) -> Metrics {
+        let errors = scope.prefixed("krpc")
+                          .labeled("addr", addr);
+
+        let connecting_errors = errors.clone().labeled("state", "connecting").counter("proxy_errors");
+        let negotiating_errors = errors.clone().labeled("state", "negotiating").counter("proxy_errors");
+        let connected_errors = errors.labeled("state", "connected").counter("proxy_errors");
+        Metrics {
+            connecting_errors,
+            negotiating_errors,
+            connected_errors,
+        }
     }
 }

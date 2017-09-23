@@ -45,6 +45,18 @@ pub(crate) type ConnectionNew = Box<Future<Item=Connection, Error=Error>>;
 
 impl Connection {
 
+    /// Creates a new connection from the provided transport. Negotiation must already be
+    /// complete.
+    pub fn new(transport: Transport) -> Connection {
+        let throttle = transport.options().max_rpcs_in_flight;
+        Connection {
+            transport,
+            in_flight_rpcs: FnvHashMap::default(),
+            throttle,
+            next_call_id: 0,
+        }
+    }
+
     /// Returns a future which will yield a new transport.
     pub fn connect(addr: SocketAddr,
                    options: Options,

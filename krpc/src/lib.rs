@@ -3,6 +3,7 @@ extern crate bytes;
 extern crate fnv;
 extern crate prost;
 extern crate prost_types;
+extern crate tacho;
 
 #[macro_use] extern crate futures;
 #[macro_use] extern crate log;
@@ -162,7 +163,7 @@ impl Rpc {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Options {
     /// Maximum number of outstandings RPCs to allow per connection.
     ///
@@ -178,6 +179,8 @@ pub struct Options {
     ///
     /// Defaults to true.
     pub nodelay: bool,
+
+    pub scope: Option<tacho::Scope>,
 }
 
 impl Default for Options {
@@ -186,6 +189,7 @@ impl Default for Options {
             max_rpcs_in_flight: 32,
             max_message_length: 5 * 1024 * 1024,
             nodelay: true,
+            scope: None,
         }
     }
 }
