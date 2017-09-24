@@ -7,6 +7,7 @@ authors = ["Dan Burkert <dan@danburkert.com>"]
 bytes = "0.4"
 prost = "0.2"
 prost-derive = "0.2"
+prost-types = "0.2"
 
 [build-dependencies]
 curl = "0.4"

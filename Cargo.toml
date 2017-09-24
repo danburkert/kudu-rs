@@ -24,7 +24,7 @@ futures-cpupool = "0.1"
 ieee754 = "0.2"
 ifaces = "0.0"
 itertools = "0.5"
-kudu-pb = { path = "kudu-pb", version = "0.1.0" }
+krpc = { path = "krpc", version = "0.1.0" }
 lazy_static = "0.2"
 log = "0.3"
 netbuf = "0.3"
@@ -35,7 +35,6 @@ rand = "0.3.14"
 slab = "0.3"
 take_mut = "0.1"
 tokio-core = "0.1"
-#tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
 tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
 uuid = "0.3"
 vec_map = "0.6"
