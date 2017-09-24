@@ -16,16 +16,17 @@ use tokio::reactor::{
     Remote,
 };
 
+use Error;
 use Options;
 use RawResponse;
 use RawResponseFuture;
 use Request;
 use Rpc;
-use connection::{Connection, ConnectionNew};
-use transport::{Transport, TransportNew};
+use connection::Connection;
 use negotiator::Negotiator;
+use transport::{Transport, TransportNew};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Proxy {
     sender: mpsc::Sender<Rpc>,
 }
@@ -163,13 +164,13 @@ impl Future for ProxyTask {
                 Negotiating(ref mut negotiator) => {
                     match negotiator.poll() {
                         Ok(Async::Ready(transport)) => {
-                            Connected(Connection::new(transport))
+                            Connected(Connection::new(transport, options))
                         },
                         Ok(Async::NotReady) => return Ok(Async::NotReady),
                         Err(error) => {
                             error!("negotiation error: {}", error);
                             if let Some(ref mut metrics) = *metrics {
-                                metrics.connecting_errors.incr(1);
+                                metrics.negotiating_errors.incr(1);
                             }
                             // TODO: log and reconnect
                             unimplemented!()
@@ -178,35 +179,55 @@ impl Future for ProxyTask {
                     }
                 },
                 Connected(ref mut conn) => {
-                    // Send all queued messages.
-                    loop {
+
+                    // Send all queued messages. The result of the loop is ok if either the
+                    // connection has no more send capacity, or there are no more messages to send.
+                    // If any message fails to send, the result of the loop is the error.
+                    let send_result: Result<(), Error> = loop {
                         match conn.poll_ready() {
+
+                            // The connection has capacity to send an RPC.
                             Ok(Async::Ready(_)) => {
                                 match receiver.poll() {
-                                    Ok(Async::Ready(Some(request))) => conn.send(request).expect("not handled"),
-                                    Ok(Async::Ready(None)) => {
-                                        // TODO: all senders dropped
-                                        unimplemented!()
-                                    }
-                                    Ok(Async::NotReady) => break,
+
+                                    // Attempt to send the RPC.
+                                    Ok(Async::Ready(Some(request))) => match conn.send(request) {
+                                        Ok(()) => continue,
+                                        error => break error,
+                                    },
+
+                                    // All proxy senders are dropped. If there are no RPCs in
+                                    // flight, then shut down.
+                                    Ok(Async::Ready(None)) => if conn.rpcs_in_flight() == 0 {
+                                        return Ok(Async::Ready(()));
+                                    } else {
+                                        break Ok(());
+                                    },
+
+                                    // No messages to send.
+                                    Ok(Async::NotReady) => break Ok(()),
                                     Err(()) => unreachable!(),
                                 }
                             },
-                            Ok(Async::NotReady) => (),
-                            Err(error) => {
-                                error!("poll error: {}", error);
-                                // TODO: log and reconnect
-                                unimplemented!()
+
+                            // The connection has no remaining capacity.
+                            Ok(Async::NotReady) => break Ok(()),
+
+                            // The connection is shutdown.
+                            Err(error) => break Err(error),
+                        }
+                    };
+
+                    match send_result.and_then(|_| conn.poll()) {
+                        Ok(()) => return Ok(Async::NotReady),
+                        Err(error) => {
+                            if let Some(ref mut metrics) = *metrics {
+                                metrics.connected_errors.incr(1);
                             }
+                            error!("Shutting down connection due to: {}", error);
+                            ConnectionState::Quiesced
                         }
                     }
-
-                    if let Err(error) = conn.poll() {
-                        error!("poll error: {}", error);
-                        // TODO: log and reconnect
-                        unimplemented!()
-                    }
-                    return Ok(Async::NotReady);
                 },
             };
             *connection_state = state;
@@ -230,6 +251,9 @@ impl fmt::Debug for ProxyTask {
 }
 
 struct Metrics {
+    // negotiate: tacho::Stat,
+    // connect: tacho::Stat,
+
     /// Number of failures while attempting to connect.
     connecting_errors: tacho::Counter,
 

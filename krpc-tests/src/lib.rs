@@ -1,9 +1,11 @@
 #![feature(proc_macro, conservative_impl_trait, generators)]
+#![cfg(test)]
 
+extern crate env_logger;
 extern crate futures_await as futures;
 extern crate krpc;
+extern crate tacho;
 extern crate tokio_core as tokio;
-extern crate env_logger;
 
 #[macro_use] extern crate prost_derive;
 
@@ -37,13 +39,27 @@ pub mod security {
     include!(concat!(env!("OUT_DIR"), "/kudu.security.rs"));
 }
 
+fn init(mut options: Options) -> (CalculatorServer, Core, Proxy, tacho::Reporter) {
+    let _ = env_logger::init();
+
+    let (scope, reporter) = tacho::new();
+    options.scope = Some(scope);
+    let server = CalculatorServer::start();
+    let reactor = Core::new().unwrap();
+    let proxy = Proxy::spawn(server.addr(), options, &reactor.remote());
+    (server, reactor, proxy, reporter)
+}
+
+fn proxy_errors(report: &tacho::Report) -> usize {
+    report.counters().iter().map(|(key, count)| -> usize {
+        if key.name() == "proxy_errors" { *count } else { 0 }
+    }).sum()
+}
+
 #[test]
 fn call() {
     use rpc_tests::CalculatorService;
-    let _ = env_logger::init();
-    let server = CalculatorServer::start();
-    let mut reactor = Core::new().unwrap();
-    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
 
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -55,57 +71,57 @@ fn call() {
 
     assert_eq!(0, sidecars.len());
     assert_eq!(60, response.result);
+    assert_eq!(0, proxy_errors(&reporter.peek()));
 }
 
 #[test]
 fn invalid_service() {
-    let _ = env_logger::init();
-    let server = CalculatorServer::start();
-    let mut reactor = Core::new().unwrap();
-    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
 
+    let now = Instant::now();
     let request = krpc::Request {
         service: "FooService",
         method: "foo",
         required_feature_flags: &[],
         body: Box::new(rpc_tests::AddRequestPb::default()),
-        deadline: Instant::now() + Duration::from_secs(10),
+        timestamp: now,
+        deadline: now + Duration::from_secs(10),
     };
 
     match reactor.run(proxy.send(request)).unwrap() {
         Response::Err { error: Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }), .. } => (),
         other => panic!("expected NoSuchService error, got: {:?}", other),
     };
+
+    assert_eq!(0, proxy_errors(&reporter.peek()));
 }
 
 #[test]
 fn invalid_method() {
-    let _ = env_logger::init();
-    let server = CalculatorServer::start();
-    let mut reactor = Core::new().unwrap();
-    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
 
+    let now = Instant::now();
     let request = krpc::Request {
         service: "kudu.rpc_test.CalculatorService",
         method: "foo",
         required_feature_flags: &[],
         body: Box::new(rpc_tests::AddRequestPb::default()),
-        deadline: Instant::now() + Duration::from_secs(10),
+        timestamp: now,
+        deadline: now + Duration::from_secs(10),
     };
 
     match reactor.run(proxy.send(request)).unwrap() {
         Response::Err { error: Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }), .. } => (),
         other => panic!("expected NoSuchService error, got: {:?}", other),
     };
+
+    assert_eq!(0, proxy_errors(&reporter.peek()));
 }
 
 #[test]
 fn timeout() {
     use rpc_tests::CalculatorService;
-    let _ = env_logger::init();
-    let server = CalculatorServer::start();
-    let mut reactor = Core::new().unwrap();
-    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
 
     // Timeout expires before the RPC is sent.
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
@@ -114,18 +130,68 @@ fn timeout() {
         Response::Err { error: Error::TimedOut, .. } => (),
         other => panic!("expected NoSuchService error, got: {:?}", other),
     };
+
+    assert_eq!(0, proxy_errors(&reporter.peek()));
 }
 
 #[test]
 fn cancel() {
     use rpc_tests::CalculatorService;
-    let _ = env_logger::init();
-    let server = CalculatorServer::start();
-    let mut reactor = Core::new().unwrap();
-    let mut proxy = Proxy::spawn(server.addr(), Options::default(), &reactor.remote());
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
 
     // Timeout expires before the RPC is sent.
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now() + Duration::from_secs(10);
     let _ = reactor.run(proxy.add(request, deadline, &[]));
+
+    assert_eq!(0, proxy_errors(&reporter.peek()));
+}
+
+/*
+#[test]
+fn disconnect() {
+    use std::thread;
+    use rpc_tests::CalculatorService;
+    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+
+    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    let (response, sidecars) = match reactor.run(proxy.add(request.clone(), deadline, &[])).unwrap() {
+        Response::Ok { body, sidecars, .. } => (body, sidecars),
+        Response::Err { error, .. } => panic!("add request failed: {}", error),
+    };
+
+    thread::sleep(Duration::from_secs(70));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (response, sidecars) = match reactor.run(proxy.add(request, deadline, &[])).unwrap() {
+        Response::Ok { body, sidecars, .. } => (body, sidecars),
+        Response::Err { error, .. } => panic!("add request failed: {}", error),
+    };
+
+    assert_eq!(0, sidecars.len());
+    assert_eq!(60, response.result);
+    assert_eq!(0, proxy_errors(&reporter.peek()));
+}
+*/
+
+#[test]
+fn server_shutdown() {
+    use rpc_tests::CalculatorService;
+    let (server, mut reactor, mut proxy, _reporter) = init(Options::default());
+
+    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    if let Response::Err { error, .. } = reactor.run(proxy.add(request.clone(), deadline, &[])).unwrap() {
+        panic!("add request failed: {}", error)
+    }
+
+    drop(server);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    if let Response::Ok { body, ..  } = reactor.run(proxy.add(request.clone(), deadline, &[])).unwrap() {
+        panic!("add request succeed: {:?}", body)
+    }
 }

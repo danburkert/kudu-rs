@@ -9,13 +9,14 @@ doctest = false
 
 [dependencies]
 bytes = "0.4"
+env_logger = "0.4"
+futures-await = { git = "https://github.com/alexcrichton/futures-await" }
 krpc = { path = "../krpc" }
 prost = "0.2"
 prost-derive = "0.2"
 prost-types = "0.2"
+tacho = "0.4"
 tokio-core = "0.1"
-futures-await = { git = "https://github.com/alexcrichton/futures-await" }
-env_logger = "0.4"
 
 [build-dependencies]
 env_logger = "0.4"

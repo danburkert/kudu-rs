@@ -120,14 +120,6 @@ impl Transport {
                 body: &RequestBody,
                 timeout: Option<Duration>) -> Result<(), Error> {
         let result = || -> Result<(), Error> {
-            // TODO: timeouts.
-            /*
-            let now = Instant::now();
-            if deadline < now {
-                return Err(Error::TimedOut);
-            }
-            */
-
             // Set the header fields.
             self.request_header.call_id = call_id;
             {

@@ -18,7 +18,7 @@ mod proxy;
 mod transport;
 
 use std::fmt;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::{
     Bytes,
@@ -51,6 +51,7 @@ pub struct Request {
     pub method: &'static str,
     pub required_feature_flags: &'static [u32],
     pub body: Box<RequestBody>,
+    pub timestamp: Instant,
     pub deadline: Instant,
 }
 
@@ -65,6 +66,7 @@ impl Request {
             method,
             required_feature_flags: &[],
             body,
+            timestamp: Instant::now(),
             deadline,
         }
     }
@@ -128,7 +130,6 @@ impl RawResponse {
 }
 
 /// An in-flight RPC.
-#[derive(Debug)]
 struct Rpc {
     /// The request.
     request: Request,
@@ -163,6 +164,7 @@ impl Rpc {
     }
 }
 
+
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Maximum number of outstandings RPCs to allow per connection.
@@ -192,4 +194,8 @@ impl Default for Options {
             scope: None,
         }
     }
+}
+
+fn duration_to_us(duration: Duration) -> u64 {
+    duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64 / 1000
 }

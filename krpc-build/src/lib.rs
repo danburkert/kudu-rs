@@ -42,6 +42,7 @@ impl prost_build::ServiceGenerator for KrpcServiceGenerator {
                 buf.push_str(&format!("            method: \"{}\",\n", method.proto_name));
                 buf.push_str("            required_feature_flags,\n");
                 buf.push_str("            body: request,\n");
+                buf.push_str("            timestamp: ::std::time::Instant::now(),\n");
                 buf.push_str("            deadline,\n");
                 buf.push_str("        };\n");
                 buf.push_str(&format!("        self.send(request).map(::krpc::Response::decode::<{}>)\n", method.output_type));
