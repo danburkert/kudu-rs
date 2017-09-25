@@ -3,6 +3,7 @@
 
 extern crate env_logger;
 extern crate futures_await as futures;
+extern crate futures_cpupool as cpupool;
 extern crate krpc;
 extern crate tacho;
 extern crate tokio_core as tokio;
@@ -13,6 +14,7 @@ mod calculator_server;
 
 use std::time::{Duration, Instant};
 
+use cpupool::CpuPool;
 use tokio::reactor::Core;
 
 use krpc::{
@@ -42,11 +44,12 @@ pub mod security {
 fn init(mut options: Options) -> (CalculatorServer, Core, Proxy, tacho::Reporter) {
     let _ = env_logger::init();
 
+    let threadpool = CpuPool::new(4);
     let (scope, reporter) = tacho::new();
     options.scope = Some(scope);
     let server = CalculatorServer::start();
     let reactor = Core::new().unwrap();
-    let proxy = Proxy::spawn(server.addr(), options, &reactor.remote());
+    let proxy = Proxy::spawn(vec![server.addr().to_string()], options, threadpool, &reactor.remote());
     (server, reactor, proxy, reporter)
 }
 

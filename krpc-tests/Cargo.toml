@@ -11,6 +11,7 @@ doctest = false
 bytes = "0.4"
 env_logger = "0.4"
 futures-await = { git = "https://github.com/alexcrichton/futures-await" }
+futures-cpupool = "0.1"
 krpc = { path = "../krpc" }
 prost = "0.2"
 prost-derive = "0.2"

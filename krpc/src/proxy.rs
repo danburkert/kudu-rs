@@ -1,6 +1,6 @@
 use std::fmt;
-use std::net::SocketAddr;
 
+use cpupool::CpuPool;
 use futures::{
     Async,
     AsyncSink,
@@ -10,7 +10,7 @@ use futures::{
     Stream,
 };
 use futures::sync::{mpsc, oneshot};
-use tacho;
+use itertools::Itertools;
 use tokio::reactor::{
     Handle,
     Remote,
@@ -23,8 +23,7 @@ use RawResponseFuture;
 use Request;
 use Rpc;
 use connection::Connection;
-use negotiator::Negotiator;
-use transport::{Transport, TransportNew};
+use connector::Connector;
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -46,17 +45,20 @@ pub enum AsyncSend {
 
 impl Proxy {
 
-    pub fn spawn(addr: SocketAddr, options: Options, remote: &Remote) -> Proxy {
+    pub fn spawn(hostports: Vec<String>,
+                 options: Options,
+                 threadpool: CpuPool,
+                 remote: &Remote)
+                 -> Proxy {
         trace!("spawn!");
         let (sender, receiver) = mpsc::channel(options.max_rpcs_in_flight as usize);
-        let metrics = options.scope.as_ref().map(|scope| Metrics::new(&addr, scope.clone()));
         remote.spawn(move |handle| ProxyTask {
-            addr: addr,
-            options: options,
+            hostports,
+            options,
+            threadpool,
             handle: handle.clone(),
             receiver,
             connection_state: ConnectionState::Quiesced,
-            metrics,
         });
         Proxy { sender }
     }
@@ -98,10 +100,7 @@ impl Proxy {
 
 enum ConnectionState {
     Quiesced,
-    // TODO:
-    // Resolving,
-    Connecting(TransportNew),
-    Negotiating(Negotiator),
+    Connecting(Connector),
     Connected(Connection),
 }
 
@@ -110,19 +109,18 @@ impl fmt::Debug for ConnectionState {
         match *self {
             ConnectionState::Quiesced => write!(f, "Quiesced"),
             ConnectionState::Connecting(_) => write!(f, "Connecting"),
-            ConnectionState::Negotiating(_) => write!(f, "Negotiating"),
             ConnectionState::Connected(ref connection) => connection.fmt(f),
         }
     }
 }
 
 struct ProxyTask {
-    addr: SocketAddr,
+    hostports: Vec<String>,
     options: Options,
+    threadpool: CpuPool,
     handle: Handle,
     receiver: mpsc::Receiver<Rpc>,
     connection_state: ConnectionState,
-    metrics: Option<Metrics>,
 }
 
 impl Future for ProxyTask {
@@ -131,51 +129,33 @@ impl Future for ProxyTask {
 
     fn poll(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll", self);
-        let ProxyTask { addr,
+        let ProxyTask { ref hostports,
                         ref options,
+                        ref threadpool,
                         ref handle,
                         ref mut receiver,
-                        ref mut connection_state,
-                        ref mut metrics } = *self;
+                        ref mut connection_state } = *self;
         use self::ConnectionState::*;
         // NLL hack.
         loop {
             let state = match *connection_state {
                 Quiesced => {
                     // Assume wakeup due to an RPC being ready to send.
-                    Connecting(Transport::connect(addr, options.clone(), handle))
+                    Connecting(Connector::connect(hostports,
+                                                  threadpool,
+                                                  handle.clone(),
+                                                  options.clone()))
                 },
-                Connecting(ref mut new) => {
-                    match new.poll() {
-                        Ok(Async::Ready(transport)) => {
-                            Negotiating(Negotiator::negotiate(transport))
-                        },
+                Connecting(ref mut connector) => {
+                    match connector.poll() {
+                        Ok(Async::Ready(connection)) => Connected(connection),
                         Ok(Async::NotReady) => return Ok(Async::NotReady),
                         Err(error) => {
-                            error!("connect error: {}", error);
-                            if let Some(ref mut metrics) = *metrics {
-                                metrics.connecting_errors.incr(1);
-                            }
-                            // TODO: log and reconnect
+                            error!("{}", error);
+
+                            // TODO: fail queued RPCs, backoff and retry
                             unimplemented!()
                         }
-                    }
-                },
-                Negotiating(ref mut negotiator) => {
-                    match negotiator.poll() {
-                        Ok(Async::Ready(transport)) => {
-                            Connected(Connection::new(transport, options))
-                        },
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(error) => {
-                            error!("negotiation error: {}", error);
-                            if let Some(ref mut metrics) = *metrics {
-                                metrics.negotiating_errors.incr(1);
-                            }
-                            // TODO: log and reconnect
-                            unimplemented!()
-
-                        },
                     }
                 },
                 Connected(ref mut conn) => {
@@ -220,13 +200,7 @@ impl Future for ProxyTask {
 
                     match send_result.and_then(|_| conn.poll()) {
                         Ok(()) => return Ok(Async::NotReady),
-                        Err(error) => {
-                            if let Some(ref mut metrics) = *metrics {
-                                metrics.connected_errors.incr(1);
-                            }
-                            error!("Shutting down connection due to: {}", error);
-                            ConnectionState::Quiesced
-                        }
+                        Err(_) => ConnectionState::Quiesced,
                     }
                 },
             };
@@ -238,44 +212,13 @@ impl Future for ProxyTask {
 impl fmt::Debug for ProxyTask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut debug = f.debug_struct("ProxyTask");
-        debug.field("addr", &format_args!("{}", &self.addr));
+        debug.field("hostports", &format_args!("{}", &self.hostports.iter().format(",")));
         debug.field("core", &self.handle.id());
         match self.connection_state {
             ConnectionState::Quiesced => debug.field("state", &self.connection_state),
             ConnectionState::Connecting(_) => debug.field("state", &self.connection_state),
-            ConnectionState::Negotiating(_) => debug.field("state", &self.connection_state),
             ConnectionState::Connected(ref connection) => debug.field("connection", connection),
         };
         debug.finish()
-    }
-}
-
-struct Metrics {
-    // negotiate: tacho::Stat,
-    // connect: tacho::Stat,
-
-    /// Number of failures while attempting to connect.
-    connecting_errors: tacho::Counter,
-
-    /// Number of failures while negotiating.
-    negotiating_errors: tacho::Counter,
-
-    /// Number of failures while connected.
-    connected_errors: tacho::Counter,
-}
-
-impl Metrics {
-    fn new(addr: &SocketAddr, scope: tacho::Scope) -> Metrics {
-        let errors = scope.prefixed("krpc")
-                          .labeled("addr", addr);
-
-        let connecting_errors = errors.clone().labeled("state", "connecting").counter("proxy_errors");
-        let negotiating_errors = errors.clone().labeled("state", "negotiating").counter("proxy_errors");
-        let connected_errors = errors.labeled("state", "connected").counter("proxy_errors");
-        Metrics {
-            connecting_errors,
-            negotiating_errors,
-            connected_errors,
-        }
     }
 }

@@ -1,6 +1,8 @@
 extern crate byteorder;
 extern crate bytes;
 extern crate fnv;
+extern crate futures_cpupool as cpupool;
+extern crate itertools;
 extern crate prost;
 extern crate prost_types;
 extern crate tacho;
@@ -11,6 +13,7 @@ extern crate tacho;
 #[macro_use] extern crate tokio_core as tokio;
 
 mod connection;
+mod connector;
 mod error;
 mod negotiator;
 mod pb;
@@ -182,6 +185,9 @@ pub struct Options {
     /// Defaults to true.
     pub nodelay: bool,
 
+    /// The port to use if no port is included in the hostport.
+    pub default_port: Option<u16>,
+
     pub scope: Option<tacho::Scope>,
 }
 
@@ -191,6 +197,7 @@ impl Default for Options {
             max_rpcs_in_flight: 32,
             max_message_length: 5 * 1024 * 1024,
             nodelay: true,
+            default_port: None,
             scope: None,
         }
     }
