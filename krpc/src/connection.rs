@@ -1,4 +1,5 @@
 use std::cmp;
+use std::collections::VecDeque;
 use std::fmt;
 use std::io;
 use std::time::Instant;
@@ -58,6 +59,12 @@ impl Connection {
         }
     }
 
+    /// This is a total hack to allow Proxy to reach in and grab the RPCs.
+    /// Would probably be better to return an `impl Iterator<Item=Rpc>`
+    pub fn in_flight_rpcs(&mut self) -> &mut FnvHashMap<i32, Rpc> {
+        &mut self.in_flight_rpcs
+    }
+
     /// Fails all in-flight RPCs.
     fn shutdown(&mut self, now: Instant) {
         for (_, rpc) in &mut self.in_flight_rpcs.drain() {
@@ -96,12 +103,12 @@ impl Connection {
 
     /// Ensure that there is capacity to send an RPC. If an error is returned, the connection must
     /// be dropped.
-    pub fn poll_ready(&mut self) -> Poll<(), Error> {
+    pub fn poll_ready(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll_ready", self);
+
         // Make sure the transport is ready.
         try_ready!(self.transport.poll_ready().map_err(|error| {
-            self.shutdown(Instant::now());
-            error
+            warn!("{:?} error: {}", self, error);
         }));
 
         // Check that the connection is not throttled.
@@ -119,7 +126,7 @@ impl Connection {
     }
 
     /// Send an RPC. If an error is returned, the connection must be dropped.
-    pub fn send(&mut self, rpc: Rpc) -> Result<(), Error> {
+    pub fn send(&mut self, rpc: Rpc) -> Result<(), ()> {
         trace!("{:?}: send: {:?}", self, rpc.request);
         let now = Instant::now();
         if rpc.request.deadline < now {
@@ -139,25 +146,25 @@ impl Connection {
                              &*rpc.request.body,
                              Some(rpc.request.deadline - now));
 
+        // Regardless of whether the send succeeded, add the RPC to the in-flight queue.
+        // The upstream Proxy will remove it and retry it if the send failed.
+        self.in_flight_rpcs.insert(call_id, rpc);
         match send {
-            Ok(()) => {
-                self.in_flight_rpcs.insert(call_id, rpc);
-                Ok(())
+            Ok(()) => Ok(()),
+            Err(Error::Io(ref error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                info!("{:?}: shutdown by remote", self);
+                Err(())
             },
             Err(error) => {
-                self.shutdown(now);
-                if let Some(ref metrics) = self.metrics {
-                    metrics.failed_rpcs.add(duration_to_us(now - rpc.request.timestamp));
-                }
-                rpc.fail(Error::Io(io::Error::from(io::ErrorKind::UnexpectedEof)));
-                Err(error)
+                warn!("{:?}: error: {}", self, error);
+                Err(())
             }
         }
     }
 
     /// Poll the connection, completing in-flight RPCs if possible.
     /// If an error is returned, the connection must be dropped.
-    pub fn poll(&mut self) -> Result<(), Error> {
+    pub fn poll(&mut self) -> Result<(), ()> {
         trace!("{:?}: poll", self);
         let now = Instant::now();
         loop {
@@ -179,24 +186,26 @@ impl Connection {
                     }
 
                     // Ensure that fatal errors shut down the connection.
-                    let fatal_error = if error.is_fatal() { Some(error.clone()) } else { None };
+                    let is_fatal = error.is_fatal();
 
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
                         if let Some(ref metrics) = self.metrics {
                             metrics.failed_rpcs.add(duration_to_us(now - rpc.request.timestamp));
                         }
+                        error!("{:?}: {:?} failed: {}", self, rpc.request, error);
                         rpc.fail(error);
+                    } else {
+                        error!("{:?}: RPC failed: {}", self, error);
                     }
 
-                    if let Some(error) = fatal_error {
-                        self.shutdown(now);
-                        return Err(error);
+                    if is_fatal {
+                        return Err(());
                     }
                 },
                 Ok(Async::NotReady) => return Ok(()),
                 Err(error) => {
-                    self.shutdown(now);
-                    return Err(error);
+                    warn!("{:?} error: {}", self, error);
+                    return Err(());
                 },
             }
         }

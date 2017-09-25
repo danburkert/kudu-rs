@@ -1,4 +1,5 @@
 use std::fmt;
+use std::collections::VecDeque;
 
 use cpupool::CpuPool;
 use futures::{
@@ -59,6 +60,7 @@ impl Proxy {
             handle: handle.clone(),
             receiver,
             connection_state: ConnectionState::Quiesced,
+            buffer: VecDeque::new(),
         });
         Proxy { sender }
     }
@@ -121,6 +123,7 @@ struct ProxyTask {
     handle: Handle,
     receiver: mpsc::Receiver<Rpc>,
     connection_state: ConnectionState,
+    buffer: VecDeque<Rpc>
 }
 
 impl Future for ProxyTask {
@@ -134,7 +137,8 @@ impl Future for ProxyTask {
                         ref threadpool,
                         ref handle,
                         ref mut receiver,
-                        ref mut connection_state } = *self;
+                        ref mut connection_state,
+                        ref mut buffer } = *self;
         use self::ConnectionState::*;
         // NLL hack.
         loop {
@@ -163,13 +167,18 @@ impl Future for ProxyTask {
                     // Send all queued messages. The result of the loop is ok if either the
                     // connection has no more send capacity, or there are no more messages to send.
                     // If any message fails to send, the result of the loop is the error.
-                    let send_result: Result<(), Error> = loop {
+                    let send_result: Result<(), ()> = loop {
                         match conn.poll_ready() {
 
                             // The connection has capacity to send an RPC.
                             Ok(Async::Ready(_)) => {
-                                match receiver.poll() {
 
+                                // Take an RPC from the buffer, or from the receiver.
+                                let rpc = buffer.pop_front()
+                                                .map(|rpc| Ok(Async::Ready(Some(rpc))))
+                                                .unwrap_or_else(|| receiver.poll());
+
+                                match rpc {
                                     // Attempt to send the RPC.
                                     Ok(Async::Ready(Some(request))) => match conn.send(request) {
                                         Ok(()) => continue,
@@ -194,13 +203,16 @@ impl Future for ProxyTask {
                             Ok(Async::NotReady) => break Ok(()),
 
                             // The connection is shutdown.
-                            Err(error) => break Err(error),
+                            Err(()) => break Err(()),
                         }
                     };
 
                     match send_result.and_then(|_| conn.poll()) {
-                        Ok(()) => return Ok(Async::NotReady),
-                        Err(_) => ConnectionState::Quiesced,
+                        Ok(_) => return Ok(Async::NotReady),
+                        Err(_) => {
+                            buffer.extend(conn.in_flight_rpcs().drain().map(|(_, rpc)| rpc));
+                            ConnectionState::Quiesced
+                        },
                     }
                 },
             };
