@@ -97,7 +97,13 @@ impl From<prost::DecodeError> for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        match *self {
+            Error::Rpc(ref error) => error.fmt(f),
+            Error::Io(ref error) => error.fmt(f),
+            Error::Serialization(ref error) => f.write_str(error),
+            Error::TimedOut => f.write_str("timed out"),
+            Error::Negotiation(ref error) => f.write_str(error),
+        }
     }
 }
 

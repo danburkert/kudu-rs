@@ -1,5 +1,4 @@
 use std::cmp;
-use std::collections::VecDeque;
 use std::fmt;
 use std::io;
 use std::time::Instant;
@@ -65,27 +64,6 @@ impl Connection {
         &mut self.in_flight_rpcs
     }
 
-    /// Fails all in-flight RPCs.
-    fn shutdown(&mut self, now: Instant) {
-        for (_, rpc) in &mut self.in_flight_rpcs.drain() {
-            if rpc.is_canceled() {
-                if let Some(ref metrics) = self.metrics {
-                    metrics.canceled_rpcs.add(duration_to_us(now - rpc.request.timestamp));
-                }
-            } else if rpc.is_timed_out(now) {
-                if let Some(ref metrics) = self.metrics {
-                    metrics.timed_out_rpcs.add(duration_to_us(now - rpc.request.timestamp));
-                }
-                rpc.fail(Error::TimedOut);
-            } else {
-                if let Some(ref metrics) = self.metrics {
-                    metrics.failed_rpcs.add(duration_to_us(now - rpc.request.timestamp));
-                }
-                rpc.fail(Error::Io(io::Error::from(io::ErrorKind::UnexpectedEof)));
-            }
-        }
-    }
-
     fn throttle(&mut self) {
         self.throttle = cmp::max(self.throttle / 2, 1);
     }
@@ -101,22 +79,32 @@ impl Connection {
         call_id
     }
 
+    fn log_error(&self, error: Error) -> Result<(), ()> {
+        match error {
+            Error::Io(ref error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                info!("{:?}: shutdown by remote", self);
+            },
+            error => {
+                warn!("{:?}: error: {}", self, error);
+            }
+        }
+        Err(())
+    }
+
     /// Ensure that there is capacity to send an RPC. If an error is returned, the connection must
     /// be dropped.
-    pub fn poll_ready(&mut self) -> Poll<(), ()> {
+    pub fn poll_ready(&mut self, now: Instant) -> Poll<(), ()> {
         trace!("{:?}: poll_ready", self);
 
         // Make sure the transport is ready.
-        try_ready!(self.transport.poll_ready().map_err(|error| {
-            warn!("{:?} error: {}", self, error);
-        }));
+        try_ready!(self.transport.poll_ready().map_err(|error| { let _ = self.log_error(error); }));
 
         // Check that the connection is not throttled.
         if self.in_flight_rpcs.len() < self.throttle as usize {
             Ok(Async::Ready(()))
         } else {
             // Try to clear the in-flight RPCs.
-            self.poll()?;
+            self.poll(now)?;
             if self.in_flight_rpcs.len() < self.throttle as usize {
                 Ok(Async::Ready(()))
             } else {
@@ -126,9 +114,8 @@ impl Connection {
     }
 
     /// Send an RPC. If an error is returned, the connection must be dropped.
-    pub fn send(&mut self, rpc: Rpc) -> Result<(), ()> {
+    pub fn send(&mut self, rpc: Rpc, now: Instant) -> Result<(), ()> {
         trace!("{:?}: send: {:?}", self, rpc.request);
-        let now = Instant::now();
         if rpc.request.deadline < now {
             rpc.fail(Error::TimedOut);
             return Ok(());
@@ -151,22 +138,14 @@ impl Connection {
         self.in_flight_rpcs.insert(call_id, rpc);
         match send {
             Ok(()) => Ok(()),
-            Err(Error::Io(ref error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                info!("{:?}: shutdown by remote", self);
-                Err(())
-            },
-            Err(error) => {
-                warn!("{:?}: error: {}", self, error);
-                Err(())
-            }
+            Err(error) => self.log_error(error),
         }
     }
 
     /// Poll the connection, completing in-flight RPCs if possible.
     /// If an error is returned, the connection must be dropped.
-    pub fn poll(&mut self) -> Result<(), ()> {
+    pub fn poll(&mut self, now: Instant) -> Result<(), ()> {
         trace!("{:?}: poll", self);
-        let now = Instant::now();
         loop {
             match self.transport.poll() {
                 Ok(Async::Ready((call_id, Ok((body, sidecars))))) => {
@@ -203,16 +182,9 @@ impl Connection {
                     }
                 },
                 Ok(Async::NotReady) => return Ok(()),
-                Err(error) => {
-                    warn!("{:?} error: {}", self, error);
-                    return Err(());
-                },
+                Err(error) => return self.log_error(error),
             }
         }
-    }
-
-    pub fn rpcs_in_flight(&self) -> usize {
-        self.in_flight_rpcs.len()
     }
 }
 

@@ -66,7 +66,7 @@ impl Connector {
                 } else {
                     let error = io::Error::new(io::ErrorKind::InvalidInput,
                                                format!("invalid hostport (no port): {:?}", hostport));
-                    warn!("{}", error);
+                    warn!("Failed to connect: {}", error);
                     if let Some(ref mut metrics) = metrics {
                         metrics.resolve_errors.incr(1);
                     }
@@ -88,7 +88,7 @@ impl Connector {
                 Some(Err(_)) => {
                     let error = io::Error::new(io::ErrorKind::InvalidInput,
                                                format!("invalid hostport: {:?}", hostport));
-                    warn!("{}", error);
+                    warn!("Failed to connect: {}", error);
                     if let Some(ref mut metrics) = metrics {
                         metrics.resolve_errors.incr(1);
                     }
@@ -98,7 +98,7 @@ impl Connector {
                 None => {
                     let error = io::Error::new(io::ErrorKind::InvalidInput,
                                                format!("invalid hostport (no port): {:?}", hostport));
-                    warn!("{}", error);
+                    warn!("Failed to connect: {}", error);
                     if let Some(ref mut metrics) = metrics {
                         metrics.resolve_errors.incr(1);
                     }

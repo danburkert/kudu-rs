@@ -1,5 +1,6 @@
-use std::fmt;
 use std::collections::VecDeque;
+use std::fmt;
+use std::time::Instant;
 
 use cpupool::CpuPool;
 use futures::{
@@ -51,7 +52,6 @@ impl Proxy {
                  threadpool: CpuPool,
                  remote: &Remote)
                  -> Proxy {
-        trace!("spawn!");
         let (sender, receiver) = mpsc::channel(options.max_rpcs_in_flight as usize);
         remote.spawn(move |handle| ProxyTask {
             hostports,
@@ -132,6 +132,10 @@ impl Future for ProxyTask {
 
     fn poll(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll", self);
+
+        let now = Instant::now();
+
+        // NLL hack.
         let ProxyTask { ref hostports,
                         ref options,
                         ref threadpool,
@@ -139,12 +143,20 @@ impl Future for ProxyTask {
                         ref mut receiver,
                         ref mut connection_state,
                         ref mut buffer } = *self;
+
         use self::ConnectionState::*;
-        // NLL hack.
         loop {
             let state = match *connection_state {
                 Quiesced => {
-                    // Assume wakeup due to an RPC being ready to send.
+                    // Create a new connection if there are buffered or queued RPCs.
+                    if buffer.is_empty() {
+                        match try_ready!(receiver.poll()) {
+                            Some(rpc) => buffer.push_back(rpc),
+                            // No more senders; shutdown.
+                            None => return Ok(Async::Ready(())),
+                        }
+                    }
+
                     Connecting(Connector::connect(hostports,
                                                   threadpool,
                                                   handle.clone(),
@@ -155,47 +167,50 @@ impl Future for ProxyTask {
                         Ok(Async::Ready(connection)) => Connected(connection),
                         Ok(Async::NotReady) => return Ok(Async::NotReady),
                         Err(error) => {
-                            error!("{}", error);
-
-                            // TODO: fail queued RPCs, backoff and retry
-                            unimplemented!()
+                            // Connecting to the server failed. Fail all buffered and queued
+                            // RPCs, and return to the quiesced state.
+                            for rpc in buffer.drain(..) {
+                                rpc.fail(error.clone());
+                            }
+                            while let Ok(Async::Ready(Some(rpc))) = receiver.poll() {
+                                rpc.fail(error.clone());
+                            }
+                            Quiesced
                         }
                     }
                 },
                 Connected(ref mut conn) => {
 
-                    // Send all queued messages. The result of the loop is ok if either the
-                    // connection has no more send capacity, or there are no more messages to send.
-                    // If any message fails to send, the result of the loop is the error.
+                    // Send all buffered and queued RPCs. The result of the loop is ok if either
+                    // the connection has no more send capacity, or there are no more messages to
+                    // send.  If any message fails to send, the result of the loop is the error.
                     let send_result: Result<(), ()> = loop {
-                        match conn.poll_ready() {
+                        match conn.poll_ready(now) {
 
                             // The connection has capacity to send an RPC.
                             Ok(Async::Ready(_)) => {
 
-                                // Take an RPC from the buffer, or from the receiver.
+                                // Take an RPC from the buffer or queue.
                                 let rpc = buffer.pop_front()
                                                 .map(|rpc| Ok(Async::Ready(Some(rpc))))
-                                                .unwrap_or_else(|| receiver.poll());
+                                                .unwrap_or_else(|| receiver.poll())?;
 
                                 match rpc {
                                     // Attempt to send the RPC.
-                                    Ok(Async::Ready(Some(request))) => match conn.send(request) {
+                                    Async::Ready(Some(rpc)) => match conn.send(rpc, now) {
                                         Ok(()) => continue,
                                         error => break error,
                                     },
 
-                                    // All proxy senders are dropped. If there are no RPCs in
-                                    // flight, then shut down.
-                                    Ok(Async::Ready(None)) => if conn.rpcs_in_flight() == 0 {
+                                    // No more senders; shutdown if there are no in-flight RPCs.
+                                    Async::Ready(None) => if conn.in_flight_rpcs().is_empty() {
                                         return Ok(Async::Ready(()));
                                     } else {
                                         break Ok(());
                                     },
 
                                     // No messages to send.
-                                    Ok(Async::NotReady) => break Ok(()),
-                                    Err(()) => unreachable!(),
+                                    Async::NotReady => break Ok(()),
                                 }
                             },
 
@@ -207,10 +222,24 @@ impl Future for ProxyTask {
                         }
                     };
 
-                    match send_result.and_then(|_| conn.poll()) {
+                    // Poll the connection in order to complete in-flight RPCs.
+                    match send_result.and_then(|_| conn.poll(now)) {
                         Ok(_) => return Ok(Async::NotReady),
                         Err(_) => {
-                            buffer.extend(conn.in_flight_rpcs().drain().map(|(_, rpc)| rpc));
+                            buffer.extend(
+                                conn.in_flight_rpcs()
+                                    .drain()
+                                    .map(|(_, rpc)| rpc)
+                                    .flat_map(|rpc| {
+                                        if rpc.is_canceled() {
+                                            None
+                                        } else if rpc.is_timed_out(now) {
+                                            rpc.fail(Error::TimedOut);
+                                            None
+                                        } else {
+                                            Some(rpc)
+                                        }
+                                    }));
                             ConnectionState::Quiesced
                         },
                     }
