@@ -20,6 +20,7 @@ use tacho;
 use tokio::reactor::Handle;
 
 use Error;
+use HostPort;
 use Options;
 use connection::Connection;
 use negotiator::Negotiator;
@@ -40,7 +41,7 @@ pub(crate) struct Connector {
 
 impl Connector {
 
-    pub fn connect(hostports: &[String],
+    pub fn connect(hostports: &[HostPort],
                    thread_pool: &CpuPool,
                    handle: Handle,
                    options: Options)
@@ -48,67 +49,22 @@ impl Connector {
         let mut resolving = FuturesUnordered::new();
         let mut connecting = FuturesUnordered::new();
         let negotiating = FuturesUnordered::new();
-        let mut errors = Vec::new();
+        let errors = Vec::new();
 
-        let mut metrics = options.scope.as_ref().cloned().map(Metrics::new);
+        let metrics = options.scope.as_ref().cloned().map(Metrics::new);
 
         for hostport in hostports {
+            // Attempt to short-circuit DNS by parsing the host as an IP addr.
+            if let Ok(addr) = IpAddr::from_str(&hostport.host) {
+                connecting.push(Transport::connect(SocketAddr::new(addr, hostport.port),
+                                                   options.clone(),
+                                                   &handle));
 
-            // Attempt to short-circuit DNS by parsing the hostport as a socket addr or IP addr.
-            if let Ok(addr) = SocketAddr::from_str(&hostport) {
-                connecting.push(Transport::connect(addr, options.clone(), &handle));
-                continue;
+            // Otherwise resolve the hostport.
+            } else {
+                let hostport = hostport.clone();
+                resolving.push(thread_pool.spawn_fn(move || hostport.to_socket_addrs()));
             }
-            if let Ok(addr) = IpAddr::from_str(&hostport) {
-                if let Some(port) = options.default_port {
-                    connecting.push(Transport::connect(SocketAddr::new(addr, port),
-                                                       options.clone(),
-                                                       &handle));
-                } else {
-                    let error = io::Error::new(io::ErrorKind::InvalidInput,
-                                               format!("invalid hostport (no port): {:?}", hostport));
-                    warn!("Failed to connect: {}", error);
-                    if let Some(ref mut metrics) = metrics {
-                        metrics.resolve_errors.incr(1);
-                    }
-                    errors.push(error.into());
-                }
-                continue;
-            }
-
-            // Otherwise it is a hostname which needs to be split into (host, port) pair and
-            // resolved.
-            let mut parts_iter = hostport.rsplitn(2, ':');
-            let mut port = parts_iter.next();
-            let host = parts_iter.next().unwrap_or_else(|| port.take().unwrap()).to_owned();
-
-            // Parse the port from the hostport if it's present, or use the default port it it's
-            // present, or fail.
-            let port = match port.map(u16::from_str).or_else(|| options.default_port.map(Result::Ok)) {
-                Some(Ok(port)) => port,
-                Some(Err(_)) => {
-                    let error = io::Error::new(io::ErrorKind::InvalidInput,
-                                               format!("invalid hostport: {:?}", hostport));
-                    warn!("Failed to connect: {}", error);
-                    if let Some(ref mut metrics) = metrics {
-                        metrics.resolve_errors.incr(1);
-                    }
-                    errors.push(error.into());
-                    continue;
-                },
-                None => {
-                    let error = io::Error::new(io::ErrorKind::InvalidInput,
-                                               format!("invalid hostport (no port): {:?}", hostport));
-                    warn!("Failed to connect: {}", error);
-                    if let Some(ref mut metrics) = metrics {
-                        metrics.resolve_errors.incr(1);
-                    }
-                    errors.push(error.into());
-                    continue;
-                }
-            };
-
-            resolving.push(thread_pool.spawn_fn(move || (&host[..], port).to_socket_addrs()));
         }
 
         Connector {

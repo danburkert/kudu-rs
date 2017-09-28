@@ -15,12 +15,14 @@ extern crate tacho;
 mod connection;
 mod connector;
 mod error;
+mod hostport;
 mod negotiator;
 mod pb;
 mod proxy;
 mod transport;
 
 use std::fmt;
+use std::marker;
 use std::time::{Duration, Instant};
 
 use bytes::{
@@ -28,9 +30,15 @@ use bytes::{
     BytesMut,
 };
 use futures::sync::oneshot;
+use futures::{
+    Future,
+    Async,
+    Poll,
+};
 use prost::Message;
 
 pub use error::{Error, RpcError, RpcErrorCode};
+pub use hostport::HostPort;
 pub use pb::rpc::{RequestIdPb as RequestId};
 pub use proxy::{Proxy, AsyncSend};
 
@@ -91,43 +99,26 @@ impl fmt::Debug for Request {
     }
 }
 
-/// The response to an RPC request.
-#[derive(Debug)]
-pub enum Response<Body> {
-    /// A successful RPC response.
-    Ok {
-        /// The response body.
-        body: Body,
-        /// The response sidecars.
-        sidecars: Vec<Bytes>,
-        /// The request.
-        request: Request,
-    },
+type RpcResult = Result<(Bytes, Vec<Bytes>, Request),
+                        (Error, Request)>;
 
-    /// A failed RPC response.
-    Err {
-        /// The error.
-        error: Error,
-        /// The request.
-        request: Request,
-    },
+pub struct Response<T> where T: Message + Default {
+    receiver: oneshot::Receiver<RpcResult>,
+    _marker: marker::PhantomData<T>,
 }
 
-/// An undecoded response.
-pub type RawResponse = Response<Bytes>;
-/// A future which resolves to an undecoded response.
-pub type RawResponseFuture = oneshot::Receiver<RawResponse>;
-/// A future which resolves to a response.
-pub type ResponseFuture<T> = futures::Map<RawResponseFuture, fn (RawResponse) -> Response<T>>;
+impl <T> Future for Response<T> where T: Message + Default {
+    type Item = (T, Vec<Bytes>, Request);
+    type Error = (Error, Request);
 
-impl RawResponse {
-    pub fn decode<T>(self) -> Response<T> where T: Message + Default {
-        match self {
-            Response::Ok { body, sidecars, request } => match T::decode_length_delimited(&body) {
-                Ok(body) => Response::Ok { body, sidecars, request },
-                Err(error) => Response::Err { error: error.into(), request },
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.receiver.poll().expect("RPC dropped") {
+            Async::Ready(Ok((bytes, sidecars, request))) => match T::decode_length_delimited(&bytes) {
+                Ok(body) => Ok(Async::Ready((body, sidecars, request))),
+                Err(error) => Err((error.into(), request)),
             },
-            Response::Err { error, request} => Response::Err { error, request },
+            Async::Ready(Err((error, request))) => Err((error, request)),
+            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }
@@ -138,12 +129,12 @@ struct Rpc {
     request: Request,
 
     /// The completer.
-    completer: oneshot::Sender<RawResponse>,
+    completer: oneshot::Sender<RpcResult>,
 }
 
 impl Rpc {
 
-    /// Returns `true` if the RPC has been cancelled by the caller.
+    /// Returns `true` if the RPC has been canceled by the caller.
     pub fn is_canceled(&self) -> bool {
         self.completer.is_canceled()
     }
@@ -155,18 +146,14 @@ impl Rpc {
 
     /// Completes the RPC.
     pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
-        let _ = self.completer.send(Response::Ok { body, sidecars, request: self.request });
+        let _ = self.completer.send(Ok((body, sidecars, self.request)));
     }
 
     /// Fails the RPC.
     fn fail(self, error: Error) {
-        let _ = self.completer.send(Response::Err {
-            request: self.request,
-            error,
-        });
+        let _ = self.completer.send(Err((error, self.request)));
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct Options {

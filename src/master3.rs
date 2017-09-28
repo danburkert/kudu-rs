@@ -1,10 +1,54 @@
 use futures::{
+    Async,
     Future,
-}
+    Poll,
+};
 use futures::stream::FuturesUnordered;
 
+use krpc::{
+    HostPort,
+    Proxy,
+    ResponseFuture,
+};
+
+use pb::master::ConnectToMasterResponsePb;
+use Error;
+
 pub struct MasterProxy {
-    fn spawn(hostports: Vec<String>)
+
+
+}
+
+impl MasterProxy {
+    fn spawn(master_addresses: Vec<HostPort>) {
+        unimplemented!()
+    }
+}
+
+struct MasterTask {
+
+}
+
+impl MasterTask {
+
+}
+
+struct ConnectToMaster {
+    response: ResponseFuture<ConnectToMasterResponsePb>,
+    proxy: Option<Proxy>,
+}
+
+impl Future for ConnectToMaster {
+    type Item = (ConnectToMasterResponsePb, Proxy);
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<(ConnectToMasterResponsePb, Proxy), Error> {
+        let response = try_ready!(self.response.poll());
+        Ok(Async::Ready((response, self.proxy.take().unwrap())))
+    }
+}
+
+impl ConnectToMaster {
 
 
 }

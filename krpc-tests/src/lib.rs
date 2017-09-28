@@ -21,7 +21,6 @@ use krpc::{
     Error,
     Options,
     Proxy,
-    Response,
     RpcError,
     RpcErrorCode,
 };
@@ -49,7 +48,7 @@ fn init(mut options: Options) -> (CalculatorServer, Core, Proxy, tacho::Reporter
     options.scope = Some(scope);
     let server = CalculatorServer::start();
     let reactor = Core::new().unwrap();
-    let proxy = Proxy::spawn(vec![server.addr().to_string()], options, threadpool, &reactor.remote());
+    let proxy = Proxy::spawn(vec![server.addr().into()], options, threadpool, &reactor.remote());
     (server, reactor, proxy, reporter)
 }
 
@@ -67,10 +66,8 @@ fn call() {
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now() + Duration::from_secs(10);
 
-    let (response, sidecars) = match reactor.run(proxy.add(request, deadline, &[])).unwrap() {
-        Response::Ok { body, sidecars, .. } => (body, sidecars),
-        Response::Err { error, .. } => panic!("add request failed: {}", error),
-    };
+    let (response, sidecars, _) = reactor.run(proxy.add(request, deadline, &[]))
+                                         .expect("add request failed");
 
     assert_eq!(0, sidecars.len());
     assert_eq!(60, response.result);
@@ -91,10 +88,10 @@ fn invalid_service() {
         deadline: now + Duration::from_secs(10),
     };
 
-    match reactor.run(proxy.send(request)).unwrap() {
-        Response::Err { error: Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }), .. } => (),
-        other => panic!("expected NoSuchService error, got: {:?}", other),
-    };
+    match reactor.run(proxy.send::<()>(request)).unwrap_err().0 {
+        Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }) => (),
+        error => panic!("unexpected error: {}", error),
+    }
 
     assert_eq!(0, proxy_errors(&reporter.peek()));
 }
@@ -113,10 +110,10 @@ fn invalid_method() {
         deadline: now + Duration::from_secs(10),
     };
 
-    match reactor.run(proxy.send(request)).unwrap() {
-        Response::Err { error: Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }), .. } => (),
-        other => panic!("expected NoSuchService error, got: {:?}", other),
-    };
+    match reactor.run(proxy.send::<()>(request)).unwrap_err().0 {
+        Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }) => (),
+        error => panic!("unexpected error: {}", error),
+    }
 
     assert_eq!(0, proxy_errors(&reporter.peek()));
 }
@@ -129,10 +126,11 @@ fn timeout() {
     // Timeout expires before the RPC is sent.
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now();
-    match reactor.run(proxy.add(request, deadline, &[])).unwrap() {
-        Response::Err { error: Error::TimedOut, .. } => (),
-        other => panic!("expected NoSuchService error, got: {:?}", other),
-    };
+
+    match reactor.run(proxy.add(request, deadline, &[])).unwrap_err().0 {
+        Error::TimedOut => (),
+        error => panic!("unexpected error: {}", error),
+    }
 
     assert_eq!(0, proxy_errors(&reporter.peek()));
 }
@@ -187,14 +185,10 @@ fn server_shutdown() {
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now() + Duration::from_secs(10);
 
-    if let Response::Err { error, .. } = reactor.run(proxy.add(request.clone(), deadline, &[])).unwrap() {
-        panic!("add request failed: {}", error)
-    }
+    reactor.run(proxy.add(request.clone(), deadline, &[])).expect("add request failed");
 
     drop(server);
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    if let Response::Ok { body, ..  } = reactor.run(proxy.add(request.clone(), deadline, &[])).unwrap() {
-        panic!("add request succeed: {:?}", body)
-    }
+    reactor.run(proxy.add(request.clone(), deadline, &[])).expect_err("add request failed");
 }

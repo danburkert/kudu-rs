@@ -391,26 +391,26 @@ impl fmt::Debug for Client {
 }
 
 /// Client configuration options.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ClientConfig {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientBuilder {
     /// A seed set of master addresses. Must contain at least one active master in the cluster.
-    master_addresses: Vec<SocketAddr>,
+    master_addresses: Vec<HostPort>,
+
+    admin_timeout: Duration,
 }
 
 impl ClientConfig {
-    pub fn new(master_addresses: Vec<SocketAddr>) -> ClientConfig {
+    pub fn new() {
+
+    }
+
+    pub fn build() {
+    }
+
+    pub fn new(master_addresses: Vec<String>) -> ClientConfig {
         ClientConfig {
-            master_addresses: master_addresses,
+            master_addresses: master_addresses.map(|addr| HostPort::parse(addr, 7051)).flatten()?,
         }
-    }
-
-    pub fn master_addresses(&self) -> &[SocketAddr] {
-        &self.master_addresses
-    }
-
-    pub fn set_master_addresses(&mut self, master_addresses: Vec<SocketAddr>) -> &mut ClientConfig {
-        self.master_addresses = master_addresses;
-        self
     }
 }
 

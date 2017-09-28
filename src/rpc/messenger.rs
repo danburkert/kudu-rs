@@ -231,7 +231,7 @@ mod tests {
 
         match result {
             Ok(()) => panic!("expected failure"),
-            Err(Error::Cancelled) => (),
+            Err(Error::Canceled) => (),
             Err(other) => panic!("unexpected error: {}", other),
         }
 

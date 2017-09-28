@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::marker;
 use std::time::Instant;
 
 use cpupool::CpuPool;
@@ -13,17 +14,19 @@ use futures::{
 };
 use futures::sync::{mpsc, oneshot};
 use itertools::Itertools;
+use prost::Message;
 use tokio::reactor::{
     Handle,
     Remote,
 };
 
 use Error;
+use HostPort;
 use Options;
-use RawResponse;
-use RawResponseFuture;
 use Request;
+use Response;
 use Rpc;
+use RpcResult;
 use connection::Connection;
 use connector::Connector;
 
@@ -37,7 +40,7 @@ pub struct Proxy {
 #[derive(Debug)]
 pub enum AsyncSend {
     /// The RPC was sent. The response will be returned through the included future.
-    Ready(oneshot::Receiver<RawResponse>),
+    Ready(oneshot::Receiver<RpcResult>),
     /// The connection is not ready.
     ///
     /// The current task will be scheduled to receive a notification when the `Proxy` is ready to
@@ -47,7 +50,7 @@ pub enum AsyncSend {
 
 impl Proxy {
 
-    pub fn spawn(hostports: Vec<String>,
+    pub fn spawn(hostports: Vec<HostPort>,
                  options: Options,
                  threadpool: CpuPool,
                  remote: &Remote)
@@ -83,11 +86,11 @@ impl Proxy {
     ///
     /// Typically users will not call this directly, but rather through a generated service trait
     /// implemented by `Proxy`.
-    pub fn send(&mut self, request: Request) -> RawResponseFuture {
+    pub fn send<T>(&mut self, request: Request) -> Response<T> where T: Message + Default {
         let (completer, receiver) = oneshot::channel();
         let rpc = Rpc {
             request,
-            completer
+            completer,
         };
 
         match self.sender.start_send(rpc) {
@@ -96,7 +99,10 @@ impl Proxy {
             Err(..) => unreachable!(),
         }
 
-        receiver
+        Response {
+            receiver,
+            _marker: marker::PhantomData,
+        }
     }
 }
 
@@ -117,7 +123,7 @@ impl fmt::Debug for ConnectionState {
 }
 
 struct ProxyTask {
-    hostports: Vec<String>,
+    hostports: Vec<HostPort>,
     options: Options,
     threadpool: CpuPool,
     handle: Handle,
@@ -253,7 +259,7 @@ impl Future for ProxyTask {
 impl fmt::Debug for ProxyTask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut debug = f.debug_struct("ProxyTask");
-        debug.field("hostports", &format_args!("{}", &self.hostports.iter().format(",")));
+        debug.field("hostports", &format_args!("{:?}", &self.hostports.iter().format(",")));
         debug.field("core", &self.handle.id());
         match self.connection_state {
             ConnectionState::Quiesced => debug.field("state", &self.connection_state),
