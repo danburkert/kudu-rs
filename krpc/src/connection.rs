@@ -133,8 +133,8 @@ impl Connection {
                              &*rpc.request.body,
                              Some(rpc.request.deadline - now));
 
-        // Regardless of whether the send succeeded, add the RPC to the in-flight queue.
-        // The upstream Proxy will remove it and retry it if the send failed.
+        // Regardless of the result of the send, add the RPC to the in-flight queue. The upstream
+        // Proxy will remove it and retry it if the send failed.
         self.in_flight_rpcs.insert(call_id, rpc);
         match send {
             Ok(()) => Ok(()),

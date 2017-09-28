@@ -1,7 +1,3 @@
-extern crate prost_types;
-
-#[macro_use] extern crate prost_derive;
-
 mod kudu {
     include!(concat!(env!("OUT_DIR"), "/kudu.rs"));
 
@@ -25,4 +21,4 @@ mod kudu {
     }
 }
 
-pub use kudu::*;
+pub use pb::kudu::*;

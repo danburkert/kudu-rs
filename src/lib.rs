@@ -3,22 +3,20 @@
 
 extern crate byteorder;
 extern crate chrono;
-extern crate crossbeam;
-extern crate fnv;
 extern crate futures_cpupool;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
 extern crate krpc;
-extern crate netbuf;
 extern crate parking_lot;
 extern crate prost;
+extern crate prost_types;
 extern crate rand;
-extern crate slab;
-extern crate take_mut;
 extern crate tokio_timer;
 extern crate uuid;
 extern crate vec_map;
+
+#[macro_use] extern crate prost_derive;
 
 #[cfg(test)] extern crate env_logger;
 #[cfg(test)] extern crate tempdir;
@@ -31,6 +29,9 @@ extern crate vec_map;
 #[macro_use] extern crate log;
 #[macro_use] extern crate tokio_core as tokio;
 
+pub mod pb;
+
+mod master3;
 // //mod client;
 // //mod master;
 // mod master2;
@@ -39,29 +40,28 @@ extern crate vec_map;
 // //mod tablet;
 // //mod tablet_server;
 // //mod writer;
-// mod backoff;
-// mod bit_set;
+mod backoff;
+mod bit_set;
 // mod dns;
-// mod error;
+mod error;
 // //mod io;
 // mod key;
 // mod partition;
 // mod queue_map;
-// mod row;
+mod row;
 // mod rpc;
-// mod schema;
-// mod util;
-// mod value;
+mod schema;
+mod util;
+mod value;
 // mod list_masters;
 
-/*
 #[cfg(test)]
 mod mini_cluster;
 
 //pub use client::*;
 pub use error::*;
 //pub use master::Master;
-pub use partition::*;
+//pub use partition::*;
 pub use row::Row;
 pub use schema::*;
 //pub use table::*;
@@ -71,10 +71,7 @@ pub use value::Value;
 //pub use writer::*;
 
 use std::fmt;
-use std::io;
-use std::net;
 use std::str;
-use std::vec;
 
 use uuid::Uuid;
 
@@ -111,33 +108,34 @@ impl DataType {
         }
     }
 
-    fn to_pb(self) -> kudu_pb::DataType {
-        match self {
-            DataType::Bool => kudu_pb::DataType::Bool,
-            DataType::Int8 => kudu_pb::DataType::Int8,
-            DataType::Int16 => kudu_pb::DataType::Int16,
-            DataType::Int32 => kudu_pb::DataType::Int32,
-            DataType::Int64 => kudu_pb::DataType::Int64,
-            DataType::Timestamp => kudu_pb::DataType::Timestamp,
-            DataType::Float => kudu_pb::DataType::Float,
-            DataType::Double => kudu_pb::DataType::Double,
-            DataType::Binary => kudu_pb::DataType::Binary,
-            DataType::String => kudu_pb::DataType::String,
-        }
+    fn to_pb(self) -> i32 {
+        let val = match self {
+            DataType::Bool => pb::DataType::Bool,
+            DataType::Int8 => pb::DataType::Int8,
+            DataType::Int16 => pb::DataType::Int16,
+            DataType::Int32 => pb::DataType::Int32,
+            DataType::Int64 => pb::DataType::Int64,
+            DataType::Timestamp => pb::DataType::UnixtimeMicros,
+            DataType::Float => pb::DataType::Float,
+            DataType::Double => pb::DataType::Double,
+            DataType::Binary => pb::DataType::Binary,
+            DataType::String => pb::DataType::String,
+        };
+        val as i32
     }
 
-    fn from_pb(pb: kudu_pb::DataType) -> Result<DataType> {
+    fn from_pb(pb: pb::DataType) -> Result<DataType> {
         match pb {
-            kudu_pb::DataType::BOOL => Ok(DataType::Bool),
-            kudu_pb::DataType::INT8 => Ok(DataType::Int8),
-            kudu_pb::DataType::INT16 => Ok(DataType::Int16),
-            kudu_pb::DataType::INT32 => Ok(DataType::Int32),
-            kudu_pb::DataType::INT64 => Ok(DataType::Int64),
-            kudu_pb::DataType::TIMESTAMP => Ok(DataType::Timestamp),
-            kudu_pb::DataType::FLOAT => Ok(DataType::Float),
-            kudu_pb::DataType::DOUBLE => Ok(DataType::Double),
-            kudu_pb::DataType::BINARY => Ok(DataType::Binary),
-            kudu_pb::DataType::STRING => Ok(DataType::String),
+            pb::DataType::Bool => Ok(DataType::Bool),
+            pb::DataType::Int8 => Ok(DataType::Int8),
+            pb::DataType::Int16 => Ok(DataType::Int16),
+            pb::DataType::Int32 => Ok(DataType::Int32),
+            pb::DataType::Int64 => Ok(DataType::Int64),
+            pb::DataType::UnixtimeMicros => Ok(DataType::Timestamp),
+            pb::DataType::Float => Ok(DataType::Float),
+            pb::DataType::Double => Ok(DataType::Double),
+            pb::DataType::Binary => Ok(DataType::Binary),
+            pb::DataType::String => Ok(DataType::String),
             _ => Err(Error::Serialization("unknown data type".to_string())),
         }
     }
@@ -186,27 +184,28 @@ pub enum EncodingType {
 }
 
 impl EncodingType {
-    fn to_pb(self) -> kudu_pb::EncodingType {
-        match self {
-            EncodingType::Auto => kudu_pb::EncodingType::AutoEncoding,
-            EncodingType::Plain => kudu_pb::EncodingType::PlainEncoding,
-            EncodingType::Prefix => kudu_pb::EncodingType::PrefixEncoding,
-            EncodingType::GroupVarint => kudu_pb::EncodingType::GroupVarint,
-            EncodingType::RunLength => kudu_pb::EncodingType::Rle,
-            EncodingType::Dictionary => kudu_pb::EncodingType::DictEncoding,
-            EncodingType::BitShuffle => kudu_pb::EncodingType::BitShuffle,
-        }
+    fn to_pb(self) -> i32 {
+        let val = match self {
+            EncodingType::Auto => pb::EncodingType::AutoEncoding,
+            EncodingType::Plain => pb::EncodingType::PlainEncoding,
+            EncodingType::Prefix => pb::EncodingType::PrefixEncoding,
+            EncodingType::GroupVarint => pb::EncodingType::GroupVarint,
+            EncodingType::RunLength => pb::EncodingType::Rle,
+            EncodingType::Dictionary => pb::EncodingType::DictEncoding,
+            EncodingType::BitShuffle => pb::EncodingType::BitShuffle,
+        };
+        val as i32
     }
 
-    fn from_pb(pb: kudu_pb::EncodingType) -> Result<EncodingType> {
+    fn from_pb(pb: pb::EncodingType) -> Result<EncodingType> {
         match pb {
-            kudu_pb::EncodingType::AutoEncoding => Ok(EncodingType::Auto),
-            kudu_pb::EncodingType::PlainEncoding => Ok(EncodingType::Plain),
-            kudu_pb::EncodingType::PrefixEncoding => Ok(EncodingType::Prefix),
-            kudu_pb::EncodingType::GroupVarint => Ok(EncodingType::GroupVarint),
-            kudu_pb::EncodingType::Rle => Ok(EncodingType::RunLength),
-            kudu_pb::EncodingType::DictEncoding => Ok(EncodingType::Dictionary),
-            kudu_pb::EncodingType::BitShuffle => Ok(EncodingType::BitShuffle),
+            pb::EncodingType::AutoEncoding => Ok(EncodingType::Auto),
+            pb::EncodingType::PlainEncoding => Ok(EncodingType::Plain),
+            pb::EncodingType::PrefixEncoding => Ok(EncodingType::Prefix),
+            pb::EncodingType::GroupVarint => Ok(EncodingType::GroupVarint),
+            pb::EncodingType::Rle => Ok(EncodingType::RunLength),
+            pb::EncodingType::DictEncoding => Ok(EncodingType::Dictionary),
+            pb::EncodingType::BitShuffle => Ok(EncodingType::BitShuffle),
             _ => Err(Error::Serialization("unknown encoding type".to_string())),
         }
     }
@@ -251,23 +250,24 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    fn to_pb(self) -> kudu_pb::CompressionType {
-        match self {
-            CompressionType::Default => kudu_pb::CompressionType::DEFAULT_COMPRESSION,
-            CompressionType::None => kudu_pb::CompressionType::NO_COMPRESSION,
-            CompressionType::Snappy => kudu_pb::CompressionType::SNAPPY,
-            CompressionType::Lz4 => kudu_pb::CompressionType::LZ4,
-            CompressionType::Zlib => kudu_pb::CompressionType::ZLIB,
-        }
+    fn to_pb(self) -> i32 {
+        let val = match self {
+            CompressionType::Default => pb::CompressionType::DefaultCompression,
+            CompressionType::None => pb::CompressionType::NoCompression,
+            CompressionType::Snappy => pb::CompressionType::Snappy,
+            CompressionType::Lz4 => pb::CompressionType::Lz4,
+            CompressionType::Zlib => pb::CompressionType::Zlib,
+        };
+        val as i32
     }
 
-    fn from_pb(pb: kudu_pb::CompressionType) -> Result<CompressionType> {
+    fn from_pb(pb: pb::CompressionType) -> Result<CompressionType> {
         match pb {
-            kudu_pb::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
-            kudu_pb::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
-            kudu_pb::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
-            kudu_pb::CompressionType::LZ4 => Ok(CompressionType::Lz4),
-            kudu_pb::CompressionType::ZLIB => Ok(CompressionType::Zlib),
+            pb::CompressionType::DefaultCompression => Ok(CompressionType::Default),
+            pb::CompressionType::NoCompression => Ok(CompressionType::None),
+            pb::CompressionType::Snappy => Ok(CompressionType::Snappy),
+            pb::CompressionType::Lz4 => Ok(CompressionType::Lz4),
+            pb::CompressionType::Zlib => Ok(CompressionType::Zlib),
             _ => Err(Error::Serialization("unknown compression type".to_string())),
         }
     }
@@ -286,35 +286,18 @@ impl quickcheck::Arbitrary for CompressionType {
     }
 }
 
-/// The role of a Kudu master or tserver in a consensus group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RaftRole {
-    Follower,
-    Leader,
-    Learner,
-    NonParticipant,
-    Unknown,
-}
+pub use pb::consensus::raft_peer_pb::{Role as RaftRole};
+pub use pb::{HostPortPb as HostPort};
 
-impl RaftRole {
-    fn from_pb(pb: kudu_pb::consensus_metadata::RaftPeerPB_Role) -> RaftRole {
-        match pb {
-            kudu_pb::consensus_metadata::RaftPeerPB_Role::UNKNOWN_ROLE => RaftRole::Unknown,
-            kudu_pb::consensus_metadata::RaftPeerPB_Role::FOLLOWER => RaftRole::Follower,
-            kudu_pb::consensus_metadata::RaftPeerPB_Role::LEADER => RaftRole::Leader,
-            kudu_pb::consensus_metadata::RaftPeerPB_Role::LEARNER => RaftRole::Learner,
-            kudu_pb::consensus_metadata::RaftPeerPB_Role::NON_PARTICIPANT => RaftRole::NonParticipant,
-        }
-    }
-}
 
+/*
 pub struct HostPort {
     pub host: String,
     pub port: u16,
 }
 
 impl HostPort {
-    pub fn from_pb(mut pb: kudu_pb::HostPortPB) -> HostPort {
+    pub fn from_pb(mut pb: pb::HostPortPB) -> HostPort {
         HostPort {
             host: pb.take_host(),
             port: pb.get_port() as u16,
@@ -328,6 +311,7 @@ impl net::ToSocketAddrs for HostPort {
         (&self.host[..], self.port).to_socket_addrs()
     }
 }
+*/
 
 macro_rules! id {
     ($id:ident) => {
@@ -372,4 +356,3 @@ id!(ReplicaId);
 id!(TableId);
 id!(TabletId);
 id!(TabletServerId);
-*/

@@ -1,6 +1,7 @@
 extern crate curl;
 extern crate env_logger;
 extern crate flate2;
+extern crate krpc_build;
 extern crate prost_build;
 extern crate tar;
 
@@ -42,10 +43,12 @@ fn main() {
                 .unpack(target).expect("failed to unpack Kudu source tarball");
     }
 
-    prost_build::compile_protos(&[dir.join("src/kudu/client/client.proto"),
-                                  dir.join("src/kudu/consensus/metadata.proto"),
-                                  dir.join("src/kudu/master/master.proto"),
-                                  dir.join("src/kudu/rpc/rpc_header.proto"),
-                                  dir.join("src/kudu/tserver/tserver_service.proto")],
-                                &[dir.join("src")]).unwrap();
+    prost_build::Config::new()
+                        .service_generator(Box::new(krpc_build::KrpcServiceGenerator))
+                        .compile_protos(&[dir.join("src/kudu/client/client.proto"),
+                                          dir.join("src/kudu/consensus/metadata.proto"),
+                                          dir.join("src/kudu/master/master.proto"),
+                                          dir.join("src/kudu/rpc/rpc_header.proto"),
+                                          dir.join("src/kudu/tserver/tserver_service.proto")],
+                                        &[dir.join("src")]).unwrap();
 }

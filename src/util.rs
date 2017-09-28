@@ -3,16 +3,12 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::{UNIX_EPOCH, Instant, SystemTime};
 
 use chrono;
-use crossbeam::sync::SegQueue;
-use futures::task::{EventSet, UnparkEvent, with_unpark_event};
-use futures::{Async, Future, IntoFuture, Poll, Stream};
+use futures::{Async, Future, Poll, Stream};
 use ifaces;
-use slab::Slab;
 use tokio_timer;
 
 use DataType;
@@ -45,7 +41,6 @@ pub fn time_to_us(time: &SystemTime) -> i64 {
             (- ((duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) as i64))
         }
     }
-
 }
 
 pub fn us_to_time(us: i64) -> SystemTime {
@@ -114,85 +109,12 @@ pub fn is_local_addr(addr: &IpAddr) -> bool {
     LOCAL_ADDRS.contains(addr) || addr.is_loopback()
 }
 
-
 pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
     match (a, b) {
         (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
         (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
         (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
         (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
-    }
-}
-
-/// Creates a new stream from a collection of futures, yielding items in order
-/// of completion.
-// TODO: wat is this type signature?
-pub fn select_stream<I>(futures: I) -> SelectStream<<<I as IntoIterator>::Item as IntoFuture>::Future>
-where I: IntoIterator,
-      I::Item: IntoFuture,
-      I::IntoIter: ExactSizeIterator {
-    let iter = futures.into_iter();
-    let mut slab = Slab::with_capacity(iter.len());
-    let event_set = SegQueueEventSet::new();
-    for f in iter {
-        let idx = match slab.insert(f.into_future()) {
-            Ok(idx) => idx,
-            _ => unreachable!(),
-        };
-        event_set.insert(idx);
-    }
-    SelectStream {
-        slab: slab,
-        event_set: Arc::new(event_set),
-    }
-}
-
-/// Stream which yields items from a collection of futures in completion order.
-#[derive(Debug)]
-#[must_use = "streams do nothing unless polled"]
-pub struct SelectStream<F> where F: Future {
-    slab: Slab<F>,
-    event_set: Arc<SegQueueEventSet>,
-}
-
-impl <F> SelectStream<F> where F: Future {
-    pub fn add(&mut self, f: F) {
-        if !self.slab.has_available() {
-            let len = self.slab.len();
-            self.slab.reserve_exact(if len < 4 { 8 - len } else { len / 2 });
-        }
-        let idx = match self.slab.insert(f) {
-            Ok(idx) => idx,
-            _ => unreachable!(),
-        };
-        self.event_set.insert(idx);
-    }
-}
-
-impl<F> Stream for SelectStream<F> where F: Future {
-    type Item = F::Item;
-    type Error = F::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.slab.is_empty() {
-            assert!(self.event_set.0.try_pop().is_none());
-            return Ok(Async::Ready(None));
-        }
-        let SelectStream { ref mut slab, ref event_set } = *self;
-        while let Some(idx) = event_set.0.try_pop() {
-            if let Some(mut entry) = slab.entry(idx) {
-                let event = UnparkEvent::new(event_set.clone(), idx);
-                let poll = with_unpark_event(event, || entry.get_mut().poll());
-                let result = match poll {
-                    Ok(Async::NotReady) => continue,
-                    Ok(Async::Ready(item)) => Ok(Async::Ready(Some(item))),
-                    Err(error) => Err(error),
-                };
-                entry.remove();
-                return result;
-            }
-        }
-        Ok(Async::NotReady)
     }
 }
 
@@ -317,122 +239,6 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
     }
 }
 
-/// The status of a `tail_fn` loop.
-pub enum Tail<T, S> {
-    /// Indicates that the loop has completed with output `T`.
-    Done(T),
-
-    /// Indicates that the loop function should be called again with input
-    /// state `S`.
-    Loop(S),
-}
-
-/// TODO: remove once `futures::TailFn` is released.
-#[must_use = "futures do nothing unless polled"]
-pub struct TailFn<A, F> {
-    future: A,
-    func: F,
-}
-
-/// TODO: use `futures::tail_fn` once it's released.
-pub fn tail_fn<S, T, I, A, F>(initial_state: S, mut func: F) -> TailFn<A, F>
-    where F: FnMut(S) -> I,
-          A: Future<Item = Tail<T, S>>,
-          I: IntoFuture<Future = A, Item = A::Item, Error = A::Error>
-{
-    TailFn {
-        future: func(initial_state).into_future(),
-        func: func,
-    }
-}
-
-impl<S, T, I, A, F> Future for TailFn<A, F>
-    where F: FnMut(S) -> I,
-          A: Future<Item = Tail<T, S>>,
-          I: IntoFuture<Future = A, Item = A::Item, Error = A::Error>
-{
-    type Item = T;
-    type Error = A::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            match try_ready!(self.future.poll()) {
-                Tail::Done(x) => return Ok(Async::Ready(x)),
-                Tail::Loop(s) => self.future = (self.func)(s).into_future(),
-            }
-        }
-    }
-}
-
-/// TODO: replace with `futures::PollFn`.
-#[must_use = "futures do nothing unless polled"]
-pub struct PollFn<F> {
-    inner: F,
-}
-
-/// TODO: replace with `futures::poll_fn`.
-pub fn poll_fn<T, E, F>(f: F) -> PollFn<F> where F: FnMut() -> Poll<T, E> {
-    PollFn { inner: f }
-}
-
-impl<T, E, F> Future for PollFn<F> where F: FnMut() -> Poll<T, E> {
-    type Item = T;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<T, E> {
-        (self.inner)()
-    }
-}
-
-#[derive(Debug)]
-struct SegQueueEventSet(SegQueue<usize>);
-impl SegQueueEventSet {
-    fn new() -> SegQueueEventSet {
-        SegQueueEventSet(SegQueue::new())
-    }
-}
-impl EventSet for SegQueueEventSet {
-    fn insert(&self, id: usize) {
-        self.0.push(id);
-    }
-}
-
-
-#[must_use = "futures do nothing unless polled"]
-pub struct Find<S, P> {
-    stream: S,
-    pred: P,
-}
-
-pub fn find<S, P>(stream: S, predicate: P) -> Find<S, P>
-where S: Stream,
-      P: FnMut(&S::Item) -> bool
-{
-    Find {
-        stream: stream,
-        pred: predicate,
-    }
-}
-
-impl<S, P> Future for Find<S, P>
-where S: Stream,
-      P: FnMut(&S::Item) -> bool
-{
-    type Item = Option<S::Item>;
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Option<S::Item>, Self::Error> {
-        loop {
-            match try_ready!(self.stream.poll()) {
-                Some(item) => if (self.pred)(&item) {
-                    return Ok(Async::Ready(Some(item)))
-                },
-                None => return Ok(Async::Ready(None)),
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -440,8 +246,6 @@ mod tests {
     use std::net::ToSocketAddrs;
 
     use env_logger;
-    use futures::sync::oneshot;
-    use futures;
     use quickcheck::{quickcheck, TestResult};
 
     use schema;
@@ -469,26 +273,6 @@ mod tests {
         row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
         assert_eq!("Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z",
                    &format!("{:?}", row));
-    }
-
-    #[test]
-    fn test_select_stream() {
-        let _ = env_logger::init();
-        let (a_tx, a_rx) = oneshot::channel::<u32>();
-        let (b_tx, b_rx) = oneshot::channel::<u32>();
-        let (c_tx, c_rx) = oneshot::channel::<u32>();
-
-        let stream = select_stream(vec![a_rx, b_rx, c_rx]);
-
-        let mut spawn = futures::executor::spawn(stream);
-        b_tx.complete(99);
-        assert_eq!(Some(Ok(99)), spawn.wait_stream());
-
-        a_tx.complete(33);
-        c_tx.complete(33);
-        assert_eq!(Some(Ok(33)), spawn.wait_stream());
-        assert_eq!(Some(Ok(33)), spawn.wait_stream());
-        assert_eq!(None, spawn.wait_stream());
     }
 
     #[test]

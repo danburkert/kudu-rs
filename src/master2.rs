@@ -7,21 +7,21 @@ use std::any::Any;
 
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use parking_lot::Mutex;
-use kudu_pb::master::{
-    AlterTableRequestPB, AlterTableResponsePB,
-    CreateTableRequestPB, CreateTableResponsePB,
-    DeleteTableRequestPB, DeleteTableResponsePB,
-    GetTableLocationsRequestPB, GetTableLocationsResponsePB,
-    GetTableSchemaRequestPB, GetTableSchemaResponsePB,
-    GetTabletLocationsRequestPB, GetTabletLocationsResponsePB,
-    IsAlterTableDoneRequestPB, IsAlterTableDoneResponsePB,
-    IsCreateTableDoneRequestPB, IsCreateTableDoneResponsePB,
-    ListMastersRequestPB, ListMastersResponsePB,
-    ListTablesRequestPB, ListTablesResponsePB,
-    ListTabletServersRequestPB, ListTabletServersResponsePB,
-    PingRequestPB, PingResponsePB,
+use pb::master::{
+    AlterTableRequestPb, AlterTableResponsePb,
+    CreateTableRequestPb, CreateTableResponsePb,
+    DeleteTableRequestPb, DeleteTableResponsePb,
+    GetTableLocationsRequestPb, GetTableLocationsResponsePb,
+    GetTableSchemaRequestPb, GetTableSchemaResponsePb,
+    GetTabletLocationsRequestPb, GetTabletLocationsResponsePb,
+    IsAlterTableDoneRequestPb, IsAlterTableDoneResponsePb,
+    IsCreateTableDoneRequestPb, IsCreateTableDoneResponsePb,
+    ListMastersRequestPb, ListMastersResponsePb,
+    ListTablesRequestPb, ListTablesResponsePb,
+    ListTabletServersRequestPb, ListTabletServersResponsePb,
+    PingRequestPb, PingResponsePb,
 };
-use kudu_pb::{ServerEntryPB as MasterEntry};
+use pb::{ServerEntryPb as MasterEntry};
 use futures::sync::{mpsc, oneshot};
 use tokio::reactor::Handle;
 use tokio_timer;
@@ -212,8 +212,6 @@ impl Future for MasterProxyTask {
         Ok(Async::NotReady)
     }
 }
-
-
 
 pub trait MasterResponse: Message + Any {
     fn error(&mut self) -> Option<MasterError>;

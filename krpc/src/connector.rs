@@ -15,10 +15,11 @@ use futures::{
     Poll,
     Stream,
 };
-use futures::stream::FuturesUnordered; use Error;
+use futures::stream::FuturesUnordered;
 use tacho;
 use tokio::reactor::Handle;
 
+use Error;
 use Options;
 use connection::Connection;
 use negotiator::Negotiator;

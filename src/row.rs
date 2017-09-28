@@ -3,7 +3,7 @@ use std::fmt;
 use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
-use kudu_pb::row_operations_pb::{Type as OperationType};
+use pb::row_operations_pb::{Type as OperationType};
 
 use bit_set::BitSet;
 use vec_map::VecMap;
@@ -79,7 +79,7 @@ impl Row {
                                        idx: usize,
                                        value: V)
                                        -> &mut Row where V: Value<'a> {
-        debug_assert_eq!(Ok(()), self.check_column_for_write::<V>(idx));
+        debug_assert!(self.check_column_for_write::<V>(idx).is_ok());
         self.set_columns.insert(idx);
         if value.is_null() {
             self.null_columns.insert(idx);
@@ -319,7 +319,7 @@ impl OperationEncoder {
     }
 
     pub fn encode_range_split(&mut self, row: &Row) {
-        self.encode_row(OperationType::SPLIT_ROW, row);
+        self.encode_row(OperationType::SplitRow, row);
     }
 
     /*
@@ -339,7 +339,7 @@ impl OperationEncoder {
     */
 
     pub fn encode_range_partition_split(&mut self, split: &Row) {
-        self.encode_row(OperationType::SPLIT_ROW, split);
+        self.encode_row(OperationType::SplitRow, split);
     }
 
     pub fn encode_row(&mut self, op_type: OperationType, row: &Row) {

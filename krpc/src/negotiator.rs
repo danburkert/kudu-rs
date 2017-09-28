@@ -5,6 +5,7 @@ use std::fmt;
 use futures::{
     Async,
     Future,
+    Poll,
 };
 use prost::Message;
 
@@ -70,7 +71,7 @@ pub struct Inner {
 
 impl Inner {
 
-    fn poll(&mut self) -> Result<Async<()>, Error> {
+    fn poll(&mut self) -> Poll<(), Error> {
         match self.pb.step() {
             NegotiateStep::Unknown => self.do_initial_step(),
             NegotiateStep::Negotiate => self.do_negotiate_step(),
@@ -84,7 +85,7 @@ impl Inner {
         self.transport.send(NEGOTIATION_CALL_ID, "", "", &[], &self.pb, None)
     }
 
-    fn recv_negotiate_pb(&mut self) -> Result<Async<()>, Error> {
+    fn recv_negotiate_pb(&mut self) -> Poll<(), Error> {
         trace!("{:?}: recv_negotiate_pb", self);
         let (call_id, response) = try_ready!(self.transport.poll());
         if call_id != NEGOTIATION_CALL_ID {
@@ -112,7 +113,7 @@ impl Inner {
         }
     }
 
-    fn do_initial_step(&mut self) -> Result<Async<()>, Error> {
+    fn do_initial_step(&mut self) -> Poll<(), Error> {
         trace!("{:?}: do_initial_step", self);
         self.pb.clear();
         self.pb.supported_features.push(RpcFeatureFlag::ApplicationFeatureFlags as i32);
@@ -126,7 +127,7 @@ impl Inner {
         self.do_negotiate_step()
     }
 
-    fn do_negotiate_step(&mut self) -> Result<Async<()>, Error> {
+    fn do_negotiate_step(&mut self) -> Poll<(), Error> {
         trace!("{:?}: do_negotiate_step", self);
         try_ready!(self.recv_negotiate_pb());
 
@@ -156,7 +157,7 @@ impl Inner {
         }
     }
 
-    fn do_sasl_initiate(&mut self) -> Result<Async<()>, Error> {
+    fn do_sasl_initiate(&mut self) -> Poll<(), Error> {
         trace!("{:?}: do_sasl_initiate", self);
         // Determine which mechanism to use.
         let server_mechs = self.pb
@@ -175,7 +176,7 @@ impl Inner {
         self.do_sasl_plain_initiate()
     }
 
-    fn do_sasl_plain_initiate(&mut self) -> Result<Async<()>, Error> {
+    fn do_sasl_plain_initiate(&mut self) -> Poll<(), Error> {
         trace!("{:?}: do_sasl_plain_initiate", self);
         self.pb.step = NegotiateStep::SaslInitiate as i32;
         self.pb.token = Some(b"\0kudu-rs-user\0".to_vec());
@@ -184,7 +185,7 @@ impl Inner {
         self.do_sasl_plain_step()
     }
 
-    fn do_sasl_plain_step(&mut self) -> Result<Async<()>, Error> {
+    fn do_sasl_plain_step(&mut self) -> Poll<(), Error> {
         trace!("{:?}: do_sasl_plain_step", self);
         try_ready!(self.recv_negotiate_pb());
 
@@ -241,7 +242,7 @@ impl Future for Negotiator {
     type Item = Transport;
     type Error = Error;
 
-    fn poll(&mut self) -> Result<Async<Transport>, Error> {
+    fn poll(&mut self) -> Poll<Transport, Error> {
         debug!("{:?}: poll", self);
         match self.inner {
             Some(ref mut inner) => try_ready!(inner.poll()),

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use kudu_pb::{ColumnSchemaPB, SchemaPB};
+use pb::{ColumnSchemaPb, SchemaPb};
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
 use CompressionType;
@@ -119,30 +119,28 @@ impl Column {
         self
     }
 
-    #[doc(hidden)]
-    pub fn to_pb(&self, is_key: bool) -> ColumnSchemaPB {
-        let mut pb = ColumnSchemaPB::new();
-        pb.set_name(self.name.clone());
-        pb.set_field_type(self.data_type.to_pb());
-        pb.set_is_nullable(self.is_nullable);
-        pb.set_is_key(is_key);
-        pb.set_encoding(self.encoding.to_pb());
-        pb.set_compression(self.compression.to_pb());
-        // TODO: checked cast.
-        pb.set_cfile_block_size(self.block_size as i32);
-        pb
+    pub(crate) fn to_pb(&self, is_key: bool) -> ColumnSchemaPb {
+        ColumnSchemaPb {
+            name: self.name.clone(),
+            type_: self.data_type.to_pb(),
+            is_nullable: Some(self.is_nullable),
+            is_key: Some(is_key),
+            encoding: Some(self.encoding.to_pb()),
+            compression: Some(self.compression.to_pb()),
+            // TODO: checked cast.
+            cfile_block_size: Some(self.block_size as i32),
+            ..Default::default()
+        }
     }
 
-    #[doc(hidden)]
-    pub fn from_pb(mut pb: ColumnSchemaPB) -> Result<Column> {
+    pub(crate) fn from_pb(pb: ColumnSchemaPb) -> Result<Column> {
         Ok(Column {
-            name: pb.take_name(),
-            data_type: try!(DataType::from_pb(pb.get_field_type())),
-            is_nullable: pb.get_is_nullable(),
-            compression: try!(CompressionType::from_pb(pb.get_compression())),
-            encoding: try!(EncodingType::from_pb(pb.get_encoding())),
-            // TODO: checked cast.
-            block_size: pb.get_cfile_block_size() as u32,
+            is_nullable: pb.is_nullable(),
+            data_type: try!(DataType::from_pb(pb.type_())),
+            compression: try!(CompressionType::from_pb(pb.compression())),
+            encoding: try!(EncodingType::from_pb(pb.encoding())),
+            block_size: pb.cfile_block_size() as u32,
+            name: pb.name,
         })
     }
 }
@@ -227,8 +225,7 @@ impl Schema {
         &self.inner.columns[0..self.inner.num_primary_key_columns]
     }
 
-    #[doc(hidden)]
-    pub fn num_primary_key_columns(&self) -> usize {
+    pub(crate) fn num_primary_key_columns(&self) -> usize {
         self.inner.num_primary_key_columns
     }
 
@@ -258,21 +255,19 @@ impl Schema {
         this == that
     }
 
-    #[doc(hidden)]
-    pub fn as_pb(&self) -> SchemaPB {
-        let mut pb = SchemaPB::new();
+    pub(crate) fn as_pb(&self) -> SchemaPb {
+        let mut pb = SchemaPb::default();
         for (idx, column) in self.inner.columns.iter().enumerate() {
-            pb.mut_columns().push(column.to_pb(idx < self.inner.num_primary_key_columns));
+            pb.columns.push(column.to_pb(idx < self.inner.num_primary_key_columns));
         }
         pb
     }
 
-    #[doc(hidden)]
-    pub fn from_pb(mut pb: SchemaPB) -> Result<Schema> {
+    pub(crate) fn from_pb(pb: SchemaPb) -> Result<Schema> {
         let mut num_primary_key_columns = 0;
-        let mut columns = Vec::with_capacity(pb.get_columns().len());
-        for column in pb.take_columns().into_iter() {
-            if column.get_is_key() { num_primary_key_columns += 1 }
+        let mut columns = Vec::with_capacity(pb.columns.len());
+        for column in pb.columns.into_iter() {
+            if column.is_key() { num_primary_key_columns += 1 }
             columns.push(try!(Column::from_pb(column)))
         }
         Ok(Schema::new(columns, num_primary_key_columns))
