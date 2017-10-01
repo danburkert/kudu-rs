@@ -45,6 +45,19 @@ pub enum Error {
 
     /// An operation failed because the range partition did not exist.
     NoRangePartition,
+
+    /// A compound error.
+    Compound(String, Vec<Error>),
+}
+
+impl Error {
+    pub(crate) fn is_retriable(&self) -> bool {
+        match *self {
+            Error::Rpc(ref error) => error.is_retriable(),
+            Error::Master(ref error) => error.is_retriable(),
+            _ => false,
+        }
+    }
 }
 
 impl Clone for Error {
@@ -54,15 +67,12 @@ impl Clone for Error {
             Error::Rpc(ref error) => Error::Rpc(error.clone()),
             Error::Master(ref error) => Error::Master(error.clone()),
             Error::TabletServer(ref error) => Error::TabletServer(error.clone()),
-            Error::Io(ref error) => {
-                // We (and our dependencies) never create an IO error with a boxed error object, so
-                // this unwrap is ok.
-                Error::Io(io::Error::from_raw_os_error(error.raw_os_error().unwrap()))
-            },
+            Error::Io(ref error) => Error::Io(io::Error::from(error.kind())),
             Error::Serialization(ref error) => Error::Serialization(error.clone()),
             Error::TimedOut => Error::TimedOut,
             Error::Negotiation(ref error) => Error::Negotiation(error.clone()),
             Error::NoRangePartition => Error::NoRangePartition,
+            Error::Compound(ref description, ref errors) => Error::Compound(description.clone(), errors.clone()),
         }
     }
 }
@@ -79,6 +89,7 @@ impl error::Error for Error {
             Error::TimedOut => "operation timed out",
             Error::Negotiation(ref error) => error,
             Error::NoRangePartition => "no range partition",
+            Error::Compound(ref description, _) => description,
         }
     }
 
@@ -93,6 +104,19 @@ impl error::Error for Error {
             Error::TimedOut => None,
             Error::Negotiation(_) => None,
             Error::NoRangePartition => None,
+            Error::Compound(_, ref errors) => errors.iter().next().map(|error| error as _),
+        }
+    }
+}
+
+impl From<krpc::Error> for Error {
+    fn from(error: krpc::Error) -> Error {
+        match error {
+            krpc::Error::Rpc(error) => Error::Rpc(error),
+            krpc::Error::Io(error) => Error::Io(error),
+            krpc::Error::Serialization(msg) => Error::Serialization(msg),
+            krpc::Error::TimedOut => Error::TimedOut,
+            krpc::Error::Negotiation(msg) => Error::Negotiation(msg),
         }
     }
 }

@@ -64,7 +64,6 @@ enum Leader {
 }
 
 impl Leader {
-
     fn poll_cxn(&mut self) -> Poll<&mut Connection<RpcState>, !> {
         loop {
             let (cxn, replicas) = match *self {
@@ -74,7 +73,6 @@ impl Leader {
             *self = Leader::Known(cxn, replicas);
         }
     }
-
 }
 
 struct MasterProxyTask {

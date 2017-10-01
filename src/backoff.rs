@@ -63,6 +63,12 @@ impl Backoff {
     }
 }
 
+impl Default for Backoff {
+    fn default() -> Self {
+        Backoff::with_duration_range(10, u32::max_value())
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

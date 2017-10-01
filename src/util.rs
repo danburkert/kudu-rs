@@ -9,7 +9,7 @@ use std::time::{UNIX_EPOCH, Instant, SystemTime};
 use chrono;
 use futures::{Async, Future, Poll, Stream};
 use ifaces;
-use tokio_timer;
+use timer;
 
 use DataType;
 use Row;
@@ -119,7 +119,7 @@ pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
 }
 
 /// Returns a stream which yields elements according to the backoff policy.
-pub fn backoff_stream(mut backoff: Backoff, timer: tokio_timer::Timer) -> BackoffStream {
+pub fn backoff_stream(mut backoff: Backoff, timer: timer::Timer) -> BackoffStream {
     let sleep = timer.sleep(backoff.next_backoff());
     BackoffStream {
         backoff: backoff,
@@ -131,8 +131,8 @@ pub fn backoff_stream(mut backoff: Backoff, timer: tokio_timer::Timer) -> Backof
 #[must_use = "streams do nothing unless polled"]
 pub struct BackoffStream {
     backoff: Backoff,
-    timer: tokio_timer::Timer,
-    sleep: tokio_timer::Sleep
+    timer: timer::Timer,
+    sleep: timer::Sleep
 }
 impl Stream for BackoffStream {
     type Item = ();
@@ -145,7 +145,7 @@ impl Stream for BackoffStream {
     }
 }
 
-pub fn retry_with_backoff<R, F>(timer: tokio_timer::Timer,
+pub fn retry_with_backoff<R, F>(timer: timer::Timer,
                                 mut backoff: Backoff,
                                 mut retry: R)
                                 -> RetryWithBackoff<R, F>
@@ -191,8 +191,8 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
 {
     backoff: Backoff,
-    timer: tokio_timer::Timer,
-    sleep: tokio_timer::Sleep,
+    timer: timer::Timer,
+    sleep: timer::Sleep,
     retry: R,
     try: Try<F>,
 }
@@ -202,9 +202,9 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
 {
     type Item = F::Item;
-    type Error = !;
+    type Error = ();
 
-    fn poll(&mut self) -> Poll<F::Item, !> {
+    fn poll(&mut self) -> Poll<F::Item, ()> {
         loop {
             {
                 let poll = if let Try::Future(ref mut f) = self.try {
@@ -221,8 +221,8 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
 
             // Unwrap here is unfortunate, but we really have no way to handle
             // the timer being out of capacity.
-            match self.sleep.poll().unwrap() {
-                Async::Ready(()) => {
+            match self.sleep.poll().expect("timer sleep failed") {
+                Async::Ready(_) => {
                     let duration = self.backoff.next_backoff();
 
                     let cause = match self.try.take() {

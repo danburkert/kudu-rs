@@ -172,9 +172,6 @@ pub struct Options {
     /// Defaults to true.
     pub nodelay: bool,
 
-    /// The port to use if no port is included in the hostport.
-    pub default_port: Option<u16>,
-
     pub scope: Option<tacho::Scope>,
 }
 
@@ -184,7 +181,6 @@ impl Default for Options {
             max_rpcs_in_flight: 32,
             max_message_length: 5 * 1024 * 1024,
             nodelay: true,
-            default_port: None,
             scope: None,
         }
     }

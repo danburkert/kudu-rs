@@ -397,6 +397,8 @@ pub struct ClientBuilder {
     master_addresses: Vec<HostPort>,
 
     admin_timeout: Duration,
+
+    threadpool: CpuPool,
 }
 
 impl ClientConfig {

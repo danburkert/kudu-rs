@@ -1,9 +1,9 @@
-#![feature(never_type, conservative_impl_trait)]
 #![allow(dead_code)]
 
 extern crate byteorder;
+extern crate bytes;
 extern crate chrono;
-extern crate futures_cpupool;
+extern crate futures_cpupool as cpupool;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
@@ -12,7 +12,7 @@ extern crate parking_lot;
 extern crate prost;
 extern crate prost_types;
 extern crate rand;
-extern crate tokio_timer;
+extern crate tokio_timer as timer;
 extern crate uuid;
 extern crate vec_map;
 
@@ -27,10 +27,11 @@ extern crate vec_map;
 #[macro_use] extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
-#[macro_use] extern crate tokio_core as tokio;
+extern crate tokio_core as tokio;
 
 pub mod pb;
 
+mod retry;
 mod master3;
 // //mod client;
 // //mod master;
@@ -49,7 +50,6 @@ mod error;
 // mod partition;
 // mod queue_map;
 mod row;
-// mod rpc;
 mod schema;
 mod util;
 mod value;
@@ -72,6 +72,7 @@ pub use value::Value;
 
 use std::fmt;
 use std::str;
+use std::time::Duration;
 
 use uuid::Uuid;
 
@@ -295,8 +296,6 @@ pub struct HostPort {
     pub host: String,
     pub port: u16,
 }
-
-impl HostPort {
     pub fn from_pb(mut pb: pb::HostPortPB) -> HostPort {
         HostPort {
             host: pb.take_host(),
@@ -356,3 +355,11 @@ id!(ReplicaId);
 id!(TableId);
 id!(TabletId);
 id!(TabletServerId);
+
+struct Options {
+    rpc: krpc::Options,
+    remote: tokio::reactor::Remote,
+    threadpool: cpupool::CpuPool,
+    timer: timer::Timer,
+    admin_timeout: Duration,
+}
