@@ -1,16 +1,21 @@
+use std::marker;
 use std::mem;
 use std::time::Instant;
 
 use futures::{
     Async,
+    AsyncSink,
     Future,
     Poll,
     Stream,
 };
 use futures::stream::FuturesUnordered;
+use futures::sync::oneshot;
 use krpc::{
     HostPort,
     Proxy,
+    Request,
+    Response,
 };
 
 use pb::master::*;
@@ -18,15 +23,44 @@ use Error;
 use Options;
 use retry::{
     Retry,
+    KuduResponse,
 };
 
-pub struct MasterProxy {
+pub struct MasterResponse<T> where T: KuduResponse {
+    receiver: oneshot::Receiver<T>,
+}
 
+/// An in-flight master RPC.
+pub struct MasterRpc {
+}
+
+pub struct MasterProxy {
 }
 
 impl MasterProxy {
-    fn spawn(master_addrs: Vec<HostPort>) {
+
+    fn spawn(addrs: Vec<HostPort>) {
         unimplemented!()
+    }
+
+    /// Call a remote Master method asynchronously.
+    pub fn send<R>(&mut self, request: Request) -> MasterResponse<R> where R: KuduResponse {
+        let (completer, receiver) = oneshot::channel();
+        let rpc = Rpc {
+            request,
+            completer,
+        };
+
+        match self.sender.start_send(rpc) {
+            Ok(AsyncSink::Ready) => (),
+            Ok(AsyncSink::NotReady(_)) => panic!("Proxy not ready"),
+            Err(..) => unreachable!(),
+        }
+
+        Response {
+            receiver,
+            _marker: marker::PhantomData,
+        }
     }
 }
 
@@ -35,27 +69,34 @@ enum State {
     Connected(Proxy),
 }
 
-struct MasterTask {
-    master_addrs: Vec<HostPort>,
+#[must_use = "futures do nothing unless polled"]
+struct MasterProxyTask {
+    addrs: Vec<HostPort>,
     options: Options,
 }
 
-impl MasterTask {
+impl Future for MasterProxyTask {
+    type Item = ();
+    type Error = ();
 
-
+    fn poll(&mut self) -> Poll<(), ()> {
+        loop {
+        }
+    }
 }
 
+#[must_use = "futures do nothing unless polled"]
 struct ConnectToCluster {
     responses: FuturesUnordered<Retry<ConnectToMasterResponsePb>>,
     errors: Vec<Error>,
 }
 
 impl ConnectToCluster {
-    fn new(master_addrs: &[HostPort], options: &Options) -> ConnectToCluster {
+    fn new(addrs: &[HostPort], options: &Options) -> ConnectToCluster {
         let now = Instant::now();
         let mut responses = FuturesUnordered::new();
-        for master_addr in master_addrs {
-            let mut proxy = Proxy::spawn(vec![master_addr.clone()],
+        for addr in addrs {
+            let mut proxy = Proxy::spawn(vec![addr.clone()],
                                          options.rpc.clone(),
                                          options.threadpool.clone(),
                                          &options.remote);

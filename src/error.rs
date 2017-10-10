@@ -209,8 +209,8 @@ impl From<StatusPb> for Status {
 
 #[derive(Debug, Clone)]
 pub struct TabletServerError {
-    code: TabletServerErrorCode,
-    status: Status,
+    pub code: TabletServerErrorCode,
+    pub status: Status,
 }
 
 impl error::Error for TabletServerError {
@@ -269,23 +269,11 @@ impl From<StatusPb> for TabletServerError {
 
 #[derive(Debug, Clone)]
 pub struct MasterError {
-    code: MasterErrorCode,
-    status: Status,
+    pub code: MasterErrorCode,
+    pub status: Status,
 }
 
 impl MasterError {
-    pub fn new(code: MasterErrorCode, status: Status) -> MasterError {
-        MasterError {
-            code: code,
-            status: status,
-        }
-    }
-    pub fn code(&self) -> MasterErrorCode {
-        self.code
-    }
-    pub fn status(&self) -> &Status {
-        &self.status
-    }
     pub fn is_retriable(&self) -> bool {
         match self.code {
             MasterErrorCode::CatalogManagerNotInitialized => true,

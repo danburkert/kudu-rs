@@ -107,6 +107,18 @@ pub struct Response<T> where T: Message + Default {
     _marker: marker::PhantomData<T>,
 }
 
+impl <T> Response<T> where T: Message + Default {
+    pub fn failed(request: Request, error: Error) -> Response<T> {
+        let (completer, receiver) = oneshot::channel();
+        completer.send(Err((error, request)));
+
+        Response {
+            receiver,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
 impl <T> Future for Response<T> where T: Message + Default {
     type Item = (T, Vec<Bytes>, Request);
     type Error = (Error, Request);
