@@ -102,6 +102,7 @@ impl fmt::Debug for Request {
 type RpcResult = Result<(Bytes, Vec<Bytes>, Request),
                         (Error, Request)>;
 
+#[must_use = "futures do nothing unless polled"]
 pub struct Response<T> where T: Message + Default {
     receiver: oneshot::Receiver<RpcResult>,
     _marker: marker::PhantomData<T>,

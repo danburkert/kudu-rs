@@ -3,15 +3,17 @@ use std::fmt;
 use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
-use pb::row_operations_pb::{Type as OperationType};
 
 use bit_set::BitSet;
 use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
+use pb::RowOperationsPb;
+use pb::row_operations_pb::{Type as OperationType};
+
 use DataType;
 use Error;
-//use RangePartitionBound;
+use RangePartitionBound;
 use Result;
 use Schema;
 use Value;
@@ -298,7 +300,7 @@ impl cmp::PartialOrd for Row {
 
 // TODO: move below to own file
 
-pub struct OperationEncoder {
+pub(crate) struct OperationEncoder {
     data: Vec<u8>,
     indirect_data: Vec<u8>,
 }
@@ -322,21 +324,19 @@ impl OperationEncoder {
         self.encode_row(OperationType::SplitRow, row);
     }
 
-    /*
     pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
         let (lower_bound, lower_bound_type) = match *lower {
-            RangePartitionBound::Inclusive(ref row) => (row, OperationType::RANGE_LOWER_BOUND),
-            RangePartitionBound::Exclusive(ref row) => (row, OperationType::EXCLUSIVE_RANGE_LOWER_BOUND),
+            RangePartitionBound::Inclusive(ref row) => (row, OperationType::RangeLowerBound),
+            RangePartitionBound::Exclusive(ref row) => (row, OperationType::ExclusiveRangeLowerBound),
         };
         let (upper_bound, upper_bound_type) = match *upper {
-            RangePartitionBound::Inclusive(ref row) => (row, OperationType::INCLUSIVE_RANGE_UPPER_BOUND),
-            RangePartitionBound::Exclusive(ref row) => (row, OperationType::RANGE_UPPER_BOUND),
+            RangePartitionBound::Inclusive(ref row) => (row, OperationType::InclusiveRangeUpperBound),
+            RangePartitionBound::Exclusive(ref row) => (row, OperationType::RangeUpperBound),
         };
 
         self.encode_row(lower_bound_type, &lower_bound);
         self.encode_row(upper_bound_type, &upper_bound);
     }
-    */
 
     pub fn encode_range_partition_split(&mut self, split: &Row) {
         self.encode_row(OperationType::SplitRow, split);
@@ -396,6 +396,13 @@ impl OperationEncoder {
     pub fn unwrap(self) -> (Vec<u8>, Vec<u8>) {
         let OperationEncoder { data, indirect_data } = self;
         (data, indirect_data)
+    }
+
+    pub fn into_pb(self) -> RowOperationsPb {
+        RowOperationsPb {
+            rows: Some(self.data),
+            indirect_data: Some(self.indirect_data),
+        }
     }
 }
 

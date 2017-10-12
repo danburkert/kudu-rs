@@ -13,6 +13,7 @@ use RangePartitionSchema;
 use Result;
 use Row;
 use Schema;
+use Value;
 
 /// Murmur2 hash implementation returning 64-bit hashes.
 pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
@@ -287,15 +288,20 @@ fn is_cell_equal(a: &Row, b: &Row, idx: usize) -> bool {
         return false;
     }
 
+    fn cmp<'a, T>(a: &'a Row, b: &'a Row, idx: usize) -> bool where T: Value<'a> + PartialEq {
+        a.get::<T>(idx).unwrap() == b.get::<T>(idx).unwrap()
+    }
+
     match a.schema().columns()[idx].data_type() {
-        DataType::Bool => a.get::<bool>(idx) == b.get::<bool>(idx),
-        DataType::Int8 => a.get::<i8>(idx) == b.get::<i8>(idx),
-        DataType::Int16 => a.get::<i16>(idx) == b.get::<i16>(idx),
-        DataType::Int32 => a.get::<i32>(idx) == b.get::<i32>(idx),
-        DataType::Int64 | DataType::Timestamp => a.get::<i64>(idx) == b.get::<i64>(idx),
-        DataType::Binary | DataType::String => a.get::<&[u8]>(idx) == b.get::<&[u8]>(idx),
-        DataType::Float => a.get::<f32>(idx) == b.get::<f32>(idx),
-        DataType::Double => a.get::<f64>(idx) == b.get::<f64>(idx),
+        DataType::Bool => cmp::<bool>(a, b, idx),
+        DataType::Int8 => cmp::<i8>(a, b, idx),
+        DataType::Int16 => cmp::<i16>(a, b, idx),
+        DataType::Int32 => cmp::<i32>(a, b, idx),
+        DataType::Int64 | DataType::Timestamp => cmp::<i64>(a, b, idx),
+        DataType::Binary | DataType::String => cmp::<&[u8]>(a, b, idx),
+        // TODO: do bitwise cmp for floats?
+        DataType::Float => cmp::<f32>(a, b, idx),
+        DataType::Double => cmp::<f64>(a, b, idx),
     }
 }
 

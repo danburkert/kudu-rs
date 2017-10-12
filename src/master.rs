@@ -28,21 +28,26 @@ use retry::{
     KuduResponse,
 };
 
-struct MasterProxy {
+#[derive(Clone)]
+pub struct MasterProxy {
     cache: Option<(Proxy, usize)>,
     inner: Arc<Inner>,
 }
 
 impl MasterProxy {
 
-    fn new(addrs: Vec<HostPort>, options: Options) -> MasterProxy {
+    pub fn new(addrs: Vec<HostPort>, options: Options) -> MasterProxy {
         MasterProxy {
             cache: None,
             inner: Arc::new(Inner::new(addrs, options)),
         }
     }
 
-    fn send<T>(&mut self, request: Request) -> MasterResponse<T> where T: KuduResponse + 'static {
+    pub fn poll_ready(&mut self) -> Poll<(), Error> {
+        unimplemented!()
+    }
+
+    pub fn send<T>(&mut self, request: Request) -> MasterResponse<T> where T: KuduResponse + 'static {
         let epoch = self.inner.epoch();
 
         if let Some((ref mut proxy, cache_epoch)) = self.cache {
@@ -122,7 +127,9 @@ enum State<T> where T: KuduResponse {
     InFlight(Response<T>),
 }
 
-struct MasterResponse<T> where T: KuduResponse {
+
+#[must_use = "futures do nothing unless polled"]
+pub struct MasterResponse<T> where T: KuduResponse {
     inner: Arc<Inner>,
     state: Option<State<T>>,
     epoch: usize,

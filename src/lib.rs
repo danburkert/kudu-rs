@@ -32,14 +32,11 @@ extern crate tokio_core as tokio;
 pub mod pb;
 
 mod retry;
-//mod master3;
 mod master;
-// //mod client;
-// //mod master;
-// mod master2;
-// //mod meta_cache;
-// //mod table;
-// //mod tablet;
+mod client;
+mod meta_cache;
+mod table;
+mod tablet;
 // //mod tablet_server;
 // //mod writer;
 mod backoff;
@@ -47,8 +44,8 @@ mod bit_set;
 // mod dns;
 mod error;
 // //mod io;
-// mod key;
-// mod partition;
+mod key;
+mod partition;
 // mod queue_map;
 mod row;
 mod schema;
@@ -59,13 +56,13 @@ mod value;
 #[cfg(test)]
 mod mini_cluster;
 
-//pub use client::*;
+pub use client::*;
 pub use error::*;
 //pub use master::Master;
-//pub use partition::*;
+pub use partition::*;
 pub use row::Row;
 pub use schema::*;
-//pub use table::*;
+pub use table::*;
 //pub use tablet::*;
 //pub use tablet_server::TabletServer;
 pub use value::Value;
@@ -76,6 +73,8 @@ use std::str;
 use std::time::Duration;
 
 use uuid::Uuid;
+use pb::master::TableIdentifierPb;
+pub use krpc::HostPort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
@@ -289,29 +288,6 @@ impl quickcheck::Arbitrary for CompressionType {
 }
 
 pub use pb::consensus::raft_peer_pb::{Role as RaftRole};
-pub use pb::{HostPortPb as HostPort};
-
-
-/*
-pub struct HostPort {
-    pub host: String,
-    pub port: u16,
-}
-    pub fn from_pb(mut pb: pb::HostPortPB) -> HostPort {
-        HostPort {
-            host: pb.take_host(),
-            port: pb.get_port() as u16,
-        }
-    }
-}
-
-impl net::ToSocketAddrs for HostPort {
-    type Iter = vec::IntoIter<net::SocketAddr>;
-    fn to_socket_addrs(&self) -> io::Result<std::vec::IntoIter<net::SocketAddr>> {
-        (&self.host[..], self.port).to_socket_addrs()
-    }
-}
-*/
 
 macro_rules! id {
     ($id:ident) => {
@@ -357,7 +333,8 @@ id!(TableId);
 id!(TabletId);
 id!(TabletServerId);
 
-struct Options {
+#[derive(Clone)]
+pub struct Options {
     rpc: krpc::Options,
     remote: tokio::reactor::Remote,
     threadpool: cpupool::CpuPool,

@@ -6,8 +6,9 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use kudu_pb::master::{GetTableLocationsRequestPB, TabletLocationsPB};
+use futures::Poll;
 use parking_lot::Mutex;
+use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
 
 use Error;
 use MasterErrorCode;
@@ -175,6 +176,7 @@ impl MetaCache {
         self.extract(partition_key, deadline, backoff(), extractor, cb);
     }
 
+    /*
     pub fn tablet_leader<F>(&self,
                             partition_key: Vec<u8>,
                             deadline: Instant,
@@ -193,6 +195,7 @@ impl MetaCache {
         };
         self.extract(partition_key, deadline, backoff(), extractor, cb);
     }
+    */
 
     fn extract<Extractor, T, F>(&self,
                                 partition_key: Vec<u8>,
@@ -208,12 +211,15 @@ impl MetaCache {
             ExtractCachedResult::Value(value) => return cb(Ok(value)),
         };
 
-        let mut request = GetTableLocationsRequestPB::new();
-        request.mut_table().set_table_id(self.inner.table.to_string().into_bytes());
-        request.set_partition_key_start(partition_key.clone());
-        request.set_max_returned_locations(MAX_RETURNED_TABLE_LOCATIONS);
+        let request = GetTableLocationsRequestPb {
+            table: self.inner.table.into(),
+            partition_key_start: Some(partition_key.clone()),
+            max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
+            ..Default::default()
+        };
 
         let meta_cache = self.clone();
+        /*
         self.master.get_table_locations(deadline, request, move |resp| {
             match resp {
                 Ok(mut resp) => {
@@ -232,6 +238,8 @@ impl MetaCache {
                 Err(error) => cb(Err(error)),
             }
         });
+        */
+        unimplemented!()
     }
 
     pub fn table(&self) -> TableId {
@@ -248,7 +256,7 @@ impl MetaCache {
 
     fn add_tablet_locations<F, Extractor, T>(&self,
                                              partition_key: Vec<u8>,
-                                             tablets: Vec<TabletLocationsPB>,
+                                             tablets: Vec<TabletLocationsPb>,
                                              extractor: Extractor,
                                              cb: F)
     where Extractor: FnOnce(&Entry) -> T + Send + 'static,
@@ -329,8 +337,9 @@ impl MetaCache {
     /// have an end key.
     fn tablet_locations_to_entries(&self,
                                    partition_key: &[u8],
-                                   tablets: Vec<TabletLocationsPB>)
+                                   tablets: Vec<TabletLocationsPb>)
                                    -> Result<VecDeque<Entry>> {
+/*
         if tablets.is_empty() {
             // If there are no tablets in the response, then the table is empty. If
             // there were any tablets in the table they would have been returned, since
@@ -370,6 +379,8 @@ impl MetaCache {
 
         trace!("discovered table locations: {:?}", entries);
         Ok(entries)
+*/
+        unimplemented!()
     }
 
     pub fn clear(&self) {

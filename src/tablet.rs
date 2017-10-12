@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
 
-use kudu_pb::master::{TabletLocationsPB, TabletLocationsPB_ReplicaPB as ReplicaPB};
+use pb::master::TabletLocationsPb;
+use pb::master::tablet_locations_pb::ReplicaPb;
 
+use Error;
+use HostPort;
 use Partition;
 use PartitionSchema;
 use RaftRole;
@@ -9,7 +12,6 @@ use Result;
 use Schema;
 use TabletId;
 use TabletServerId;
-use dns;
 use util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,24 +36,23 @@ impl Tablet {
     }
 
     /// Creates a new `Tablet` from a tablet locations protobuf message.
-    #[doc(hidden)]
-    pub fn from_pb(primary_key_schema: &Schema,
-                   partition_schema: PartitionSchema,
-                   mut pb: TabletLocationsPB)
-                   -> Result<Tablet> {
-        let id = try!(TabletId::parse_bytes(pb.get_tablet_id()));
-        let partition = try!(Partition::from_pb(primary_key_schema,
-                                                partition_schema,
-                                                pb.take_partition()));
-        let mut replicas = Vec::with_capacity(pb.get_replicas().len());
-        for replica in pb.take_replicas().into_iter() {
-            replicas.push(try!(Replica::from_pb(replica)));
+    pub(crate) fn from_pb(primary_key_schema: &Schema,
+                          partition_schema: PartitionSchema,
+                          mut pb: TabletLocationsPb)
+                          -> Result<Tablet> {
+        let id = TabletId::parse_bytes(&pb.tablet_id)?;
+        let partition = match pb.partition {
+            Some(partition) => Partition::from_pb(primary_key_schema, partition_schema, partition),
+            None => Err(Error::Serialization(
+                    "required field absent: TabletLocationsPb::partition".to_string())),
+        }?;
+
+        let mut replicas = Vec::with_capacity(pb.replicas.len());
+        for replica in pb.replicas.into_iter() {
+            replicas.push(Replica::from_pb(replica)?);
         }
-        Ok(Tablet {
-            id: id,
-            partition: partition,
-            replicas: replicas,
-        })
+
+        Ok(Tablet { id, partition, replicas })
     }
 }
 
@@ -59,10 +60,8 @@ impl Tablet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Replica {
     id: TabletServerId,
-    rpc_addrs: Vec<(String, u16)>,
-    resolved_rpc_addrs: Vec<SocketAddr>,
+    rpc_addrs: Vec<HostPort>,
     role: RaftRole,
-    is_local: bool,
 }
 
 impl Replica {
@@ -73,7 +72,7 @@ impl Replica {
     }
 
     /// Returns the RPC addresses of the tablet server which owns this replica.
-    pub fn rpc_addrs(&self) -> &[(String, u16)] {
+    pub fn rpc_addrs(&self) -> &[HostPort] {
         &self.rpc_addrs
     }
 
@@ -82,29 +81,18 @@ impl Replica {
         self.role
     }
 
+    /*
     /// The resolved RPC addresses.
     pub fn resolved_rpc_addrs(&self) -> &[SocketAddr] {
         &self.resolved_rpc_addrs
     }
+    */
 
     /// Creates a new `Replica` from a replica protobuf message.
-    #[doc(hidden)]
-    pub fn from_pb(mut pb: ReplicaPB) -> Result<Replica> {
-        let id = try!(TabletServerId::parse_bytes(pb.get_ts_info().get_permanent_uuid()));
-        let mut rpc_addrs = Vec::with_capacity(pb.get_ts_info().get_rpc_addresses().len());
-        for mut host_port in pb.mut_ts_info().take_rpc_addresses().into_iter() {
-            let port = host_port.get_port() as u16;
-            rpc_addrs.push((host_port.take_host(), port));
-        }
-        let resolved_rpc_addrs = dns::resolve_hostports(&rpc_addrs);
-        let role = RaftRole::from_pb(pb.get_role());
-        let is_local = resolved_rpc_addrs.iter().any(|addr| util::is_local_addr(&addr.ip()));
-        Ok(Replica {
-            id: id,
-            rpc_addrs: rpc_addrs,
-            resolved_rpc_addrs: resolved_rpc_addrs,
-            role: role,
-            is_local: is_local,
-        })
+    pub(crate) fn from_pb(mut pb: ReplicaPb) -> Result<Replica> {
+        let role = pb.role();
+        let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
+        let rpc_addrs = pb.ts_info.rpc_addresses.into_iter().map(HostPort::from).collect();
+        Ok(Replica { id, rpc_addrs, role })
     }
 }

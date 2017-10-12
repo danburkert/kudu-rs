@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{
@@ -11,32 +13,38 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use kudu_pb::master::{
-    DeleteTableRequestPB,
-    GetTableSchemaRequestPB,
-    IsAlterTableDoneRequestPB,
-    IsCreateTableDoneRequestPB,
-    ListMastersRequestPB,
-    ListTablesRequestPB,
-    ListTabletServersRequestPB,
-    TableIdentifierPB,
+use pb::master::{
+    DeleteTableRequestPb,
+    GetTableSchemaRequestPb,
+    IsAlterTableDoneRequestPb,
+    IsCreateTableDoneRequestPb,
+    ListMastersRequestPb,
+    ListTablesRequestPb,
+    ListTabletServersRequestPb,
+    TableIdentifierPb,
 };
 use parking_lot::Mutex;
+use krpc;
+use krpc::HostPort;
+use tokio;
+use cpupool::CpuPool;
+use timer::Timer;
 
 use Error;
 use Result;
 use Schema;
 use TableId;
-use TabletServer;
+//use TabletServer;
 use backoff::Backoff;
-use master::Master;
+//use master::Master;
 use master::MasterProxy;
-use meta_cache::MetaCache;
-use partition::PartitionSchema;
-use rpc::Messenger;
-use table::AlterTableBuilder;
-use table::Table;
-use table::TableBuilder;
+//use meta_cache::MetaCache;
+//use partition::PartitionSchema;
+//use rpc::Messenger;
+//use table::AlterTableBuilder;
+//use table::Table;
+//use table::TableBuilder;
+use Options;
 
 /// A Kudu database client.
 ///
@@ -44,31 +52,31 @@ use table::TableBuilder;
 /// per application.
 #[derive(Clone)]
 pub struct Client {
-    messenger: Messenger,
     master: MasterProxy,
-    config: ClientConfig,
-    meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
+    options: Options,
+    //meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
     latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
 }
 
 impl Client {
 
     /// Creates a new client with the provided configuration.
-    pub fn new(config: ClientConfig) -> Client {
-        let messenger = Messenger::new().unwrap();
-        let master = MasterProxy::new(config.master_addresses(), messenger.clone());
+    fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
+        //let messenger = Messenger::new().unwrap();
+        let master = MasterProxy::new(master_addresses, options.clone());
         Client {
-            master: master,
-            messenger: messenger,
-            config: config,
-            meta_caches: Arc::new(Mutex::new(HashMap::new())),
+            master,
+            //messenger: messenger,
+            options,
+            //meta_caches: Arc::new(Mutex::new(HashMap::new())),
             latest_observed_timestamp: Arc::new(Mutex::new(0)),
         }
     }
 
+    /*
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
-    pub fn create_table(&self, builder: TableBuilder, deadline: Instant) -> Result<TableId> {
+    pub fn create_table(&self, builder: TableBuilder) -> Result<TableId> {
         let (send, recv) = sync_channel(0);
         self.master.create_table(deadline,
                                  try!(builder.into_pb()),
@@ -382,6 +390,7 @@ impl Client {
     pub fn messenger(&self) -> &Messenger {
         &self.messenger
     }
+    */
 }
 
 impl fmt::Debug for Client {
@@ -391,39 +400,52 @@ impl fmt::Debug for Client {
 }
 
 /// Client configuration options.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ClientBuilder {
-    /// A seed set of master addresses. Must contain at least one active master in the cluster.
-    master_addresses: Vec<HostPort>,
-
-    admin_timeout: Duration,
-
-    threadpool: CpuPool,
+    master_addresses: Vec<String>,
+    reactor: tokio::reactor::Remote,
+    rpc: krpc::Options,
+    threadpool: Option<CpuPool>,
+    timer: Option<Timer>,
+    admin_timeout: Option<Duration>,
 }
 
-impl ClientConfig {
-    pub fn new() {
-
-    }
-
-    pub fn build() {
-    }
-
-    pub fn new(master_addresses: Vec<String>) -> ClientConfig {
-        ClientConfig {
-            master_addresses: master_addresses.map(|addr| HostPort::parse(addr, 7051)).flatten()?,
+impl ClientBuilder {
+    pub fn new(master_addresses: Vec<String>, reactor: tokio::reactor::Remote) -> ClientBuilder {
+        ClientBuilder {
+            master_addresses,
+            reactor,
+            rpc: krpc::Options::default(),
+            threadpool: None,
+            timer: None,
+            admin_timeout: None,
         }
     }
-}
 
-impl Default for ClientConfig {
-    fn default() -> ClientConfig {
-        ClientConfig {
-            master_addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 7051)],
+    pub fn build(self) -> Result<Client> {
+        let mut master_addresses = Vec::with_capacity(self.master_addresses.len());
+        for addr in &self.master_addresses {
+            master_addresses.push(HostPort::parse(addr, 7051)?);
         }
+
+        // TODO: This is a terrible default.
+        let threadpool = self.threadpool.unwrap_or_else(CpuPool::new_num_cpus);
+        let timer = self.timer.unwrap_or_default();
+        let admin_timeout = self.admin_timeout.unwrap_or(Duration::from_secs(60));
+
+        let options = Options {
+            rpc: self.rpc,
+            remote: self.reactor,
+            threadpool,
+            timer,
+            admin_timeout,
+        };
+
+        Ok(Client::new(master_addresses, options))
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -554,3 +576,4 @@ mod tests {
         assert_eq!(2, schema.columns().len());
     }
 }
+*/

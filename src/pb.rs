@@ -1,3 +1,6 @@
+use HostPort;
+use TableId;
+
 mod kudu {
     include!(concat!(env!("OUT_DIR"), "/kudu.rs"));
 
@@ -9,6 +12,7 @@ mod kudu {
     }
     pub mod master {
         include!(concat!(env!("OUT_DIR"), "/kudu.master.rs"));
+
     }
     pub mod tablet {
         include!(concat!(env!("OUT_DIR"), "/kudu.tablet.rs"));
@@ -22,3 +26,40 @@ mod kudu {
 }
 
 pub use pb::kudu::*;
+
+// Some conveninent conversions.
+
+impl From<TableId> for master::TableIdentifierPb {
+    fn from(table_id: TableId) -> master::TableIdentifierPb {
+        master::TableIdentifierPb {
+            table_id: Some(table_id.as_bytes()[..].to_owned()),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<String> for master::TableIdentifierPb {
+    fn from(table_name: String) -> master::TableIdentifierPb {
+        master::TableIdentifierPb {
+            table_name: Some(table_name),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<String> for partition_schema_pb::ColumnIdentifierPb {
+    fn from(column_name: String) -> partition_schema_pb::ColumnIdentifierPb {
+        partition_schema_pb::ColumnIdentifierPb {
+            identifier: Some(partition_schema_pb::column_identifier_pb::Identifier::Name(column_name)),
+        }
+    }
+}
+
+impl From<HostPortPb> for HostPort {
+    fn from(hostport: HostPortPb) -> HostPort {
+        HostPort {
+            host: hostport.host,
+            port: hostport.port as u16,
+        }
+    }
+}

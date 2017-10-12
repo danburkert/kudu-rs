@@ -4,12 +4,13 @@ use std::fmt;
 use std::cmp;
 
 use byteorder::{BigEndian, ByteOrder};
-use kudu_pb::{
-    PartitionPB,
-    PartitionSchemaPB,
-    SchemaPB,
+use pb::{
+    PartitionPb,
+    PartitionSchemaPb,
+    SchemaPb,
 };
-use kudu_pb::partition_schema_pb::ColumnIdentifierPB;
+use pb::partition_schema_pb::ColumnIdentifierPb;
+use pb::partition_schema_pb::column_identifier_pb::Identifier;
 
 use Error;
 use Result;
@@ -83,37 +84,38 @@ impl PartitionSchema {
         &self.inner.hash_partitions
     }
 
-    #[doc(hidden)]
-    pub fn from_pb(pb: &PartitionSchemaPB, schema: &SchemaPB) -> PartitionSchema {
+    pub(crate) fn from_pb(pb: &PartitionSchemaPb, schema: &SchemaPb) -> PartitionSchema {
         let mut columns_by_name = HashMap::new();
         let mut columns_by_id = HashMap::new();
 
-        for (idx, column) in schema.get_columns().iter().enumerate() {
-            assert!(column.has_name());
-            assert!(column.has_id());
-            columns_by_name.insert(column.get_name().to_owned(), idx);
-            columns_by_id.insert(column.get_id(), idx);
+        for (idx, column) in schema.columns.iter().enumerate() {
+            assert!(column.id.is_some());
+            columns_by_name.insert(column.name.clone(), idx);
+            columns_by_id.insert(column.id(), idx);
         }
 
-        let column_to_id = |column: &ColumnIdentifierPB| {
-            if column.has_id() {
-                columns_by_id[&(column.get_id() as u32)]
-            } else if column.has_name() {
-                columns_by_name[column.get_name()]
-            } else {
-                panic!("column identifier must have either a name or ID");
+        let column_to_id = |column: &ColumnIdentifierPb| {
+            match *column.identifier.as_ref().expect("column identifier must have either a name or ID") {
+                Identifier::Id(id) => columns_by_id[&(id as u32)],
+                Identifier::Name(ref name) => columns_by_name[name],
             }
         };
 
-        let range_columns = pb.get_range_schema().get_columns()
-                              .iter().map(&column_to_id).collect::<Vec<_>>();
+        let range_columns = if let Some(range_schema) = pb.range_schema.as_ref() {
+            range_schema.columns
+                        .iter()
+                        .map(&column_to_id)
+                        .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
-        let mut hash_partitions = Vec::with_capacity(pb.get_hash_bucket_schemas().len());
-        for hash in pb.get_hash_bucket_schemas().iter() {
-            let columns = hash.get_columns().iter().map(&column_to_id).collect::<Vec<_>>();
+        let mut hash_partitions = Vec::with_capacity(pb.hash_bucket_schemas.len());
+        for hash in pb.hash_bucket_schemas.iter() {
+            let columns = hash.columns.iter().map(&column_to_id).collect::<Vec<_>>();
             hash_partitions.push(HashPartitionSchema::new(columns,
-                                                          hash.get_num_buckets() as u32,
-                                                          hash.get_seed()));
+                                                          hash.num_buckets as u32,
+                                                          hash.seed()));
         }
 
         PartitionSchema {
@@ -247,13 +249,12 @@ impl Partition {
         }
     }
 
-    #[doc(hidden)]
-    pub fn from_pb(primary_key_schema: &Schema,
-                   partition_schema: PartitionSchema,
-                   mut partition: PartitionPB)
-                   -> Result<Partition> {
-        let lower_bound_key = partition.take_partition_key_start();
-        let upper_bound_key = partition.take_partition_key_end();
+    pub(crate) fn from_pb(primary_key_schema: &Schema,
+                          partition_schema: PartitionSchema,
+                          mut partition: PartitionPb)
+                          -> Result<Partition> {
+        let lower_bound_key = partition.partition_key_start.take().unwrap();
+        let upper_bound_key = partition.partition_key_end.take().unwrap();
 
         let hash_partition_levels = partition_schema.hash_partition_schemas().len();
         let mut hash_partitions = Vec::with_capacity(hash_partition_levels);
