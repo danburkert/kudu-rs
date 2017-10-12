@@ -129,7 +129,7 @@ struct ProxyTask {
     handle: Handle,
     receiver: mpsc::Receiver<Rpc>,
     connection_state: ConnectionState,
-    buffer: VecDeque<Rpc>
+    buffer: VecDeque<Rpc>,
 }
 
 impl Future for ProxyTask {

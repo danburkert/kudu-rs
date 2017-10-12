@@ -1,13 +1,11 @@
 use std::mem;
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use futures::future;
 use futures::future::Shared;
 use futures::{
     Async,
-    AsyncSink,
     Future,
     Poll,
     Stream,
@@ -31,7 +29,7 @@ use retry::{
 };
 
 struct MasterProxy {
-    cache: Option<(usize, Proxy)>,
+    cache: Option<(Proxy, usize)>,
     inner: Arc<Inner>,
 }
 
@@ -44,91 +42,90 @@ impl MasterProxy {
         }
     }
 
-    fn send<T>(&mut self, request: Request) -> Box<Future<Item=T, Error=Error>> where T: KuduResponse + 'static {
-        if let Some((epoch, ref mut proxy)) = self.cache {
-            if self.inner.epoch.load(Ordering::Relaxed) == epoch {
-                /*
-                return proxy.send(request)
-                            .and_then(|(value, _, request)| {
-                                match value.into_result() {
-                                    Ok(value) => {
-                                    },
-                                    Err(error) => {
+    fn send<T>(&mut self, request: Request) -> MasterResponse<T> where T: KuduResponse + 'static {
+        let epoch = self.inner.epoch();
 
-                                    },
-                                }
-                                Ok(value)
-                            })
-                            .map_err(|(error, _)| error.into())
-                            .boxed();
-                            */
-                unreachable!()
+        if let Some((ref mut proxy, cache_epoch)) = self.cache {
+            if epoch == cache_epoch {
+                let response = proxy.send(request);
+                return MasterResponse {
+                    inner: self.inner.clone(),
+                    state: Some(State::InFlight(response)),
+                    epoch,
+                };
             }
-        }
+        };
         self.cache = None;
 
-        let (shared_proxy, epoch) = {
-            let shared = self.inner.proxy.read().unwrap();
-            (shared.clone(), self.inner.epoch.load(Ordering::Relaxed))
-        };
+        let (connection, epoch) = self.inner.connection();
 
-        match shared_proxy.peek() {
+        match connection.peek() {
             Some(Ok(proxy)) => {
-                self.cache = Some((epoch, (*proxy).clone()));
+                self.cache = Some((proxy.deref().clone(), epoch));
                 return self.send(request);
             },
-            Some(Err(error)) => return future::err((*error).clone()).boxed(),
+            Some(Err(_)) => {
+                self.inner.reset(epoch);
+            },
             None => (),
         }
 
-        unimplemented!()
+        MasterResponse {
+            inner: self.inner.clone(),
+            state: Some(State::Connecting(connection, request)),
+            epoch,
+        }
     }
 }
 
 struct Inner {
     addrs: Vec<HostPort>,
     options: Options,
-    epoch: AtomicUsize,
-    proxy: RwLock<Shared<ConnectToCluster>>,
+    connection: RwLock<(Shared<ConnectToCluster>, usize)>,
 }
 
 impl Inner {
-    fn new(addrs: Vec<HostPort>, options: Options) -> Inner {
-        let proxy = ConnectToCluster::new(&addrs, &options).shared();
 
+    fn new(addrs: Vec<HostPort>, options: Options) -> Inner {
+        let connection = ConnectToCluster::new(&addrs, &options).shared();
         Inner {
             addrs: addrs,
             options: options,
-            epoch: AtomicUsize::new(0),
-            proxy: RwLock::new(proxy),
+            connection: RwLock::new((connection, 0)),
         }
     }
 
-    fn reset(&self, reset_epoch: usize) {
-        let current_epoch = self.epoch.load(Ordering::Relaxed);
-        if current_epoch != reset_epoch {
-            return;
+    /// Resets the current connection, if the current epoch matches `reset_epoch`.
+    /// Returns the current connection and connection epoch.
+    fn reset(&self, reset_epoch: usize) -> (Shared<ConnectToCluster>, usize) {
+        let mut connection = self.connection.write().unwrap();
+        if reset_epoch == connection.1 {
+            connection.0 = ConnectToCluster::new(&self.addrs, &self.options).shared();
+            connection.1 += 1;
         }
-
-        let mut shared = self.proxy.write().unwrap();
-        if self.epoch.compare_and_swap(current_epoch,
-                                       current_epoch.wrapping_add(1),
-                                       Ordering::Relaxed) != current_epoch {
-            return;
-        }
-
-        *shared = ConnectToCluster::new(&self.addrs, &self.options).shared();
+        connection.clone()
     }
 
-    fn poll_send<T>(&self, request: Request) -> Poll<MasterResponse<T>, Error> where T: KuduResponse {
-        unimplemented!()
+    /// Returns the current connection epoch.
+    fn epoch(&self) -> usize {
+        self.connection.read().unwrap().1
+    }
+
+    /// Returns the current connection and connection epoch.
+    fn connection(&self) -> (Shared<ConnectToCluster>, usize) {
+        self.connection.read().unwrap().clone()
     }
 }
 
+enum State<T> where T: KuduResponse {
+    Connecting(Shared<ConnectToCluster>, Request),
+    InFlight(Response<T>),
+}
+
 struct MasterResponse<T> where T: KuduResponse {
-    response: Response<T>,
-    epoch: usize,
     inner: Arc<Inner>,
+    state: Option<State<T>>,
+    epoch: usize,
 }
 
 impl <T> Future for MasterResponse<T> where T: KuduResponse {
@@ -136,21 +133,41 @@ impl <T> Future for MasterResponse<T> where T: KuduResponse {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<T, Error> {
-        let (error, request) = match self.response.poll() {
-            Ok(Async::Ready((response, _, request))) => match response.into_result() {
-                Ok(response) => return Ok(Async::Ready(response)),
-                Err(error) => (error, request),
+        let state = self.state.take().unwrap();
+
+        let mut response = match state {
+            State::Connecting(mut connecting, request) => {
+                match connecting.poll().map_err(|error| error.deref().clone())? {
+                    Async::Ready(proxy) => {
+                        proxy.deref().clone().send(request)
+                    },
+                    Async::NotReady => {
+                        self.state = Some(State::Connecting(connecting, request));
+                        return Ok(Async::NotReady);
+                    },
+                }
             },
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err((error, request)) => (error.into(), request),
+            State::InFlight(response) => response,
         };
 
-        if let Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. }) = error {
-            self.inner.reset(self.epoch);
-        };
-
-
-        unimplemented!()
+        match response.poll().map_err(|(error, _)| error)? {
+            Async::Ready((value, _, request)) => {
+                match value.into_result() {
+                    Ok(value) => Ok(Async::Ready(value)),
+                    Err(Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. })) => {
+                        let (connection, epoch) = self.inner.reset(self.epoch);
+                        self.state = Some(State::Connecting(connection, request));
+                        self.epoch = epoch;
+                        self.poll()
+                    },
+                    Err(error) => Err(error),
+                }
+            },
+            Async::NotReady => {
+                self.state = Some(State::InFlight(response));
+                Ok(Async::NotReady)
+            },
+        }
     }
 }
 
