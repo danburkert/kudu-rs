@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(conservative_impl_trait)]
 
 extern crate byteorder;
 extern crate bytes;
@@ -73,7 +74,6 @@ use std::str;
 use std::time::Duration;
 
 use uuid::Uuid;
-use pb::master::TableIdentifierPb;
 pub use krpc::HostPort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

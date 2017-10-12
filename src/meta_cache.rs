@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -200,7 +203,7 @@ impl MetaCache {
     fn extract<Extractor, T, F>(&self,
                                 partition_key: Vec<u8>,
                                 deadline: Instant,
-                                mut backoff: Backoff,
+                                backoff: Backoff,
                                 extractor: Extractor,
                                 cb: F)
     where Extractor: FnOnce(&Entry) -> T + Send + 'static,

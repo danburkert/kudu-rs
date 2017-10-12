@@ -1,7 +1,3 @@
-use std::mem;
-use std::sync::mpsc::sync_channel;
-use std::time::Instant;
-
 use pb::master::{
     AlterTableRequestPb,
     CreateTableRequestPb,
@@ -50,14 +46,13 @@ pub struct Table {
 
 impl Table {
 
-    #[doc(hidden)]
-    pub fn new(name: String,
-               id: TableId,
-               schema: Schema,
-               partition_schema: PartitionSchema,
-               num_replicas: u32,
-               meta_cache: MetaCache,
-               client: Client) -> Table {
+    pub(crate) fn new(name: String,
+                      id: TableId,
+                      schema: Schema,
+                      partition_schema: PartitionSchema,
+                      num_replicas: u32,
+                      meta_cache: MetaCache,
+                      client: Client) -> Table {
         Table {
             name: name,
             id: id,
@@ -181,14 +176,14 @@ impl TableBuilder {
                                   columns: Vec<S>,
                                   num_partitions: u32) -> &mut TableBuilder
     where S: Into<String> {
-        self.add_hash_partition_with_seed(columns, num_partitions, 0)
+        self.add_hash_partitions_with_seed(columns, num_partitions, 0)
     }
 
-    pub fn add_hash_partition_with_seed<S>(&mut self,
-                                           columns: Vec<S>,
-                                           num_partitions: u32,
-                                           seed: u32)
-                                           -> &mut TableBuilder
+    pub fn add_hash_partitions_with_seed<S>(&mut self,
+                                            columns: Vec<S>,
+                                            num_partitions: u32,
+                                            seed: u32)
+                                            -> &mut TableBuilder
     where S: Into<String> {
         let columns = columns.into_iter().map(Into::into).collect();
         self.hash_partitions.push((columns, num_partitions, Some(seed)));
@@ -223,8 +218,7 @@ impl TableBuilder {
         self.num_replicas = Some(num_replicas);
     }
 
-    #[doc(hidden)]
-    pub fn into_pb(self) -> Result<CreateTableRequestPb> {
+    pub(crate) fn into_pb(self) -> Result<CreateTableRequestPb> {
         let TableBuilder { name, schema, range_partition_columns, range_partitions,
                            range_partition_splits, hash_partitions, num_replicas } = self;
 

@@ -13,22 +13,31 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cpupool::CpuPool;
+use futures::Future;
+use krpc::HostPort;
+use krpc;
+use parking_lot::Mutex;
+use timer::Timer;
+use tokio;
+
 use pb::master::{
+    CreateTableResponsePb,
     DeleteTableRequestPb,
+    DeleteTableResponsePb,
     GetTableSchemaRequestPb,
+    GetTableSchemaResponsePb,
     IsAlterTableDoneRequestPb,
     IsCreateTableDoneRequestPb,
+    IsCreateTableDoneResponsePb,
     ListMastersRequestPb,
     ListTablesRequestPb,
+    ListTablesResponsePb,
     ListTabletServersRequestPb,
+    MasterService,
     TableIdentifierPb,
 };
-use parking_lot::Mutex;
-use krpc;
-use krpc::HostPort;
-use tokio;
-use cpupool::CpuPool;
-use timer::Timer;
+use pb::ExpectField;
 
 use Error;
 use Result;
@@ -38,12 +47,11 @@ use TableId;
 use backoff::Backoff;
 //use master::Master;
 use master::MasterProxy;
-//use meta_cache::MetaCache;
-//use partition::PartitionSchema;
-//use rpc::Messenger;
+use meta_cache::MetaCache;
+use partition::PartitionSchema;
 //use table::AlterTableBuilder;
-//use table::Table;
-//use table::TableBuilder;
+use table::Table;
+use table::TableBuilder;
 use Options;
 
 /// A Kudu database client.
@@ -54,7 +62,7 @@ use Options;
 pub struct Client {
     master: MasterProxy,
     options: Options,
-    //meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
+    meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
     latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
 }
 
@@ -62,61 +70,57 @@ impl Client {
 
     /// Creates a new client with the provided configuration.
     fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
-        //let messenger = Messenger::new().unwrap();
         let master = MasterProxy::new(master_addresses, options.clone());
         Client {
             master,
-            //messenger: messenger,
             options,
-            //meta_caches: Arc::new(Mutex::new(HashMap::new())),
+            meta_caches: Arc::new(Mutex::new(HashMap::new())),
             latest_observed_timestamp: Arc::new(Mutex::new(0)),
         }
     }
 
-    /*
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
-    pub fn create_table(&self, builder: TableBuilder) -> Result<TableId> {
-        let (send, recv) = sync_channel(0);
-        self.master.create_table(deadline,
-                                 try!(builder.into_pb()),
-                                 move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().and_then(|resp| {
-            str::from_utf8(resp.get_table_id())
-                .map_err(|error| Error::Serialization(format!("{}", error)))
-                .and_then(TableId::parse)
-        })
+    pub fn create_table(&mut self, builder: TableBuilder) -> impl Future<Item=TableId, Error=Error> {
+        let request = MasterService::create_table(Box::new(builder.into_pb().expect("TODO")),
+                                                  Instant::now() + self.options.admin_timeout,
+                                                  &[]);
+
+        self.master
+            .send(request)
+            .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
+                TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
+                                                                     "table_id")?)
+            })
     }
 
     /// Returns `true` if the table is fully created.
-    pub fn is_create_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
+    pub fn is_create_table_done<S>(&mut self, table: S) -> impl Future<Item=bool, Error=Error>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_name(table.into());
-        self.do_is_create_table_done(identifier, deadline)
+        self.do_is_create_table_done(table.into().into())
     }
 
     /// Returns `true` if the table is fully created.
-    pub fn is_create_table_done_by_id(&self, id: &TableId, deadline: Instant) -> Result<bool> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_is_create_table_done(identifier, deadline)
+    pub fn is_create_table_done_by_id(&mut self, id: TableId) -> impl Future<Item=bool, Error=Error> {
+        self.do_is_create_table_done(id.into())
     }
 
-    fn do_is_create_table_done(&self, table: TableIdentifierPB, deadline: Instant) -> Result<bool> {
-        let mut request = IsCreateTableDoneRequestPB::new();
-        request.set_table(table);
+    fn do_is_create_table_done(&mut self, table: TableIdentifierPb) -> impl Future<Item=bool, Error=Error> {
+        let request = MasterService::is_create_table_done(Box::new(IsCreateTableDoneRequestPb { table }),
+                                                          Instant::now() + self.options.admin_timeout,
+                                                          &[]);
 
-        let (send, recv) = sync_channel(1);
-        self.master.is_create_table_done(deadline, request, move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|resp| resp.get_done())
+        self.master
+            .send(request)
+            .map(|response: IsCreateTableDoneResponsePb| response.done())
     }
 
+/*
     /// Synchronously waits until the table is created. If an error is returned,
     /// the table may not be created yet.
     pub fn wait_for_table_creation<S>(&self, table: S, deadline: Instant) -> Result<()>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_name(table.into());
         self.do_wait_for_table_creation(identifier, deadline)
     }
@@ -124,12 +128,12 @@ impl Client {
     /// Synchronously waits until the table is created. If an error is returned,
     /// the table may not be created yet.
     pub fn wait_for_table_creation_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_id(id.to_string().into_bytes());
         self.do_wait_for_table_creation(identifier, deadline)
     }
 
-    fn do_wait_for_table_creation(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
+    fn do_wait_for_table_creation(&self, table: TableIdentifierPb, deadline: Instant) -> Result<()> {
         let mut backoff = Backoff::with_duration_range(5, 5000);
 
         let mut is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
@@ -142,38 +146,35 @@ impl Client {
         }
         is_create_table_done.map(|_| ())
     }
+*/
 
     /// Deletes the table.
-    pub fn delete_table<S>(&self, table: S, deadline: Instant) -> Result<()>
+    pub fn delete_table<S>(&mut self, table: S) -> impl Future<Item=(), Error=Error>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_name(table.into());
-        self.do_delete_table(identifier, deadline)
+        self.do_delete_table(table.into().into())
     }
 
     /// Deletes the table.
-    pub fn delete_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_delete_table(identifier, deadline)
+    pub fn delete_table_by_id(&mut self, id: TableId) -> impl Future<Item=(), Error=Error> {
+        self.do_delete_table(id.into())
     }
 
-    fn do_delete_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
-        let mut request = DeleteTableRequestPB::new();
-        request.set_table(table);
+    fn do_delete_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=(), Error=Error>{
+        let request = MasterService::delete_table(Box::new(DeleteTableRequestPb { table }),
+                                                           Instant::now() + self.options.admin_timeout,
+                                                           &[]);
 
-        let (send, recv) = sync_channel(0);
-        self.master.delete_table(deadline, request, move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|_| ())
+        self.master.send(request).map(|_: DeleteTableResponsePb| ())
     }
 
+/*
     pub fn alter_table<S>(&self,
                           table: S,
                           alter: AlterTableBuilder,
                           deadline: Instant)
                           -> Result<TableId>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_name(table.into());
         self.do_alter_table(identifier, alter, deadline)
     }
@@ -183,13 +184,13 @@ impl Client {
                              alter: AlterTableBuilder,
                              deadline: Instant)
                              -> Result<()> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_id(id.to_string().into_bytes());
         self.do_alter_table(identifier, alter, deadline).map(|_| ())
     }
 
     fn do_alter_table(&self,
-                      table: TableIdentifierPB,
+                      table: TableIdentifierPb,
                       alter: AlterTableBuilder,
                       deadline: Instant)
                       -> Result<TableId> {
@@ -221,20 +222,20 @@ impl Client {
     /// Returns `true` if the table is fully altered.
     pub fn is_alter_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_name(table.into());
         self.do_is_alter_table_done(identifier, deadline)
     }
 
     /// Returns `true` if the table is fully altered.
     pub fn is_alter_table_done_by_id(&self, id: &TableId, deadline: Instant) -> Result<bool> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_id(id.to_string().into_bytes());
         self.do_is_alter_table_done(identifier, deadline)
     }
 
-    fn do_is_alter_table_done(&self, table: TableIdentifierPB, deadline: Instant) -> Result<bool> {
-        let mut request = IsAlterTableDoneRequestPB::new();
+    fn do_is_alter_table_done(&self, table: TableIdentifierPb, deadline: Instant) -> Result<bool> {
+        let mut request = IsAlterTableDoneRequestPb::new();
         request.set_table(table);
 
         let (send, recv) = sync_channel(1);
@@ -246,7 +247,7 @@ impl Client {
     /// the table may not be altered yet.
     pub fn wait_for_table_alteration<S>(&self, table: S, deadline: Instant) -> Result<()>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_name(table.into());
         self.do_wait_for_table_alteration(identifier, deadline)
     }
@@ -254,12 +255,12 @@ impl Client {
     /// Synchronously waits until the table is altered. If an error is returned,
     /// the table may not be altered yet.
     pub fn wait_for_table_alteration_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
-        let mut identifier = TableIdentifierPB::new();
+        let mut identifier = TableIdentifierPb::new();
         identifier.set_table_id(id.to_string().into_bytes());
         self.do_wait_for_table_alteration(identifier, deadline)
     }
 
-    fn do_wait_for_table_alteration(&self, table: TableIdentifierPB, deadline: Instant) -> Result<()> {
+    fn do_wait_for_table_alteration(&self, table: TableIdentifierPb, deadline: Instant) -> Result<()> {
         let mut backoff = Backoff::with_duration_range(5, 5000);
 
         let mut is_table_alter_done = self.do_is_alter_table_done(table.clone(), deadline);
@@ -272,35 +273,36 @@ impl Client {
         }
         is_table_alter_done.map(|_| ())
     }
+    */
 
     /// Lists all tables and their associated table ID.
-    pub fn list_tables(&self, deadline: Instant) -> Result<Vec<(String, TableId)>> {
-        self.do_list_tables(ListTablesRequestPB::new(), deadline)
+    pub fn list_tables(&mut self) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
+        self.do_list_tables(Default::default())
     }
 
-    /// Lists all tables with the a name matching the provided prefix, and their associated table
-    /// ID.
-    pub fn list_tables_with_prefix<S>(&self, name_prefix: S, deadline: Instant) ->
-        Result<Vec<(String, TableId)>>
+    /// Lists all tables with the a name matching the provided prefix, and their associated table ID.
+    pub fn list_tables_with_prefix<S>(&mut self, name_prefix: S) -> impl Future<Item=Vec<(String, TableId)>, Error=Error>
     where S: Into<String> {
-        let mut request = ListTablesRequestPB::new();
-        request.set_name_filter(name_prefix.into());
-        self.do_list_tables(request, deadline)
+        self.do_list_tables(Box::new(ListTablesRequestPb { name_filter: Some(name_prefix.into()) }))
     }
 
-    fn do_list_tables(&self, request: ListTablesRequestPB, deadline: Instant) -> Result<Vec<(String, TableId)>> {
-        let (send, recv) = sync_channel(0);
-        self.master.list_tables(deadline, request, move |resp| send.send(resp).unwrap());
-        let mut resp = try!(recv.recv().unwrap());
-        let mut tables = Vec::with_capacity(resp.get_tables().len());
-        for mut table in resp.take_tables().into_iter() {
-            tables.push((table.take_name(), try!(TableId::parse_bytes(table.get_id()))))
-        }
-        Ok(tables)
+    fn do_list_tables(&mut self, request: Box<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
+        let request = MasterService::list_tables(request,
+                                                 Instant::now() + self.options.admin_timeout,
+                                                 &[]);
+
+        self.master.send(request).and_then(|response: ListTablesResponsePb| {
+            let mut tables = Vec::with_capacity(response.tables.len());
+            for table in response.tables {
+                tables.push((table.name, TableId::parse_bytes(&table.id)?));
+            }
+            Ok(tables)
+        })
     }
 
+/*
     pub fn list_masters(&self, deadline: Instant) -> Result<Vec<Master>> {
-        let request = ListMastersRequestPB::new();
+        let request = ListMastersRequestPb::new();
         let (send, recv) = sync_channel(1);
         self.master.list_masters(deadline, request, move |resp| send.send(resp).unwrap());
         let mut resp = try!(recv.recv().unwrap());
@@ -312,7 +314,7 @@ impl Client {
     }
 
     pub fn list_tablet_servers(&self, deadline: Instant) -> Result<Vec<TabletServer>> {
-        let request = ListTabletServersRequestPB::new();
+        let request = ListTabletServersRequestPb::new();
         let (send, recv) = sync_channel(1);
         self.master.list_tablet_servers(deadline, request, move |resp| send.send(resp).unwrap());
         let mut resp = try!(recv.recv().unwrap());
@@ -322,75 +324,76 @@ impl Client {
         }
         Ok(tablet_servers)
     }
+*/
 
     /// Returns an open table.
-    pub fn open_table<S>(&self, table: S, deadline: Instant) -> Result<Table>
+    pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_name(table.into());
-        self.do_open_table(identifier, deadline)
+        self.do_open_table(table.into().into())
     }
-
 
     /// Returns an open table.
-    pub fn open_table_by_id(&self, id: &TableId, deadline: Instant) -> Result<Table> {
-        let mut identifier = TableIdentifierPB::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_open_table(identifier, deadline)
+    pub fn open_table_by_id(&mut self, id: TableId) -> impl Future<Item=Table, Error=Error> {
+        self.do_open_table(id.into())
     }
 
-    fn do_open_table(&self, table: TableIdentifierPB, deadline: Instant) -> Result<Table> {
-        let mut request = GetTableSchemaRequestPB::new();
-        request.set_table(table);
+    fn do_open_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=Table, Error=Error> {
+        let request = MasterService::get_table_schema(Box::new(GetTableSchemaRequestPb { table }),
+                                                      Instant::now() + self.options.admin_timeout,
+                                                      &[]);
 
-        let (send, recv) = sync_channel(0);
-        self.master.get_table_schema(deadline, request, move |resp| send.send(resp).unwrap());
+        let client = self.clone();
+        self.master.send(request).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
+            static MESSAGE: &'static str = "GetTableSchemaResponsePb";
 
-        let mut resp = try!(recv.recv().unwrap());
-        let name = resp.take_table_name();
-        let id = try!(TableId::parse_bytes(resp.get_table_id()));
-        let partition_schema = PartitionSchema::from_pb(resp.get_partition_schema(),
-                                                        resp.get_schema());
-        let schema = try!(Schema::from_pb(resp.take_schema()));
-        let meta_cache = self.meta_caches
-                             .lock()
-                             .entry(id.clone())
-                             .or_insert_with(|| MetaCache::new(id.clone(),
-                                                               schema.primary_key_projection(),
-                                                               partition_schema.clone(),
-                                                               self.master.clone()))
-                             .clone();
+            let num_replicas = resp.num_replicas() as u32;
+            let name = resp.table_name.expect_field(MESSAGE, "table_name")?;
 
-        Ok(Table::new(name, id, schema, partition_schema, resp.get_num_replicas() as u32, meta_cache, self.clone()))
+            let id = TableId::parse_bytes(&resp.table_id.expect_field(MESSAGE, "table_id")?)?;
+
+            let schema = resp.schema.expect_field(MESSAGE, "schema")?;
+            let partition_schema = PartitionSchema::from_pb(&resp.partition_schema.expect_field(MESSAGE, "partition_schema")?,
+                                                            &schema);
+            let schema = Schema::from_pb(schema)?;
+
+            let meta_cache = client.meta_caches
+                                   .lock()
+                                   .entry(id.clone())
+                                   .or_insert_with(|| MetaCache::new(id.clone(),
+                                                                     schema.primary_key_projection(),
+                                                                     partition_schema.clone(),
+                                                                     client.master.clone()))
+                                   .clone();
+
+            Ok(Table::new(name,
+                          id,
+                          schema,
+                          partition_schema,
+                          num_replicas,
+                          meta_cache,
+                          client))
+        })
     }
 
     pub fn latest_observed_timestamp(&self) -> u64 {
         *self.latest_observed_timestamp.lock()
     }
 
-    pub fn timestamp_observed(&self, timestamp: u64) {
+    pub fn observe_timestamp(&self, timestamp: u64) {
         let mut latest = self.latest_observed_timestamp.lock();
         if timestamp > *latest {
             *latest = timestamp;
         }
     }
 
-    #[doc(hidden)]
-    pub fn master_proxy(&self) -> &MasterProxy {
+    pub(crate) fn master_proxy(&self) -> &MasterProxy {
         &self.master
     }
 
     /// This should only be called when the table has been guaranteed to have been opened.
-    #[doc(hidden)]
-    pub fn meta_cache(&self, table: &TableId) -> MetaCache {
+    pub(crate) fn meta_cache(&self, table: &TableId) -> MetaCache {
         self.meta_caches.lock()[table].clone()
     }
-
-    #[doc(hidden)]
-    pub fn messenger(&self) -> &Messenger {
-        &self.messenger
-    }
-    */
 }
 
 impl fmt::Debug for Client {

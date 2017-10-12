@@ -1,3 +1,4 @@
+use Error;
 use HostPort;
 use TableId;
 
@@ -27,7 +28,7 @@ mod kudu {
 
 pub use pb::kudu::*;
 
-// Some conveninent conversions.
+// Some convenient conversions.
 
 impl From<TableId> for master::TableIdentifierPb {
     fn from(table_id: TableId) -> master::TableIdentifierPb {
@@ -60,6 +61,22 @@ impl From<HostPortPb> for HostPort {
         HostPort {
             host: hostport.host,
             port: hostport.port as u16,
+        }
+    }
+}
+
+pub trait ExpectField {
+    type Value;
+    fn expect_field(self, message: &'static str, field: &'static str) -> Result<Self::Value, Error>;
+}
+
+impl <T> ExpectField for Option<T> {
+    type Value = T;
+    fn expect_field(self, message: &'static str, field: &'static str) -> Result<T, Error> {
+        match self {
+            Some(value) => Ok(value),
+            None => Err(Error::Serialization(format!("required field absent: {}::{}",
+                                                     message, field))),
         }
     }
 }

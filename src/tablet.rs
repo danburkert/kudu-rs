@@ -1,7 +1,6 @@
-use std::net::SocketAddr;
-
 use pb::master::TabletLocationsPb;
 use pb::master::tablet_locations_pb::ReplicaPb;
+use pb::ExpectField;
 
 use Error;
 use HostPort;
@@ -12,7 +11,6 @@ use Result;
 use Schema;
 use TabletId;
 use TabletServerId;
-use util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tablet {
@@ -38,14 +36,12 @@ impl Tablet {
     /// Creates a new `Tablet` from a tablet locations protobuf message.
     pub(crate) fn from_pb(primary_key_schema: &Schema,
                           partition_schema: PartitionSchema,
-                          mut pb: TabletLocationsPb)
+                          pb: TabletLocationsPb)
                           -> Result<Tablet> {
         let id = TabletId::parse_bytes(&pb.tablet_id)?;
-        let partition = match pb.partition {
-            Some(partition) => Partition::from_pb(primary_key_schema, partition_schema, partition),
-            None => Err(Error::Serialization(
-                    "required field absent: TabletLocationsPb::partition".to_string())),
-        }?;
+        let partition = Partition::from_pb(primary_key_schema,
+                                           partition_schema,
+                                           pb.partition.expect_field("TabletLocationsPB", "partition")?)?;
 
         let mut replicas = Vec::with_capacity(pb.replicas.len());
         for replica in pb.replicas.into_iter() {
@@ -89,7 +85,7 @@ impl Replica {
     */
 
     /// Creates a new `Replica` from a replica protobuf message.
-    pub(crate) fn from_pb(mut pb: ReplicaPb) -> Result<Replica> {
+    pub(crate) fn from_pb(pb: ReplicaPb) -> Result<Replica> {
         let role = pb.role();
         let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
         let rpc_addrs = pb.ts_info.rpc_addresses.into_iter().map(HostPort::from).collect();
