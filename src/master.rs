@@ -1,301 +1,230 @@
-use std::marker::PhantomData;
 use std::mem;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::ops::Deref;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use futures::{Async, AsyncSink, Future, Poll, Sink};
-use parking_lot::Mutex;
-use kudu_pb::master::{
-    AlterTableRequestPB, AlterTableResponsePB,
-    CreateTableRequestPB, CreateTableResponsePB,
-    DeleteTableRequestPB, DeleteTableResponsePB,
-    GetTableLocationsRequestPB, GetTableLocationsResponsePB,
-    GetTableSchemaRequestPB, GetTableSchemaResponsePB,
-    GetTabletLocationsRequestPB, GetTabletLocationsResponsePB,
-    IsAlterTableDoneRequestPB, IsAlterTableDoneResponsePB,
-    IsCreateTableDoneRequestPB, IsCreateTableDoneResponsePB,
-    ListMastersRequestPB, ListMastersResponsePB,
-    ListTablesRequestPB, ListTablesResponsePB,
-    ListTabletServersRequestPB, ListTabletServersResponsePB,
-    PingRequestPB, PingResponsePB,
+use futures::future::Shared;
+use futures::{
+    Async,
+    Future,
+    Poll,
+    Stream,
 };
-use kudu_pb::wire_protocol::{ServerEntryPB as MasterEntry};
+use futures::stream::FuturesUnordered;
+use krpc::{
+    HostPort,
+    Proxy,
+    Request,
+    Response,
+};
 
-use backoff::Backoff;
-use list_masters::find_leader_master;
-use protobuf::Message;
-use rpc::{
-    Rpc,
-    RpcError,
-    RpcFuture,
-    master
-};
-use util;
+use pb::master::*;
 use Error;
 use MasterError;
 use MasterErrorCode;
-use MasterId;
-use RaftRole;
-use Result;
-use Status;
+use Options;
+use retry::{
+    Retry,
+    KuduResponse,
+};
 
-enum Leader {
-    /// The known leader.
-    Known(SocketAddr, Vec<SocketAddr>),
-    /// The leader is unknown, RPCs must be queued until the leader is discovered.
-    Unknown(Box<Future<Item=(SocketAddr, Vec<SocketAddr>), Error=!>>),
-}
-
-macro_rules! impl_master_rpc {
-    ($fn_name:ident, $request_type:ident, $response_type:ident) => {
-        pub fn $fn_name(&self, deadline: Instant, request: $request_type) -> MasterProxyFuture<$response_type>  {
-            // The real leader address will be filled in after polling the current leader.
-            let addr = util::dummy_addr();
-            let mut rpc = master::$fn_name(addr, deadline, request);
-            let future = rpc.future();
-            MasterProxyFuture {
-                proxy: self.clone(),
-                rpc: Some(rpc),
-                future: future,
-                marker: PhantomData,
-            }
-        }
-    };
-}
-
-/// The `MasterProxy` tracks the current leader master, and proxies RPCs to it. If any RPC fails
-/// with `MasterErrorCode::NotTheLeader`, the cached leader is flushed (if it has not happened
-/// already), and the RPC is retried after discovering the new leader.
-#[derive(Clone)]
-pub struct MasterProxy {
-    leader: Arc<Mutex<Leader>>,
-    io: Io,
+struct MasterProxy {
+    cache: Option<(Proxy, usize)>,
+    inner: Arc<Inner>,
 }
 
 impl MasterProxy {
 
-    /// Creates a new `MasterProxy` with an initial seed of master addresses, and an `Io`
-    /// instance to handle scheduling and sending RPCs.
-    pub fn new(replicas: Vec<SocketAddr>, io: Io) -> MasterProxy {
-        assert!(replicas.len() > 0);
-        let find_leader = find_leader_master(io.clone(),
-                                             Backoff::with_duration_range(1_000, 60_000),
-                                             replicas);
+    fn new(addrs: Vec<HostPort>, options: Options) -> MasterProxy {
         MasterProxy {
-            leader: Arc::new(Mutex::new(Leader::Unknown(find_leader))),
-            io: io,
+            cache: None,
+            inner: Arc::new(Inner::new(addrs, options)),
         }
     }
 
-    impl_master_rpc!(alter_table, AlterTableRequestPB, AlterTableResponsePB);
-    impl_master_rpc!(create_table, CreateTableRequestPB, CreateTableResponsePB);
-    impl_master_rpc!(delete_table, DeleteTableRequestPB, DeleteTableResponsePB);
-    impl_master_rpc!(get_table_locations, GetTableLocationsRequestPB, GetTableLocationsResponsePB);
-    impl_master_rpc!(get_table_schema, GetTableSchemaRequestPB, GetTableSchemaResponsePB);
-    impl_master_rpc!(get_tablet_locations, GetTabletLocationsRequestPB, GetTabletLocationsResponsePB);
-    impl_master_rpc!(is_alter_table_done, IsAlterTableDoneRequestPB, IsAlterTableDoneResponsePB);
-    impl_master_rpc!(is_create_table_done, IsCreateTableDoneRequestPB, IsCreateTableDoneResponsePB);
-    impl_master_rpc!(list_masters, ListMastersRequestPB, ListMastersResponsePB);
-    impl_master_rpc!(list_tables, ListTablesRequestPB, ListTablesResponsePB);
-    impl_master_rpc!(list_tablet_servers, ListTabletServersRequestPB, ListTabletServersResponsePB);
-    impl_master_rpc!(ping, PingRequestPB, PingResponsePB);
+    fn send<T>(&mut self, request: Request) -> MasterResponse<T> where T: KuduResponse + 'static {
+        let epoch = self.inner.epoch();
 
-    fn poll_replicas(&self) -> Poll<Vec<SocketAddr>, !> {
-        let mut lock = self.leader.lock();
-        let (leader, replicas) = match *lock {
-            Leader::Known(_, ref replicas) => return Ok(Async::Ready(replicas.clone())),
-            Leader::Unknown(ref mut f) => try_ready!(f.poll()),
-        };
-        *lock = Leader::Known(leader, replicas.clone());
-        Ok(Async::Ready(replicas))
-    }
-
-    /// Returns the leader master, if it is known.
-    fn poll_leader(&self) -> Poll<SocketAddr, !> {
-        let mut lock = self.leader.lock();
-        let (leader, replicas) = match *lock {
-            Leader::Known(leader, ..) => return Ok(Async::Ready(leader)),
-            Leader::Unknown(ref mut f) => try_ready!(f.poll()),
-        };
-        *lock = Leader::Known(leader, replicas);
-        Ok(Async::Ready(leader))
-    }
-
-    /// Clears the leader cache if the currently cached leader matches the provided address.
-    /// If the cache is cleared, a refresh is initiated.
-    fn reset_leader(&self, stale_leader: SocketAddr) {
-        let mut lock = self.leader.lock();
-        let future = match *lock {
-            Leader::Known(leader, ref mut replicas) if leader == stale_leader => {
-                let replicas = mem::replace(replicas, Vec::new());
-                find_leader_master(self.io.clone(), Backoff::with_duration_range(1_000, 60_000), replicas)
-            },
-            _ => return,
-        };
-        *lock = Leader::Unknown(future);
-    }
-}
-
-pub trait MasterResponse: Message {
-    fn error(&mut self) -> Option<MasterError>;
-}
-macro_rules! impl_master_response {
-    ($response_type:ident) => {
-        impl MasterResponse for $response_type {
-            fn error(&mut self) -> Option<MasterError> {
-                if self.has_error() { Some(MasterError::from(self.take_error())) } else { None }
-            }
-        }
-    };
-    ($response_type:ident, no_error) => {
-        impl MasterResponse for $response_type {
-            fn error(&mut self) -> Option<MasterError> { None }
-        }
-    };
-}
-impl_master_response!(AlterTableResponsePB);
-impl_master_response!(CreateTableResponsePB);
-impl_master_response!(DeleteTableResponsePB);
-impl_master_response!(GetTableLocationsResponsePB);
-impl_master_response!(GetTableSchemaResponsePB);
-impl_master_response!(GetTabletLocationsResponsePB);
-impl_master_response!(IsAlterTableDoneResponsePB);
-impl_master_response!(IsCreateTableDoneResponsePB);
-impl_master_response!(ListTablesResponsePB);
-impl_master_response!(ListTabletServersResponsePB);
-impl_master_response!(PingResponsePB, no_error);
-
-impl MasterResponse for ListMastersResponsePB {
-    fn error(&mut self) -> Option<MasterError> {
-        if self.has_error() {
-            Some(MasterError::new(MasterErrorCode::UnknownError, Status::from(self.take_error())))
-        } else { None }
-    }
-}
-
-pub struct MasterProxyFuture<Resp> where Resp: MasterResponse {
-    proxy: MasterProxy,
-    rpc: Option<Rpc>,
-    future: RpcFuture,
-    marker: PhantomData<Resp>,
-}
-
-impl <Resp> Future for MasterProxyFuture<Resp> where Resp: MasterResponse {
-    type Item = Resp;
-    type Error = Error;
-    fn poll(&mut self) -> Poll<Resp, Error> {
-        loop {
-            if self.rpc.is_some() {
-                let leader = match self.proxy.poll_leader().unwrap() {
-                    Async::NotReady => return Ok(Async::NotReady),
-                    Async::Ready(leader) => leader,
+        if let Some((ref mut proxy, cache_epoch)) = self.cache {
+            if epoch == cache_epoch {
+                let response = proxy.send(request);
+                return MasterResponse {
+                    inner: self.inner.clone(),
+                    state: Some(State::InFlight(response)),
+                    epoch,
                 };
-                let mut rpc = self.rpc.take().unwrap();
-                rpc.addr = leader;
-
-                if let AsyncSink::NotReady(rpc) = self.proxy.io.messenger.start_send(rpc).unwrap() {
-                    self.rpc = Some(rpc);
-                    return Ok(Async::NotReady);
-                }
             }
+        };
+        self.cache = None;
 
-            match self.future.poll() {
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Ok(Async::Ready(mut rpc)) => match rpc.mut_response::<Resp>().error() {
-                    Some(ref error) if error.code() == MasterErrorCode::NotTheLeader ||
-                                       error.code() == MasterErrorCode::CatalogManagerNotInitialized => {
-                        // When the master is not the leader, reset the cache and resend.
-                        self.proxy.reset_leader(rpc.addr);
-                        self.future = rpc.future();
-                        self.rpc = Some(rpc);
+        let (connection, epoch) = self.inner.connection();
+
+        match connection.peek() {
+            Some(Ok(proxy)) => {
+                self.cache = Some((proxy.deref().clone(), epoch));
+                return self.send(request);
+            },
+            Some(Err(_)) => {
+                self.inner.reset(epoch);
+            },
+            None => (),
+        }
+
+        MasterResponse {
+            inner: self.inner.clone(),
+            state: Some(State::Connecting(connection, request)),
+            epoch,
+        }
+    }
+}
+
+struct Inner {
+    addrs: Vec<HostPort>,
+    options: Options,
+    connection: RwLock<(Shared<ConnectToCluster>, usize)>,
+}
+
+impl Inner {
+
+    fn new(addrs: Vec<HostPort>, options: Options) -> Inner {
+        let connection = ConnectToCluster::new(&addrs, &options).shared();
+        Inner {
+            addrs: addrs,
+            options: options,
+            connection: RwLock::new((connection, 0)),
+        }
+    }
+
+    /// Resets the current connection, if the current epoch matches `reset_epoch`.
+    /// Returns the current connection and connection epoch.
+    fn reset(&self, reset_epoch: usize) -> (Shared<ConnectToCluster>, usize) {
+        let mut connection = self.connection.write().unwrap();
+        if reset_epoch == connection.1 {
+            connection.0 = ConnectToCluster::new(&self.addrs, &self.options).shared();
+            connection.1 += 1;
+        }
+        connection.clone()
+    }
+
+    /// Returns the current connection epoch.
+    fn epoch(&self) -> usize {
+        self.connection.read().unwrap().1
+    }
+
+    /// Returns the current connection and connection epoch.
+    fn connection(&self) -> (Shared<ConnectToCluster>, usize) {
+        self.connection.read().unwrap().clone()
+    }
+}
+
+enum State<T> where T: KuduResponse {
+    Connecting(Shared<ConnectToCluster>, Request),
+    InFlight(Response<T>),
+}
+
+struct MasterResponse<T> where T: KuduResponse {
+    inner: Arc<Inner>,
+    state: Option<State<T>>,
+    epoch: usize,
+}
+
+impl <T> Future for MasterResponse<T> where T: KuduResponse {
+    type Item = T;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<T, Error> {
+        let state = self.state.take().unwrap();
+
+        let mut response = match state {
+            State::Connecting(mut connecting, request) => {
+                match connecting.poll().map_err(|error| error.deref().clone())? {
+                    Async::Ready(proxy) => {
+                        proxy.deref().clone().send(request)
                     },
-                    Some(error) => return Err(Error::from(MasterError::from(error))),
-                    None => return Ok(Async::Ready(rpc.take_response::<Resp>())),
+                    Async::NotReady => {
+                        self.state = Some(State::Connecting(connecting, request));
+                        return Ok(Async::NotReady);
+                    },
+                }
+            },
+            State::InFlight(response) => response,
+        };
+
+        match response.poll().map_err(|(error, _)| error)? {
+            Async::Ready((value, _, request)) => {
+                match value.into_result() {
+                    Ok(value) => Ok(Async::Ready(value)),
+                    Err(Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. })) => {
+                        let (connection, epoch) = self.inner.reset(self.epoch);
+                        self.state = Some(State::Connecting(connection, request));
+                        self.epoch = epoch;
+                        self.poll()
+                    },
+                    Err(error) => Err(error),
+                }
+            },
+            Async::NotReady => {
+                self.state = Some(State::InFlight(response));
+                Ok(Async::NotReady)
+            },
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+struct ConnectToCluster {
+    responses: FuturesUnordered<Retry<ConnectToMasterResponsePb>>,
+    errors: Vec<Error>,
+}
+
+impl ConnectToCluster {
+    fn new(addrs: &[HostPort], options: &Options) -> ConnectToCluster {
+        let now = Instant::now();
+        let mut responses = FuturesUnordered::new();
+        for addr in addrs {
+            let mut proxy = Proxy::spawn(vec![addr.clone()],
+                                         options.rpc.clone(),
+                                         options.threadpool.clone(),
+                                         &options.remote);
+
+            let response = proxy.send(
+                MasterService::connect_to_master(Default::default(),
+                                                 now + options.admin_timeout,
+                                                 &[MasterFeatures::ConnectToMaster as u32]));
+            responses.push(Retry::wrap(response, proxy, options.timer.clone()));
+        }
+
+        ConnectToCluster {
+            responses,
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl Future for ConnectToCluster {
+    type Item = Proxy;
+    type Error = Error;
+    fn poll(&mut self) -> Poll<Proxy, Error> {
+        loop {
+            match self.responses.poll() {
+                Ok(Async::Ready(Some((_, _, proxy)))) => return Ok(Async::Ready(proxy)),
+                Ok(Async::Ready(None)) => {
+                    let errors = mem::replace(&mut self.errors, Vec::new());
+                    return Err(Error::Compound("failed to connect to cluster".to_string(), errors));
                 },
-                Err(RpcError { mut rpc, error }) => if error.is_network_error() {
-                    // On connection error, reset the cache and resend.
-                    self.proxy.reset_leader(rpc.addr);
-                    self.future = rpc.future();
-                    self.rpc = Some(rpc);
-                } else {
-                    return Err(error);
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(error) => {
+                    // TODO: scope this warning down if it's a Not Leader error.
+                    warn!("failed to connect to master: {}", error);
+                    self.errors.push(error);
                 },
             }
         }
     }
 }
 
-/// Master metadata.
-///
-/// This information should be considered 'point-in-time', and may change as the cluster topology
-/// changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Master {
-    id: MasterId,
-    rpc_addrs: Vec<(String, u16)>,
-    http_addrs: Vec<(String, u16)>,
-    seqno: i64,
-    role: RaftRole,
-}
 
-impl Master {
-    pub fn id(&self) -> &MasterId {
-        &self.id
-    }
-
-    pub fn rpc_addrs(&self) -> &[(String, u16)] {
-        &self.rpc_addrs
-    }
-
-    pub fn http_addrs(&self) -> &[(String, u16)] {
-        &self.http_addrs
-    }
-
-    pub fn seqno(&self) -> i64 {
-        self.seqno
-    }
-
-    pub fn role(&self) -> RaftRole {
-        self.role
-    }
-
-    #[doc(hidden)]
-    pub fn from_pb(mut master: MasterEntry) -> Result<Master> {
-        if master.has_error() {
-            return Err(Error::from(MasterError::new(MasterErrorCode::UnknownError,
-                                                    Status::from(master.take_error()))))
-        }
-
-        let id = try!(MasterId::parse_bytes(master.get_instance_id().get_permanent_uuid()));
-        let seqno = master.get_instance_id().get_instance_seqno();
-
-        // TODO: check bounds on port casts.
-        let rpc_addrs = master.mut_registration()
-                              .take_rpc_addresses()
-                              .into_iter()
-                              .map(|mut host_port| (host_port.take_host(),
-                                                    host_port.get_port() as u16))
-                              .collect::<Vec<_>>();
-        let http_addrs = master.mut_registration()
-                               .take_http_addresses()
-                               .into_iter()
-                               .map(|mut host_port| (host_port.take_host(),
-                                                     host_port.get_port() as u16))
-                               .collect::<Vec<_>>();
-
-        let role = RaftRole::from_pb(master.get_role());
-
-        Ok(Master {
-            id: id,
-            rpc_addrs: rpc_addrs,
-            http_addrs: http_addrs,
-            seqno: seqno,
-            role: role,
-        })
-    }
-}
-
+/*
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -464,3 +393,4 @@ mod tests {
         check_list_tables_response(result);
     }
 }
+*/

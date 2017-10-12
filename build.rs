@@ -1,7 +1,6 @@
 extern crate curl;
 extern crate env_logger;
 extern crate flate2;
-extern crate krpc_build;
 extern crate prost_build;
 extern crate tar;
 
@@ -44,11 +43,46 @@ fn main() {
     }
 
     prost_build::Config::new()
-                        .service_generator(Box::new(krpc_build::KrpcServiceGenerator))
+                        .service_generator(Box::new(KuduServiceGenerator))
                         .compile_protos(&[dir.join("src/kudu/client/client.proto"),
                                           dir.join("src/kudu/consensus/metadata.proto"),
                                           dir.join("src/kudu/master/master.proto"),
                                           dir.join("src/kudu/rpc/rpc_header.proto"),
                                           dir.join("src/kudu/tserver/tserver_service.proto")],
                                         &[dir.join("src")]).unwrap();
+}
+
+#[derive(Debug)]
+pub struct KuduServiceGenerator;
+
+impl prost_build::ServiceGenerator for KuduServiceGenerator {
+    fn generate(&self, service: prost_build::Service, buf: &mut String) {
+            // Generate a trait for the service.
+            service.comments.append_with_indent(0, buf);
+            buf.push_str(&format!("pub struct {};\n", &service.name));
+            buf.push_str(&format!("impl {} {{\n", &service.name));
+
+            // Generate the method implementations.
+            for method in &service.methods {
+                method.comments.append_with_indent(1, buf);
+                buf.push_str(&format!("    pub fn {}(\n", method.name));
+                buf.push_str(&format!("        request: ::std::boxed::Box<{}>,\n", method.input_type));
+                buf.push_str("        deadline: ::std::time::Instant,\n");
+                buf.push_str("        required_feature_flags: &'static [u32],\n");
+                buf.push_str("    ) -> ::krpc::Request {\n");
+
+                buf.push_str("        ::krpc::Request {\n");
+                buf.push_str(&format!("            service: \"{}.{}\",\n", service.package, service.proto_name));
+                buf.push_str(&format!("            method: \"{}\",\n", method.proto_name));
+                buf.push_str("            required_feature_flags,\n");
+                buf.push_str("            body: request,\n");
+                buf.push_str("            timestamp: ::std::time::Instant::now(),\n");
+                buf.push_str("            deadline,\n");
+                buf.push_str("        }\n");
+                buf.push_str("    }\n");
+            }
+
+            // Close out the struct.
+            buf.push_str("}\n");
+    }
 }

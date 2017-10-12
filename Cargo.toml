@@ -43,7 +43,6 @@ env_logger = "0.4"
 flate2 = "0.2"
 prost-build = "0.2"
 tar = "0.4"
-krpc-build = { path = "krpc-build", version = "0.1.0" }
 
 [dev-dependencies]
 tempdir = "0.3"
