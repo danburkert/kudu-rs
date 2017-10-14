@@ -39,32 +39,27 @@ mod meta_cache;
 mod table;
 mod tablet;
 mod server;
-// //mod writer;
+//mod writer;
 mod backoff;
 mod bit_set;
-// mod dns;
 mod error;
-// //mod io;
 mod key;
 mod partition;
-// mod queue_map;
 mod row;
 mod schema;
 mod util;
 mod value;
-// mod list_masters;
 
 #[cfg(test)]
 mod mini_cluster;
 
 pub use client::*;
 pub use error::*;
-//pub use master::Master;
 pub use partition::*;
 pub use row::Row;
 pub use schema::*;
 pub use table::*;
-//pub use tablet::*;
+pub use tablet::*;
 pub use server::*;
 pub use value::Value;
 //pub use writer::*;
