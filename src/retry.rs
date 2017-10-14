@@ -151,13 +151,14 @@ macro_rules! master_response {
 }
 
 master_response!(AlterTableResponsePb);
-master_response!(CreateTableResponsePb);
 master_response!(ConnectToMasterResponsePb);
+master_response!(CreateTableResponsePb);
 master_response!(DeleteTableResponsePb);
 master_response!(GetTableLocationsResponsePb);
 master_response!(GetTableSchemaResponsePb);
 master_response!(GetTabletLocationsResponsePb);
 master_response!(IsAlterTableDoneResponsePb);
 master_response!(IsCreateTableDoneResponsePb);
+master_response!(ListMastersResponsePb);
 master_response!(ListTablesResponsePb);
 master_response!(ListTabletServersResponsePb);

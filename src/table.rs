@@ -367,10 +367,10 @@ impl AlterTableBuilder {
         self
     }
 
-    pub fn drop_range_partition_by_ref(&mut self,
-                                       lower_bound: &RangePartitionBound,
-                                       upper_bound: &RangePartitionBound)
-                                       -> &mut AlterTableBuilder {
+    pub fn drop_range_partition(&mut self,
+                                lower_bound: &RangePartitionBound,
+                                upper_bound: &RangePartitionBound)
+                                -> &mut AlterTableBuilder {
         self.check_and_set_schema(lower_bound.row().schema());
         self.check_and_set_schema(upper_bound.row().schema());
         if self.result.is_ok() {
@@ -391,12 +391,12 @@ impl AlterTableBuilder {
 #[cfg(test)]
 mod tests {
 
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use env_logger;
     use tokio::reactor::Core;
 
-    use Client;
     use ClientBuilder;
     use Column;
     use DataType;
@@ -421,17 +421,6 @@ mod tests {
         table_builder.add_range_partition_split(split_row);
     }
 
-    #[test]
-    fn create_table() {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(1)
-                                                         .num_tservers(3));
-        let reactor = Core::new().unwrap();
-
-        let client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
-    }
-
     /*
     #[test]
     fn list_tablets() {
@@ -439,9 +428,10 @@ mod tests {
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(3));
-        let reactor = Core::new().unwrap();
-
-        let client = ClientBuilder::new(cluster.master_addrs().to_owned(), reactor).build().unwrap();
+        let mut reactor = Core::new().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -469,11 +459,13 @@ mod tests {
         table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound),
                                           RangePartitionBound::Exclusive(upper_bound));
 
-        let table_id = client.create_table(table_builder).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline() + Duration::from_secs(10)).unwrap();
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).unwrap();
 
-        let tablets = table.list_tablets(deadline()).unwrap();
+        // TODO: wait
+        thread::sleep(Duration::from_millis(2000));
+
+        let table = reactor.run(client.open_table_by_id(table_id)).unwrap();
+        let tablets = reactor.run(table.list_tablets()).unwrap();
 
         assert_eq!(8, tablets.len());
     }

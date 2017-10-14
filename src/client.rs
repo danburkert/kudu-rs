@@ -36,9 +36,9 @@ use pb::master::{
     IsCreateTableDoneRequestPb,
     IsCreateTableDoneResponsePb,
     ListMastersRequestPb,
+    ListMastersResponsePb,
     ListTablesRequestPb,
     ListTablesResponsePb,
-    ListTabletServersRequestPb,
     ListTabletServersResponsePb,
     MasterService,
     TableIdentifierPb,
@@ -46,19 +46,19 @@ use pb::master::{
 use pb::ExpectField;
 
 use Error;
+use Master;
+use Options;
 use Result;
 use Schema;
 use TableId;
 use TabletServer;
 use backoff::Backoff;
-//use master::Master;
 use master::MasterProxy;
 use meta_cache::MetaCache;
 use partition::PartitionSchema;
 use table::AlterTableBuilder;
 use table::Table;
 use table::TableBuilder;
-use Options;
 
 /// A Kudu database client.
 ///
@@ -295,19 +295,19 @@ impl Client {
         })
     }
 
-/*
-    pub fn list_masters(&self, deadline: Instant) -> Result<Vec<Master>> {
-        let request = ListMastersRequestPb::new();
-        let (send, recv) = sync_channel(1);
-        self.master.list_masters(deadline, request, move |resp| send.send(resp).unwrap());
-        let mut resp = try!(recv.recv().unwrap());
-        let mut masters = Vec::with_capacity(resp.get_masters().len());
-        for master in resp.take_masters().into_iter() {
-            masters.push(try!(Master::from_pb(master)));
-        }
-        Ok(masters)
+    pub fn list_masters(&mut self) -> impl Future<Item=Vec<Master>, Error=Error> {
+        let request = MasterService::list_masters(Default::default(),
+                                                  Instant::now() + self.options.admin_timeout,
+                                                  &[]);
+
+        self.master.send(request).and_then(|response: ListMastersResponsePb| {
+            let mut servers = Vec::with_capacity(response.masters.len());
+            for server in response.masters {
+                servers.push(Master::from_pb(server)?);
+            }
+            Ok(servers)
+        })
     }
-*/
 
     pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServer>, Error=Error> {
         let request = MasterService::list_tablet_servers(Default::default(),
@@ -468,7 +468,9 @@ mod tests {
         let cluster = MiniCluster::default();
         let mut reactor = Core::new().unwrap();
 
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -484,8 +486,7 @@ mod tests {
         let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
         let mut alter_builder = AlterTableBuilder::new();
         alter_builder.rename_table("table_lifecycle_renamed");
-        let altered_table_id = reactor.run(client.alter_table_by_id(table_id, alter_builder))
-                                      .expect("alter_table_by_id");
+        reactor.run(client.alter_table_by_id(table_id, alter_builder)).expect("alter_table_by_id");
 
         let table = reactor.run(client.open_table("table_lifecycle_renamed")).expect("open_table");
         assert_eq!(table_id, table.id());
@@ -498,28 +499,20 @@ mod tests {
     }
 
     #[test]
-    fn list_tablet_servers() {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(1)
-                                                         .num_tservers(3));
-        let mut reactor = Core::new().unwrap();
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
-
-        let tablet_servers = reactor.run(client.list_tablet_servers()).expect("list_table_servers");
-        assert_eq!(3, tablet_servers.len());
-    }
-
-/*
-    #[test]
-    fn list_masters() {
+    fn list_servers() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(3)
-                                                         .num_tservers(0));
-        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+                                                         .num_tservers(3));
+        let mut reactor = Core::new().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
-        let masters = client.list_masters(deadline()).unwrap();
+        let tablet_servers = reactor.run(client.list_tablet_servers()).expect("list_table_servers");
+        assert_eq!(3, tablet_servers.len());
+
+        let masters = reactor.run(client.list_masters()).expect("list_masters");
         assert_eq!(3, masters.len());
     }
 
@@ -529,28 +522,32 @@ mod tests {
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(1));
+        let mut reactor = Core::new().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
-        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
         let mut table_builder = TableBuilder::new("t", simple_schema());
         table_builder.set_num_replicas(1);
         table_builder.set_range_partition_columns(vec!["key"]);
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation("t", deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
 
-        client.alter_table("t", AlterTableBuilder::new()
-                           .add_column(Column::builder("c0", DataType::Int32)),
-                           deadline()).unwrap();
-        client.wait_for_table_alteration("t", deadline()).unwrap();
+        let mut alter_builder = AlterTableBuilder::new();
+        alter_builder.add_column(Column::builder("c0", DataType::Int32));
 
-        let schema = client.open_table("t", deadline()).unwrap().schema().clone();
+        let _ = reactor.run(client.alter_table("t", alter_builder)).expect("add column");
+
+        // TODO: wait
+        thread::sleep(Duration::from_millis(2000));
+
+        let schema = reactor.run(client.open_table("t")).expect("open_table").schema().clone();
         assert_eq!(3, schema.columns().len());
 
-        let alter = AlterTableBuilder::new().drop_range_partition(
-            &RangePartitionBound::Inclusive(schema.new_row()),
-            &RangePartitionBound::Exclusive(schema.new_row()));
+        let mut alter_builder = AlterTableBuilder::new();
+        alter_builder.drop_range_partition(&RangePartitionBound::Inclusive(schema.new_row()),
+                                           &RangePartitionBound::Exclusive(schema.new_row()));
 
-        client.alter_table_by_id(&table_id, alter, deadline()).unwrap();
-        client.wait_for_table_alteration("t", deadline()).unwrap();
+        reactor.run(client.alter_table_by_id(table_id, alter_builder)).expect("drop range partition");
 
         let mut lower_bound = schema.new_row();
         let mut upper_bound = schema.new_row();
@@ -558,16 +555,17 @@ mod tests {
         lower_bound.set_by_name("key", "a").unwrap();
         upper_bound.set_by_name("key", "z").unwrap();
 
-        let alter = AlterTableBuilder::new()
-            .add_range_partition(&RangePartitionBound::Inclusive(lower_bound),
-                                 &RangePartitionBound::Exclusive(upper_bound))
-            .rename_table("u")
-            .drop_column("c0");
+        let mut alter_builder = AlterTableBuilder::new();
+        alter_builder.add_range_partition(&RangePartitionBound::Inclusive(lower_bound),
+                                          &RangePartitionBound::Exclusive(upper_bound))
+                     .rename_table("u")
+                     .drop_column("c0");
+        reactor.run(client.alter_table_by_id(table_id, alter_builder)).unwrap();
 
-        client.alter_table_by_id(&table_id, alter, deadline()).unwrap();
-        client.wait_for_table_alteration("u", deadline()).unwrap();
-        let schema = client.open_table("u", deadline()).unwrap().schema().clone();
+        // TODO: wait
+        thread::sleep(Duration::from_millis(2000));
+
+        let schema = reactor.run(client.open_table("u")).unwrap().schema().clone();
         assert_eq!(2, schema.columns().len());
     }
-*/
 }
