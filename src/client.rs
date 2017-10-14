@@ -39,6 +39,7 @@ use pb::master::{
     ListTablesRequestPb,
     ListTablesResponsePb,
     ListTabletServersRequestPb,
+    ListTabletServersResponsePb,
     MasterService,
     TableIdentifierPb,
 };
@@ -48,7 +49,7 @@ use Error;
 use Result;
 use Schema;
 use TableId;
-//use TabletServer;
+use TabletServer;
 use backoff::Backoff;
 //use master::Master;
 use master::MasterProxy;
@@ -306,19 +307,21 @@ impl Client {
         }
         Ok(masters)
     }
-
-    pub fn list_tablet_servers(&self, deadline: Instant) -> Result<Vec<TabletServer>> {
-        let request = ListTabletServersRequestPb::new();
-        let (send, recv) = sync_channel(1);
-        self.master.list_tablet_servers(deadline, request, move |resp| send.send(resp).unwrap());
-        let mut resp = try!(recv.recv().unwrap());
-        let mut tablet_servers = Vec::with_capacity(resp.get_servers().len());
-        for server in resp.take_servers().into_iter() {
-            tablet_servers.push(try!(TabletServer::from_pb(server)));
-        }
-        Ok(tablet_servers)
-    }
 */
+
+    pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServer>, Error=Error> {
+        let request = MasterService::list_tablet_servers(Default::default(),
+                                                         Instant::now() + self.options.admin_timeout,
+                                                         &[]);
+
+        self.master.send(request).and_then(|response: ListTabletServersResponsePb| {
+            let mut servers = Vec::with_capacity(response.servers.len());
+            for server in response.servers {
+                servers.push(TabletServer::from_pb(server)?);
+            }
+            Ok(servers)
+        })
+    }
 
     /// Returns an open table.
     pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error>
@@ -494,7 +497,6 @@ mod tests {
         assert!(reactor.run(client.list_tables()).expect("list_tables").is_empty());
     }
 
-/*
     #[test]
     fn list_tablet_servers() {
         let _ = env_logger::init();
@@ -502,12 +504,13 @@ mod tests {
                                                          .num_masters(1)
                                                          .num_tservers(3));
         let mut reactor = Core::new().unwrap();
-        let client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
 
         let tablet_servers = reactor.run(client.list_tablet_servers()).expect("list_table_servers");
         assert_eq!(3, tablet_servers.len());
     }
 
+/*
     #[test]
     fn list_masters() {
         let _ = env_logger::init();

@@ -38,7 +38,7 @@ mod client;
 mod meta_cache;
 mod table;
 mod tablet;
-// //mod tablet_server;
+mod tablet_server;
 // //mod writer;
 mod backoff;
 mod bit_set;
@@ -65,7 +65,7 @@ pub use row::Row;
 pub use schema::*;
 pub use table::*;
 //pub use tablet::*;
-//pub use tablet_server::TabletServer;
+pub use tablet_server::TabletServer;
 pub use value::Value;
 //pub use writer::*;
 
