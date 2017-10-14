@@ -9,10 +9,13 @@ use std::process::{Command, Child, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use itertools::Itertools;
+use tempdir::TempDir;
+
 //use Client;
 //use ClientConfig;
 //use backoff::Backoff;
-use tempdir::TempDir;
+use HostPort;
 
 /// A Kudu server node (either master or tablet server).
 struct Node {
@@ -23,6 +26,7 @@ struct Node {
 }
 
 impl Node {
+
     fn new(name: String, bin: PathBuf, args: Vec<(&'static str, String)>) -> Node {
         Node {
             name: name,
@@ -30,7 +34,6 @@ impl Node {
             args: args,
             process: None,
         }
-
     }
 
     fn stop(&mut self) {
@@ -69,7 +72,7 @@ impl Drop for Node {
 
 pub struct MiniCluster {
     dir: TempDir,
-    master_addrs: Vec<SocketAddr>,
+    master_addrs: Vec<HostPort>,
     nodes: HashMap<SocketAddr, Node>,
 }
 
@@ -85,7 +88,7 @@ impl MiniCluster {
         let addrs = get_unbound_addresses(num_nodes);
         let (master_addrs, tserver_addrs) = addrs.split_at(conf.num_masters as usize);
 
-        let master_addresses = master_addrs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+        let master_addresses = master_addrs.iter().map(ToString::to_string).join(",");
         let conf_args = conf.args();
 
         for (i, addr) in master_addrs.iter().enumerate() {
@@ -160,13 +163,13 @@ impl MiniCluster {
 
         MiniCluster {
             dir: dir,
-            master_addrs: master_addrs.to_owned(),
+            master_addrs: master_addrs.into_iter().cloned().map(HostPort::from).collect(),
             nodes: nodes,
         }
     }
 
-    pub fn master_addrs(&self) -> &[SocketAddr] {
-        &self.master_addrs
+    pub fn master_addrs(&self) -> Vec<String> {
+        self.master_addrs.iter().map(ToString::to_string).collect()
     }
 
     pub fn stop_node(&mut self, addr: SocketAddr) {

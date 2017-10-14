@@ -33,7 +33,7 @@ pub use pb::kudu::*;
 impl From<TableId> for master::TableIdentifierPb {
     fn from(table_id: TableId) -> master::TableIdentifierPb {
         master::TableIdentifierPb {
-            table_id: Some(table_id.as_bytes()[..].to_owned()),
+            table_id: Some(table_id.to_string().into_bytes()),
             ..Default::default()
         }
     }

@@ -442,7 +442,6 @@ impl ClientBuilder {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -458,17 +457,15 @@ mod tests {
     use super::*;
 
     use env_logger;
-
-    fn deadline() -> Instant {
-        Instant::now() + Duration::from_secs(5)
-    }
+    use tokio::reactor::Core;
 
     #[test]
-    fn create_and_delete_table() {
+    fn table_lifecycle() {
         let _ = env_logger::init();
         let cluster = MiniCluster::default();
+        let mut reactor = Core::new().unwrap();
 
-        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -477,40 +474,37 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut table_builder = TableBuilder::new("create_and_delete_table", schema.clone());
+        let mut table_builder = TableBuilder::new("table_lifecycle", schema.clone());
         table_builder.add_hash_partitions(vec!["key"], 4);
         table_builder.set_num_replicas(1);
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
+        let mut alter_builder = AlterTableBuilder::new();
+        alter_builder.rename_table("table_lifecycle_renamed");
+        let altered_table_id = reactor.run(client.alter_table_by_id(table_id, alter_builder))
+                                      .expect("alter_table_by_id");
 
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table = reactor.run(client.open_table("table_lifecycle_renamed")).expect("open_table");
+        assert_eq!(table_id, table.id());
 
-        assert_eq!("create_and_delete_table", table.name());
-        assert_eq!(&table_id, table.id());
-        assert_eq!(&schema, table.schema());
-        assert_eq!(1, table.partition_schema().hash_partition_schemas().len());
-        assert_eq!(&[0], table.partition_schema().hash_partition_schemas()[0].columns());
-        assert_eq!(4, table.partition_schema().hash_partition_schemas()[0].num_buckets());
-        assert_eq!(0, table.partition_schema().hash_partition_schemas()[0].seed());
-        assert!(table.partition_schema().range_partition_schema().columns().is_empty());
+        let tables = reactor.run(client.list_tables()).expect("list_tables");
+        assert_eq!(vec![("table_lifecycle_renamed".to_string(), table_id)], tables);
 
-        let tables = client.list_tables(deadline()).unwrap();
-        assert_eq!(1, tables.len());
-        assert_eq!("create_and_delete_table", &tables[0].0);
-
-        client.delete_table_by_id(&table_id, deadline()).unwrap();
+        reactor.run(client.delete_table_by_id(table_id)).expect("delete_table");
+        assert!(reactor.run(client.list_tables()).expect("list_tables").is_empty());
     }
 
+/*
     #[test]
     fn list_tablet_servers() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(3));
-        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+        let mut reactor = Core::new().unwrap();
+        let client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
 
-        let tablet_servers = client.list_tablet_servers(deadline()).unwrap();
+        let tablet_servers = reactor.run(client.list_tablet_servers()).expect("list_table_servers");
         assert_eq!(3, tablet_servers.len());
     }
 
@@ -572,5 +566,5 @@ mod tests {
         let schema = client.open_table("u", deadline()).unwrap().schema().clone();
         assert_eq!(2, schema.columns().len());
     }
-}
 */
+}

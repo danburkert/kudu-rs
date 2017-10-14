@@ -67,8 +67,8 @@ impl Table {
         &self.name
     }
 
-    pub fn id(&self) -> &TableId {
-        &self.id
+    pub fn id(&self) -> TableId {
+        self.id
     }
 
     pub fn schema(&self) -> &Schema {
@@ -394,9 +394,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use env_logger;
+    use tokio::reactor::Core;
 
     use Client;
-    use ClientConfig;
+    use ClientBuilder;
     use Column;
     use DataType;
     use SchemaBuilder;
@@ -421,12 +422,26 @@ mod tests {
     }
 
     #[test]
+    fn create_table() {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                         .num_masters(1)
+                                                         .num_tservers(3));
+        let reactor = Core::new().unwrap();
+
+        let client = ClientBuilder::new(cluster.master_addrs(), reactor.remote()).build().unwrap();
+    }
+
+    /*
+    #[test]
     fn list_tablets() {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(3));
-        let client = Client::new(ClientConfig::new(cluster.master_addrs().to_owned()));
+        let reactor = Core::new().unwrap();
+
+        let client = ClientBuilder::new(cluster.master_addrs().to_owned(), reactor).build().unwrap();
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -454,7 +469,7 @@ mod tests {
         table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound),
                                           RangePartitionBound::Exclusive(upper_bound));
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        let table_id = client.create_table(table_builder).unwrap();
         client.wait_for_table_creation_by_id(&table_id, deadline() + Duration::from_secs(10)).unwrap();
         let table = client.open_table_by_id(&table_id, deadline()).unwrap();
 
@@ -462,4 +477,5 @@ mod tests {
 
         assert_eq!(8, tablets.len());
     }
+    */
 }

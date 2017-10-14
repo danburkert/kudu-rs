@@ -79,6 +79,12 @@ impl fmt::Debug for HostPort {
     }
 }
 
+impl fmt::Display for HostPort {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
