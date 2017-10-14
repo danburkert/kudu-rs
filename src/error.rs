@@ -235,6 +235,7 @@ impl error::Error for TabletServerError {
             TabletServerErrorCode::CasFailed => "CAS failed",
             TabletServerErrorCode::AlreadyInprogress => "already in progress",
             TabletServerErrorCode::Throttled => "throttled",
+            TabletServerErrorCode::TabletFailed => "tablet failed",
         }
     }
 
