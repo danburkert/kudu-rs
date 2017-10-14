@@ -2,7 +2,6 @@ use pb::master::TabletLocationsPb;
 use pb::master::tablet_locations_pb::ReplicaPb;
 use pb::ExpectField;
 
-use Error;
 use HostPort;
 use Partition;
 use PartitionSchema;

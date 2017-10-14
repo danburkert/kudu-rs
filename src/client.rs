@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 
 use cpupool::CpuPool;
 use futures::Future;
+use futures::future::{
+    self,
+    Either,
+};
 use krpc::HostPort;
 use krpc;
 use parking_lot::Mutex;
@@ -22,6 +26,7 @@ use timer::Timer;
 use tokio;
 
 use pb::master::{
+    AlterTableResponsePb,
     CreateTableResponsePb,
     DeleteTableRequestPb,
     DeleteTableResponsePb,
@@ -49,7 +54,7 @@ use backoff::Backoff;
 use master::MasterProxy;
 use meta_cache::MetaCache;
 use partition::PartitionSchema;
-//use table::AlterTableBuilder;
+use table::AlterTableBuilder;
 use table::Table;
 use table::TableBuilder;
 use Options;
@@ -82,16 +87,19 @@ impl Client {
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
     pub fn create_table(&mut self, builder: TableBuilder) -> impl Future<Item=TableId, Error=Error> {
-        let request = MasterService::create_table(Box::new(builder.into_pb().expect("TODO")),
-                                                  Instant::now() + self.options.admin_timeout,
-                                                  &[]);
+        let pb = match builder.into_pb().map(Box::new) {
+            Ok(pb) => pb,
+            Err(error) => return Either::B(future::err(error)),
+        };
+        let request = MasterService::create_table(pb, Instant::now() + self.options.admin_timeout, &[]);
 
-        self.master
-            .send(request)
-            .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
-                TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
-                                                                     "table_id")?)
-            })
+        let response = self.master
+                           .send(request)
+                           .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
+                               TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
+                                                                                    "table_id")?)
+                           });
+        Either::A(response)
     }
 
     /// Returns `true` if the table is fully created.
@@ -167,58 +175,44 @@ impl Client {
         self.master.send(request).map(|_: DeleteTableResponsePb| ())
     }
 
-/*
-    pub fn alter_table<S>(&self,
-                          table: S,
-                          alter: AlterTableBuilder,
-                          deadline: Instant)
-                          -> Result<TableId>
+    pub fn alter_table<S>(&mut self, table: S, alter: AlterTableBuilder) -> impl Future<Item=TableId, Error=Error>
     where S: Into<String> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_name(table.into());
-        self.do_alter_table(identifier, alter, deadline)
+        self.do_alter_table(table.into().into(), alter)
     }
 
-    pub fn alter_table_by_id(&self,
-                             id: &TableId,
-                             alter: AlterTableBuilder,
-                             deadline: Instant)
-                             -> Result<()> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_alter_table(identifier, alter, deadline).map(|_| ())
+    pub fn alter_table_by_id(&mut self, id: TableId, alter: AlterTableBuilder) -> impl Future<Item=(), Error=Error> {
+        self.do_alter_table(id.into(), alter).map(|_| ())
     }
 
-    fn do_alter_table(&self,
-                      table: TableIdentifierPb,
-                      alter: AlterTableBuilder,
-                      deadline: Instant)
-                      -> Result<TableId> {
-        let AlterTableBuilder { error, mut pb, .. } = alter;
-        try!(error);
-        pb.set_table(table);
+    pub fn do_alter_table(&mut self, identifier: TableIdentifierPb, alter: AlterTableBuilder) -> impl Future<Item=TableId, Error=Error> {
+        let AlterTableBuilder { result, mut pb, schema } = alter;
+        if let Err(error) = result {
+            return Either::B(future::err(error));
+        }
 
-        let (send, recv) = sync_channel(0);
-        self.master.alter_table(deadline, pb, move |resp| send.send(resp).unwrap());
-        let table_id = recv.recv().unwrap().and_then(|resp| {
-            str::from_utf8(resp.get_table_id())
-                .map_err(|error| Error::Serialization(format!("{}", error)))
-                .and_then(TableId::parse)
-        });
+        pb.table = identifier;
+        let request = MasterService::alter_table(Box::new(pb), Instant::now() + self.options.admin_timeout, &[]);
+        let meta_caches = self.meta_caches.clone();
+        let result = self.master.send(request).and_then(move |resp: AlterTableResponsePb| {
+            let table_id = str::from_utf8(resp.table_id())
+                               .map_err(|error| Error::Serialization(format!("{}", error)))
+                               .and_then(TableId::parse)?;
 
-        // If the table partitioning was altered and there is an existing meta cache for the table,
-        // clear it.
-        if alter.schema.is_some() {
-            if let Ok(ref table_id) = table_id {
-                let meta_cache = self.meta_caches.lock().get(table_id).cloned();
+            // If the table partitioning was altered and there is an existing meta cache for the table,
+            // clear it.
+            if schema.is_some() {
+                let meta_cache = meta_caches.lock().get(&table_id).cloned();
                 if let Some(meta_cache) = meta_cache {
                     meta_cache.clear();
                 }
             }
-        }
-        table_id
+
+            Ok(table_id)
+        });
+        Either::A(result)
     }
 
+/*
     /// Returns `true` if the table is fully altered.
     pub fn is_alter_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
     where S: Into<String> {

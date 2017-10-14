@@ -5,7 +5,6 @@ use pb::master::{
 use pb::master::alter_table_request_pb::{
     AddColumn,
     AddRangePartition,
-    AlterColumn,
     DropColumn,
     DropRangePartition,
     RenameColumn,
@@ -277,19 +276,16 @@ impl TableBuilder {
 }
 
 pub struct AlterTableBuilder {
-    #[doc(hidden)]
-    pub error: Result<()>,
-    #[doc(hidden)]
-    pub schema: Option<Schema>,
-    #[doc(hidden)]
-    pub pb: AlterTableRequestPb,
+    pub(crate) result: Result<()>,
+    pub(crate) schema: Option<Schema>,
+    pub(crate) pb: AlterTableRequestPb,
 }
 
 impl AlterTableBuilder {
 
     pub fn new() -> AlterTableBuilder {
         AlterTableBuilder {
-            error: Ok(()),
+            result: Ok(()),
             schema: None,
             pb: AlterTableRequestPb::default(),
         }
@@ -337,11 +333,11 @@ impl AlterTableBuilder {
     }
 
     fn check_and_set_schema(&mut self, new_schema: &Schema) {
-        if self.error.is_err() { return; }
+        if self.result.is_err() { return; }
 
         if let Some(ref schema) = self.schema {
             if schema != new_schema {
-                self.error = Err(Error::InvalidArgument(
+                self.result = Err(Error::InvalidArgument(
                         "schemas of range partition bounds must match".to_string()));
             }
             return;
@@ -356,7 +352,7 @@ impl AlterTableBuilder {
                                upper_bound: &RangePartitionBound) -> &mut AlterTableBuilder {
         self.check_and_set_schema(lower_bound.row().schema());
         self.check_and_set_schema(upper_bound.row().schema());
-        if self.error.is_ok() {
+        if self.result.is_ok() {
             let mut encoder = OperationEncoder::new();
             encoder.encode_range_partition(lower_bound, upper_bound);
 
@@ -377,7 +373,7 @@ impl AlterTableBuilder {
                                        -> &mut AlterTableBuilder {
         self.check_and_set_schema(lower_bound.row().schema());
         self.check_and_set_schema(upper_bound.row().schema());
-        if self.error.is_ok() {
+        if self.result.is_ok() {
             let mut encoder = OperationEncoder::new();
             encoder.encode_range_partition(lower_bound, upper_bound);
             self.pb.alter_schema_steps.push(Step {

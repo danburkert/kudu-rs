@@ -158,10 +158,7 @@ impl MetaCache {
     }
 
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
-        match self.extract_cached(partition_key, |entry| entry.clone()) {
-            ExtractCachedResult::Value(value) => Some(value),
-            ExtractCachedResult::Extractor(_) => None,
-        }
+        self.extract_cached(partition_key, |entry| entry.clone())
     }
 
     pub fn tablet_id<F>(&self,
@@ -206,12 +203,11 @@ impl MetaCache {
                                 backoff: Backoff,
                                 extractor: Extractor,
                                 cb: F)
-    where Extractor: FnOnce(&Entry) -> T + Send + 'static,
+    where Extractor: Fn(&Entry) -> T + Send + 'static,
           F: FnOnce(Result<T>) + Send + 'static {
 
-        let extractor = match self.extract_cached(&*partition_key, extractor) {
-            ExtractCachedResult::Extractor(extractor) => extractor,
-            ExtractCachedResult::Value(value) => return cb(Ok(value)),
+        if let Some(value) = self.extract_cached(&*partition_key, extractor) {
+            return cb(Ok(value));
         };
 
         let request = GetTableLocationsRequestPb {
@@ -262,32 +258,26 @@ impl MetaCache {
                                              tablets: Vec<TabletLocationsPb>,
                                              extractor: Extractor,
                                              cb: F)
-    where Extractor: FnOnce(&Entry) -> T + Send + 'static,
+    where Extractor: Fn(&Entry) -> T + Send + 'static,
           F: FnOnce(Result<T>) + Send + 'static {
         let meta_cache = self.clone();
         thread::spawn(move || {
             match meta_cache.tablet_locations_to_entries(&partition_key, tablets) {
                 Ok(entries) => {
                     meta_cache.splice_entries(entries);
-                    match meta_cache.extract_cached(&partition_key, extractor) {
-                        ExtractCachedResult::Extractor(_) => unreachable!(),
-                        ExtractCachedResult::Value(value) => cb(Ok(value)),
-                    }
+                    cb(Ok(meta_cache.extract_cached(&partition_key, extractor).unwrap()));
                 },
                 Err(error) => cb(Err(error)),
             }
         });
     }
 
-    fn extract_cached<Extractor, T>(&self,
-                                    partition_key: &[u8],
-                                    extractor: Extractor)
-                                    -> ExtractCachedResult<Extractor, T>
-    where Extractor: FnOnce(&Entry) -> T {
+    fn extract_cached<Extractor, T>(&self, partition_key: &[u8], extractor: Extractor) -> Option<T>
+    where Extractor: Fn(&Entry) -> T {
         let entries = self.inner.entries.lock();
         match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
-            Ok(index) => ExtractCachedResult::Value(extractor(&entries[index])),
-            Err(_) => ExtractCachedResult::Extractor(extractor),
+            Ok(index) => Some(extractor(&entries[index])),
+            Err(_) => None,
         }
     }
 
@@ -389,12 +379,6 @@ impl MetaCache {
     pub fn clear(&self) {
         self.inner.entries.lock().clear()
     }
-}
-
-/// Unfortunate brwck hack.
-enum ExtractCachedResult<Extractor, T> {
-    Extractor(Extractor),
-    Value(T),
 }
 
 #[cfg(test)]
