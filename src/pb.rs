@@ -21,6 +21,10 @@ mod kudu {
     pub mod security {
         include!(concat!(env!("OUT_DIR"), "/kudu.security.rs"));
     }
+    #[cfg(test)]
+    pub mod tools {
+        include!(concat!(env!("OUT_DIR"), "/kudu.tools.rs"));
+    }
     pub mod tserver {
         include!(concat!(env!("OUT_DIR"), "/kudu.tserver.rs"));
     }

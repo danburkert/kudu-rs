@@ -336,3 +336,33 @@ pub struct Options {
     timer: timer::Timer,
     admin_timeout: Duration,
 }
+
+pub trait IntoMasterAddrs {
+    fn into_master_addrs(self) -> Result<Vec<HostPort>>;
+}
+
+impl IntoMasterAddrs for Vec<HostPort> {
+    fn into_master_addrs(self) -> Result<Vec<HostPort>> {
+        Ok(self)
+    }
+}
+
+impl IntoMasterAddrs for Vec<String> {
+    fn into_master_addrs(self) -> Result<Vec<HostPort>> {
+        let mut master_addrs = Vec::new();
+        for master_addr in self.into_iter() {
+            master_addrs.push(HostPort::parse(master_addr.as_ref(), 7180)?);
+        }
+        Ok(master_addrs)
+    }
+}
+
+impl <'a> IntoMasterAddrs for &'a str {
+    fn into_master_addrs(self) -> Result<Vec<HostPort>> {
+        let mut master_addrs = Vec::new();
+        for master_addr in self.split(',') {
+            master_addrs.push(HostPort::parse(master_addr, 7180)?);
+        }
+        Ok(master_addrs)
+    }
+}

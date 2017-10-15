@@ -12,20 +12,19 @@ use curl::easy::Easy;
 use flate2::bufread::GzDecoder;
 use tar::Archive;
 
-const VERSION: &'static str = "1.5.0";
+const VERSION: &'static str = "master";
 
 fn main() {
     env_logger::init().unwrap();
     let target = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR environment variable not set"));
-    let dir = target.join(format!("apache-kudu-{}", VERSION));
+    let dir = target.join(format!("kudu-{}", VERSION));
 
     // Download the Kudu source tarball.
     if !dir.exists() {
         let mut data = Vec::new();
         let mut handle = Easy::new();
 
-        handle.url(&format!("https://archive.apache.org/dist/kudu/{version}/apache-kudu-{version}.tar.gz",
-                            version=VERSION))
+        handle.url(&format!("https://github.com/apache/kudu/archive/{}.tar.gz", VERSION))
               .expect("failed to configure Kudu tarball URL");
         handle.follow_location(true)
               .expect("failed to configure follow location");
@@ -48,6 +47,7 @@ fn main() {
                                           dir.join("src/kudu/consensus/metadata.proto"),
                                           dir.join("src/kudu/master/master.proto"),
                                           dir.join("src/kudu/rpc/rpc_header.proto"),
+                                          dir.join("src/kudu/tools/tool.proto"),
                                           dir.join("src/kudu/tserver/tserver_service.proto")],
                                         &[dir.join("src")]).unwrap();
 }

@@ -46,6 +46,7 @@ use pb::master::{
 use pb::ExpectField;
 
 use Error;
+use IntoMasterAddrs;
 use Master;
 use Options;
 use Result;
@@ -402,7 +403,7 @@ impl fmt::Debug for Client {
 /// Client configuration options.
 #[derive(Debug)]
 pub struct ClientBuilder {
-    master_addresses: Vec<String>,
+    master_addresses: Result<Vec<HostPort>>,
     reactor: tokio::reactor::Remote,
     rpc: krpc::Options,
     threadpool: Option<CpuPool>,
@@ -411,9 +412,11 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    pub fn new(master_addresses: Vec<String>, reactor: tokio::reactor::Remote) -> ClientBuilder {
+    pub fn new<A>(master_addresses: A,
+                  reactor: tokio::reactor::Remote)
+                  -> ClientBuilder where A: IntoMasterAddrs {
         ClientBuilder {
-            master_addresses,
+            master_addresses: master_addresses.into_master_addrs(),
             reactor,
             rpc: krpc::Options::default(),
             threadpool: None,
@@ -423,10 +426,7 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<Client> {
-        let mut master_addresses = Vec::with_capacity(self.master_addresses.len());
-        for addr in &self.master_addresses {
-            master_addresses.push(HostPort::parse(addr, 7051)?);
-        }
+        let master_addresses = self.master_addresses?;
 
         // TODO: This is a terrible default.
         let threadpool = self.threadpool.unwrap_or_else(CpuPool::new_num_cpus);
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn table_lifecycle() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::default();
+        let mut cluster = MiniCluster::default();
         let mut reactor = Core::new().unwrap();
 
         let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
@@ -501,9 +501,9 @@ mod tests {
     #[test]
     fn list_servers() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(3)
-                                                         .num_tservers(3));
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(3)
+                                                             .num_tservers(3));
         let mut reactor = Core::new().unwrap();
         let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
                                        .build()
@@ -519,9 +519,9 @@ mod tests {
     #[test]
     fn alter_table() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(1)
-                                                         .num_tservers(1));
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(1)
+                                                             .num_tservers(1));
         let mut reactor = Core::new().unwrap();
         let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
                                        .build()
