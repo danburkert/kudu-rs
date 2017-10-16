@@ -1,16 +1,7 @@
-#![allow(unused_imports)]
-
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{
-    IpAddr,
-    Ipv4Addr,
-    SocketAddr,
-};
 use std::str;
 use std::sync::Arc;
-use std::sync::mpsc::sync_channel;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use cpupool::CpuPool;
@@ -18,6 +9,7 @@ use futures::Future;
 use futures::future::{
     self,
     Either,
+    Loop,
 };
 use krpc::HostPort;
 use krpc;
@@ -33,9 +25,9 @@ use pb::master::{
     GetTableSchemaRequestPb,
     GetTableSchemaResponsePb,
     IsAlterTableDoneRequestPb,
+    IsAlterTableDoneResponsePb,
     IsCreateTableDoneRequestPb,
     IsCreateTableDoneResponsePb,
-    ListMastersRequestPb,
     ListMastersResponsePb,
     ListTablesRequestPb,
     ListTablesResponsePb,
@@ -93,70 +85,65 @@ impl Client {
             Ok(pb) => pb,
             Err(error) => return Either::B(future::err(error)),
         };
-        let request = MasterService::create_table(pb, Instant::now() + self.options.admin_timeout, &[]);
+        let deadline = self.deadline();
+        let request = MasterService::create_table(pb, deadline, &[]);
 
+        let mut client = self.clone();
         let response = self.master
                            .send(request)
                            .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
                                TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
                                                                                     "table_id")?)
+                           })
+                           .and_then(move |table_id| {
+                               client.wait_for_table_creation(table_id)
+                                     .map(move |_| table_id)
                            });
+
         Either::A(response)
     }
 
-    /// Returns `true` if the table is fully created.
-    pub fn is_create_table_done<S>(&mut self, table: S) -> impl Future<Item=bool, Error=Error>
-    where S: Into<String> {
-        self.do_is_create_table_done(table.into().into())
-    }
-
-    /// Returns `true` if the table is fully created.
-    pub fn is_create_table_done_by_id(&mut self, id: TableId) -> impl Future<Item=bool, Error=Error> {
-        self.do_is_create_table_done(id.into())
-    }
-
-    fn do_is_create_table_done(&mut self, table: TableIdentifierPb) -> impl Future<Item=bool, Error=Error> {
-        let request = MasterService::is_create_table_done(Box::new(IsCreateTableDoneRequestPb { table }),
-                                                          Instant::now() + self.options.admin_timeout,
-                                                          &[]);
-
-        self.master
-            .send(request)
-            .map(|response: IsCreateTableDoneResponsePb| response.done())
-    }
-
-/*
-    /// Synchronously waits until the table is created. If an error is returned,
-    /// the table may not be created yet.
-    pub fn wait_for_table_creation<S>(&self, table: S, deadline: Instant) -> Result<()>
-    where S: Into<String> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_name(table.into());
-        self.do_wait_for_table_creation(identifier, deadline)
-    }
-
-    /// Synchronously waits until the table is created. If an error is returned,
-    /// the table may not be created yet.
-    pub fn wait_for_table_creation_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_wait_for_table_creation(identifier, deadline)
-    }
-
-    fn do_wait_for_table_creation(&self, table: TableIdentifierPb, deadline: Instant) -> Result<()> {
-        let mut backoff = Backoff::with_duration_range(5, 5000);
-
-        let mut is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
-        while let Ok(false) = is_create_table_done {
-            let sleep_ms = backoff.next_backoff_ms();
-            debug!("create table not yet complete, waiting {}ms", sleep_ms);
-            // TODO: do delayed send instead of sleep
-            thread::sleep(Duration::from_millis(sleep_ms));
-            is_create_table_done = self.do_is_create_table_done(table.clone(), deadline);
+    /// Returns a future which completes when the table is created.
+    ///
+    /// Not on timeout: this method will not timeout if the master is reachable and responsive.
+    fn wait_for_table_creation(&mut self, table: TableId) -> impl Future<Item=(), Error=Error> {
+        struct State {
+            client: Client,
+            table: TableId,
+            backoff: Backoff,
         }
-        is_create_table_done.map(|_| ())
+
+        let state = State {
+            client: self.clone(),
+            table,
+            backoff: Backoff::with_duration_range(32, 2048),
+        };
+
+        future::loop_fn(state, |mut state: State| {
+            state.client
+                 .options
+                 .timer
+                 .sleep(state.backoff.next_backoff())
+                 .map_err(|error| -> Error { panic!("timer failed: {}", error); })
+                 .and_then(move |_| {
+
+                    let request = MasterService::is_create_table_done(
+                        Box::new(IsCreateTableDoneRequestPb { table: state.table.into() }),
+                        state.client.deadline(), &[]);
+
+                    state.client
+                         .master
+                         .send(request)
+                         .map(move |response: IsCreateTableDoneResponsePb| {
+                             if response.done() {
+                                 Loop::Break(())
+                             } else {
+                                 Loop::Continue(state)
+                             }
+                         })
+                    })
+        })
     }
-*/
 
     /// Deletes the table.
     pub fn delete_table<S>(&mut self, table: S) -> impl Future<Item=(), Error=Error>
@@ -171,8 +158,7 @@ impl Client {
 
     fn do_delete_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=(), Error=Error>{
         let request = MasterService::delete_table(Box::new(DeleteTableRequestPb { table }),
-                                                           Instant::now() + self.options.admin_timeout,
-                                                           &[]);
+                                                  self.deadline(), &[]);
 
         self.master.send(request).map(|_: DeleteTableResponsePb| ())
     }
@@ -193,8 +179,8 @@ impl Client {
         }
 
         pb.table = identifier;
-        let request = MasterService::alter_table(Box::new(pb), Instant::now() + self.options.admin_timeout, &[]);
-        let meta_caches = self.meta_caches.clone();
+        let request = MasterService::alter_table(Box::new(pb), self.deadline(), &[]);
+        let client: Client = self.clone();
         let result = self.master.send(request).and_then(move |resp: AlterTableResponsePb| {
             let table_id = str::from_utf8(resp.table_id())
                                .map_err(|error| Error::Serialization(format!("{}", error)))
@@ -203,73 +189,61 @@ impl Client {
             // If the table partitioning was altered and there is an existing meta cache for the table,
             // clear it.
             if schema.is_some() {
-                let meta_cache = meta_caches.lock().get(&table_id).cloned();
+                let meta_cache = client.meta_caches.lock().get(&table_id).cloned();
                 if let Some(meta_cache) = meta_cache {
                     meta_cache.clear();
                 }
             }
 
-            Ok(table_id)
+            Ok((table_id, client))
+        }).and_then(|(table_id, mut client): (TableId, Client)| {
+            client.wait_for_table_alteration(table_id)
+                  .map(move |_| table_id)
         });
         Either::A(result)
     }
 
-/*
-    /// Returns `true` if the table is fully altered.
-    pub fn is_alter_table_done<S>(&self, table: S, deadline: Instant) -> Result<bool>
-    where S: Into<String> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_name(table.into());
-        self.do_is_alter_table_done(identifier, deadline)
-    }
-
-    /// Returns `true` if the table is fully altered.
-    pub fn is_alter_table_done_by_id(&self, id: &TableId, deadline: Instant) -> Result<bool> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_is_alter_table_done(identifier, deadline)
-    }
-
-    fn do_is_alter_table_done(&self, table: TableIdentifierPb, deadline: Instant) -> Result<bool> {
-        let mut request = IsAlterTableDoneRequestPb::new();
-        request.set_table(table);
-
-        let (send, recv) = sync_channel(1);
-        self.master.is_alter_table_done(deadline, request, move |resp| send.send(resp).unwrap());
-        recv.recv().unwrap().map(|resp| resp.get_done())
-    }
-
-    /// Synchronously waits until the table is altered. If an error is returned,
-    /// the table may not be altered yet.
-    pub fn wait_for_table_alteration<S>(&self, table: S, deadline: Instant) -> Result<()>
-    where S: Into<String> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_name(table.into());
-        self.do_wait_for_table_alteration(identifier, deadline)
-    }
-
-    /// Synchronously waits until the table is altered. If an error is returned,
-    /// the table may not be altered yet.
-    pub fn wait_for_table_alteration_by_id(&self, id: &TableId, deadline: Instant) -> Result<()> {
-        let mut identifier = TableIdentifierPb::new();
-        identifier.set_table_id(id.to_string().into_bytes());
-        self.do_wait_for_table_alteration(identifier, deadline)
-    }
-
-    fn do_wait_for_table_alteration(&self, table: TableIdentifierPb, deadline: Instant) -> Result<()> {
-        let mut backoff = Backoff::with_duration_range(5, 5000);
-
-        let mut is_table_alter_done = self.do_is_alter_table_done(table.clone(), deadline);
-        while let Ok(false) = is_table_alter_done {
-            let sleep_ms = backoff.next_backoff_ms();
-            debug!("alter table not yet complete, waiting {}ms", sleep_ms);
-            // TODO: do delayed send instead of sleep
-            thread::sleep(Duration::from_millis(sleep_ms));
-            is_table_alter_done = self.do_is_alter_table_done(table.clone(), deadline);
+    /// Returns a future which completes when the table is altered.
+    ///
+    /// Not on timeout: this method will not timeout if the master is reachable and responsive.
+    fn wait_for_table_alteration(&mut self, table: TableId) -> impl Future<Item=(), Error=Error> {
+        struct State {
+            client: Client,
+            table: TableId,
+            backoff: Backoff,
         }
-        is_table_alter_done.map(|_| ())
+
+        let state = State {
+            client: self.clone(),
+            table,
+            backoff: Backoff::with_duration_range(32, 2048),
+        };
+
+        future::loop_fn(state, |mut state: State| {
+            state.client
+                 .options
+                 .timer
+                 .sleep(state.backoff.next_backoff())
+                 .map_err(|error| -> Error { panic!("timer failed: {}", error); })
+                 .and_then(move |_| {
+
+                    let request = MasterService::is_alter_table_done(
+                        Box::new(IsAlterTableDoneRequestPb { table: state.table.into() }),
+                        state.client.deadline(), &[]);
+
+                    state.client
+                         .master
+                         .send(request)
+                         .map(move |response: IsAlterTableDoneResponsePb| {
+                             if response.done() {
+                                 Loop::Break(())
+                             } else {
+                                 Loop::Continue(state)
+                             }
+                         })
+                    })
+        })
     }
-    */
 
     /// Lists all tables and their associated table ID.
     pub fn list_tables(&mut self) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
@@ -283,9 +257,7 @@ impl Client {
     }
 
     fn do_list_tables(&mut self, request: Box<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
-        let request = MasterService::list_tables(request,
-                                                 Instant::now() + self.options.admin_timeout,
-                                                 &[]);
+        let request = MasterService::list_tables(request, self.deadline(), &[]);
 
         self.master.send(request).and_then(|response: ListTablesResponsePb| {
             let mut tables = Vec::with_capacity(response.tables.len());
@@ -297,9 +269,7 @@ impl Client {
     }
 
     pub fn list_masters(&mut self) -> impl Future<Item=Vec<Master>, Error=Error> {
-        let request = MasterService::list_masters(Default::default(),
-                                                  Instant::now() + self.options.admin_timeout,
-                                                  &[]);
+        let request = MasterService::list_masters(Default::default(), self.deadline(), &[]);
 
         self.master.send(request).and_then(|response: ListMastersResponsePb| {
             let mut servers = Vec::with_capacity(response.masters.len());
@@ -311,9 +281,7 @@ impl Client {
     }
 
     pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServer>, Error=Error> {
-        let request = MasterService::list_tablet_servers(Default::default(),
-                                                         Instant::now() + self.options.admin_timeout,
-                                                         &[]);
+        let request = MasterService::list_tablet_servers(Default::default(), self.deadline(), &[]);
 
         self.master.send(request).and_then(|response: ListTabletServersResponsePb| {
             let mut servers = Vec::with_capacity(response.servers.len());
@@ -337,8 +305,7 @@ impl Client {
 
     fn do_open_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=Table, Error=Error> {
         let request = MasterService::get_table_schema(Box::new(GetTableSchemaRequestPb { table }),
-                                                      Instant::now() + self.options.admin_timeout,
-                                                      &[]);
+                                                      self.deadline(), &[]);
 
         let client = self.clone();
         self.master.send(request).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
@@ -382,6 +349,10 @@ impl Client {
         if timestamp > *latest {
             *latest = timestamp;
         }
+    }
+
+    fn deadline(&self) -> Instant {
+        Instant::now() + self.options.admin_timeout
     }
 
     pub(crate) fn master_proxy(&self) -> &MasterProxy {
@@ -447,7 +418,6 @@ impl ClientBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
 
     use AlterTableBuilder;
     use Column;
@@ -537,9 +507,6 @@ mod tests {
 
         let _ = reactor.run(client.alter_table("t", alter_builder)).expect("add column");
 
-        // TODO: wait
-        thread::sleep(Duration::from_millis(2000));
-
         let schema = reactor.run(client.open_table("t")).expect("open_table").schema().clone();
         assert_eq!(3, schema.columns().len());
 
@@ -561,9 +528,6 @@ mod tests {
                      .rename_table("u")
                      .drop_column("c0");
         reactor.run(client.alter_table_by_id(table_id, alter_builder)).unwrap();
-
-        // TODO: wait
-        thread::sleep(Duration::from_millis(2000));
 
         let schema = reactor.run(client.open_table("u")).unwrap().schema().clone();
         assert_eq!(2, schema.columns().len());
