@@ -12,6 +12,7 @@ use std::time::Instant;
 use futures::Poll;
 use parking_lot::Mutex;
 use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
+use pb::ExpectField;
 
 use Error;
 use MasterErrorCode;
@@ -332,7 +333,6 @@ impl MetaCache {
                                    partition_key: &[u8],
                                    tablets: Vec<TabletLocationsPb>)
                                    -> Result<VecDeque<Entry>> {
-/*
         if tablets.is_empty() {
             // If there are no tablets in the response, then the table is empty. If
             // there were any tablets in the table they would have been returned, since
@@ -346,9 +346,13 @@ impl MetaCache {
 
         let tablet_count = tablets.len();
         let mut entries = VecDeque::with_capacity(tablets.len());
-        let mut last_upper_bound = tablets[0].get_partition().get_partition_key_start().to_owned();
+        let mut last_upper_bound: Vec<u8> = tablets[0].partition
+                                                      .as_ref()
+                                                      .expect_field("TabletLocationsPb", "partition")?
+                                                      .partition_key_start()
+                                                      .to_owned();
 
-        if partition_key < &last_upper_bound {
+        if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
             entries.push_back(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
@@ -358,7 +362,7 @@ impl MetaCache {
             let tablet = try!(Tablet::from_pb(&self.inner.primary_key_schema,
                                               self.inner.partition_schema.clone(),
                                               tablet));
-            if tablet.partition().lower_bound_key() > &last_upper_bound {
+            if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push_back(Entry::non_covered_range(last_upper_bound,
                                                            tablet.partition().lower_bound_key().to_owned()));
             }
@@ -372,8 +376,6 @@ impl MetaCache {
 
         trace!("discovered table locations: {:?}", entries);
         Ok(entries)
-*/
-        unimplemented!()
     }
 
     pub fn clear(&self) {
