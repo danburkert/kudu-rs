@@ -323,8 +323,8 @@ impl Client {
 
             let meta_cache = client.meta_caches
                                    .lock()
-                                   .entry(id.clone())
-                                   .or_insert_with(|| MetaCache::new(id.clone(),
+                                   .entry(id)
+                                   .or_insert_with(|| MetaCache::new(id,
                                                                      schema.primary_key_projection(),
                                                                      partition_schema.clone(),
                                                                      client.master.clone()))
@@ -402,7 +402,7 @@ impl ClientBuilder {
         // TODO: This is a terrible default.
         let threadpool = self.threadpool.unwrap_or_else(CpuPool::new_num_cpus);
         let timer = self.timer.unwrap_or_default();
-        let admin_timeout = self.admin_timeout.unwrap_or(Duration::from_secs(60));
+        let admin_timeout = self.admin_timeout.unwrap_or_else(|| Duration::from_secs(60));
 
         let options = Options {
             rpc: self.rpc,

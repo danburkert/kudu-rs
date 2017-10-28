@@ -43,7 +43,7 @@ impl Tablet {
                                            pb.partition.expect_field("TabletLocationsPB", "partition")?)?;
 
         let mut replicas = Vec::with_capacity(pb.replicas.len());
-        for replica in pb.replicas.into_iter() {
+        for replica in pb.replicas {
             replicas.push(Replica::from_pb(replica)?);
         }
 

@@ -16,7 +16,7 @@ use Row;
 use backoff::Backoff;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
-    duration.as_secs() * 1000 + duration.subsec_nanos() as u64 / 1000_000
+    duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
 }
 
 pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result where T: fmt::LowerHex {
@@ -34,11 +34,11 @@ pub fn time_to_us(time: &SystemTime) -> i64 {
     // TODO: do overflow checking
     match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => {
-            (duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) as i64
+            (duration.as_secs() * 1_000_000 + u64::from(duration.subsec_nanos()) / 1000) as i64
         },
         Err(error) => {
             let duration = error.duration();
-            (- ((duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) as i64))
+            (- ((duration.as_secs() * 1_000_000 + u64::from(duration.subsec_nanos()) / 1000) as i64))
         }
     }
 }
@@ -46,8 +46,8 @@ pub fn time_to_us(time: &SystemTime) -> i64 {
 pub fn us_to_time(us: i64) -> SystemTime {
     let abs = us.abs() as u64;
 
-    let s = abs / 1000_000;
-    let ns = (abs % 1000_000) as u32 * 1000;
+    let s = abs / 1_000_000;
+    let ns = (abs % 1_000_000) as u32 * 1000;
 
     if us.is_negative() {
         UNIX_EPOCH - Duration::new(s, ns)
@@ -138,7 +138,7 @@ impl Stream for BackoffStream {
     type Item = ();
     type Error = ();
     fn poll(&mut self) -> Poll<Option<()>, ()> {
-        let _ = try_ready!(self.sleep.poll());
+        try_ready!(self.sleep.poll());
         let backoff = self.backoff.next_backoff();
         self.sleep = self.timer.sleep(backoff);
         Ok(Async::Ready(Some(())))
@@ -253,6 +253,7 @@ mod tests {
 
     #[test]
     fn timestamp_conversion() {
+        let _ = env_logger::init();
 
         fn roundtrip(us: i64) -> TestResult {
             TestResult::from_bool(us == time_to_us(&us_to_time(us)))
@@ -263,6 +264,7 @@ mod tests {
 
     #[test]
     fn test_format_timestamp() {
+        let _ = env_logger::init();
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
@@ -277,6 +279,7 @@ mod tests {
 
     #[test]
     fn test_is_local_addr() {
+        let _ = env_logger::init();
         let addr = "127.0.1.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
         assert!(is_local_addr(&addr));
         let addr = "127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap().ip();

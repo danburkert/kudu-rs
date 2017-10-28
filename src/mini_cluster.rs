@@ -1,26 +1,21 @@
-use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::fs;
 use std::io::{
     Read,
     Write,
     BufRead,
     BufReader,
 };
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::thread;
-use std::time::Duration;
 
 use byteorder::{
     BigEndian,
     ReadBytesExt,
     WriteBytesExt,
 };
-use bytes::{BufMut, BytesMut};
-use itertools::Itertools;
 use prost::Message;
 use tempdir::TempDir;
 
@@ -31,8 +26,6 @@ use pb::tools::{
     CreateClusterRequestPb,
     GetMastersRequestPb,
     GetMastersResponsePb,
-    GetTServersRequestPb,
-    GetTServersResponsePb,
     StartClusterRequestPb,
     StopClusterRequestPb,
 };
@@ -98,12 +91,12 @@ impl MiniCluster {
         }
     }
 
-    pub fn stop_node(&mut self, addr: SocketAddr) {
+    pub fn stop_node(&mut self, _addr: SocketAddr) {
         //self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).stop();
         unimplemented!()
     }
 
-    pub fn start_node(&mut self, addr: SocketAddr) {
+    pub fn start_node(&mut self, _addr: SocketAddr) {
         //self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).start();
         unimplemented!()
     }

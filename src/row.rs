@@ -334,8 +334,8 @@ impl OperationEncoder {
             RangePartitionBound::Exclusive(ref row) => (row, OperationType::RangeUpperBound),
         };
 
-        self.encode_row(lower_bound_type, &lower_bound);
-        self.encode_row(upper_bound_type, &upper_bound);
+        self.encode_row(lower_bound_type, lower_bound);
+        self.encode_row(upper_bound_type, upper_bound);
     }
 
     pub fn encode_range_partition_split(&mut self, split: &Row) {

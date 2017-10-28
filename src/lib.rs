@@ -350,7 +350,7 @@ impl IntoMasterAddrs for Vec<HostPort> {
 impl IntoMasterAddrs for Vec<String> {
     fn into_master_addrs(self) -> Result<Vec<HostPort>> {
         let mut master_addrs = Vec::new();
-        for master_addr in self.into_iter() {
+        for master_addr in self {
             master_addrs.push(HostPort::parse(master_addr.as_ref(), 7180)?);
         }
         Ok(master_addrs)

@@ -5,9 +5,9 @@ use rand::{self, Rng};
 
 /// A randomized exponential backoff policy for retrying operations.
 ///
-/// See [Exponential Backoff in Distributed Systems]
-/// (http://dthain.blogspot.com/2009/02/exponential-backoff-in-distributed.html)
-/// for algorithm details.
+/// See [Exponential Backoff in Distributed Systems][1] for algorithm details.
+///
+/// [1]: http://dthain.blogspot.com/2009/02/exponential-backoff-in-distributed.html
 #[derive(Clone, Debug)]
 pub struct Backoff {
 
@@ -47,13 +47,13 @@ impl Backoff {
     pub fn next_backoff_ms(&mut self) -> u64 {
         // Prevent overflow by testing if the backoff will be greater than the
         // max in an arithmeticaly stable manner, and if so return the max.
-        if (self.max as f64 / self.initial as f64).log2() < self.retries as f64 {
-            return self.max as u64;
+        if (f64::from(self.max) / f64::from(self.initial)).log2() < f64::from(self.retries) {
+            return u64::from(self.max);
         }
 
         let rand = rand::thread_rng().gen_range::<f64>(1.0, 2.0);
-        let duration = ((self.initial as u64 * 2u64.pow(self.retries)) as f64 * rand) as u64;
-        let ms = cmp::min(self.max as u64, duration);
+        let duration = ((u64::from(self.initial) * 2u64.pow(self.retries)) as f64 * rand) as u64;
+        let ms = cmp::min(u64::from(self.max), duration);
         self.retries += 1;
         ms
     }

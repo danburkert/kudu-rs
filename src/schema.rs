@@ -50,7 +50,7 @@ impl Column {
     }
 
     pub fn block_size(&self) -> Option<u32> {
-        if self.block_size <= 0 {
+        if self.block_size == 0 {
             None
         } else {
             Some(self.block_size)
@@ -266,7 +266,7 @@ impl Schema {
     pub(crate) fn from_pb(pb: SchemaPb) -> Result<Schema> {
         let mut num_primary_key_columns = 0;
         let mut columns = Vec::with_capacity(pb.columns.len());
-        for column in pb.columns.into_iter() {
+        for column in pb.columns {
             if column.is_key() { num_primary_key_columns += 1 }
             columns.push(try!(Column::from_pb(column)))
         }

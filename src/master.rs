@@ -54,7 +54,7 @@ impl MasterProxy {
             if epoch == cache_epoch {
                 let response = proxy.send(request);
                 return MasterResponse {
-                    inner: self.inner.clone(),
+                    inner: Arc::clone(&self.inner),
                     state: Some(State::InFlight(response)),
                     epoch,
                 };
@@ -76,7 +76,7 @@ impl MasterProxy {
         }
 
         MasterResponse {
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
             state: Some(State::Connecting(connection, request)),
             epoch,
         }

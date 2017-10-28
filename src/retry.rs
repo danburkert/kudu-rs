@@ -61,7 +61,7 @@ impl <R> Retry<R> where R: KuduResponse {
     fn fail(&mut self, request: &Request) -> Result<(), Error> {
         let errors = mem::replace(&mut self.errors, Vec::new());
         let description = format!("RPC {}.{} failed", request.service, request.method);
-        return Err(Error::Compound(description, errors));
+        Err(Error::Compound(description, errors))
     }
 }
 

@@ -81,29 +81,31 @@ impl error::Error for Error {
     fn description(&self) -> &str {
         match *self {
             Error::InvalidArgument(_) => "illegal argument",
+            Error::TimedOut => "operation timed out",
+            Error::NoRangePartition => "no range partition",
+
             Error::Rpc(ref error) => error.description(),
             Error::Master(ref error) => error.description(),
             Error::TabletServer(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
-            Error::Serialization(ref description) => description,
-            Error::TimedOut => "operation timed out",
             Error::Negotiation(ref error) => error,
-            Error::NoRangePartition => "no range partition",
-            Error::Compound(ref description, _) => description,
+
+            Error::Serialization(ref description)
+            | Error::Compound(ref description, _) => description,
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
-            Error::InvalidArgument(_) => None,
+              Error::InvalidArgument(_)
+            | Error::Serialization(_)
+            | Error::TimedOut
+            | Error::Negotiation(_)
+            | Error::NoRangePartition => None,
             Error::Rpc(ref error) => error.cause(),
             Error::Master(ref error) => error.cause(),
             Error::TabletServer(ref error) => error.cause(),
             Error::Io(ref error) => error.cause(),
-            Error::Serialization(_) => None,
-            Error::TimedOut => None,
-            Error::Negotiation(_) => None,
-            Error::NoRangePartition => None,
             Error::Compound(_, ref errors) => errors.iter().next().map(|error| error as _),
         }
     }
@@ -253,8 +255,8 @@ impl fmt::Display for TabletServerError {
 impl From<TabletServerErrorPb> for TabletServerError {
     fn from(error: TabletServerErrorPb) -> TabletServerError {
         TabletServerError {
-            code: TabletServerErrorCode::from(error.code()),
-            status: Status::from(error.status),
+            code: error.code(),
+            status: error.status.into(),
         }
     }
 }
@@ -277,8 +279,8 @@ pub struct MasterError {
 impl MasterError {
     pub fn is_retriable(&self) -> bool {
         match self.code {
-            MasterErrorCode::CatalogManagerNotInitialized => true,
-            MasterErrorCode::TabletNotRunning => true,
+              MasterErrorCode::CatalogManagerNotInitialized
+            | MasterErrorCode::TabletNotRunning => true,
             _ => false,
         }
     }

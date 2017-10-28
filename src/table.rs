@@ -21,7 +21,7 @@ use pb::partition_schema_pb::{
 use Client;
 use Column;
 use Error;
-use meta_cache::{Entry, MetaCache};
+use meta_cache::MetaCache;
 use partition::PartitionSchema;
 use Result;
 use row::OperationEncoder;
@@ -135,8 +135,8 @@ pub enum RangePartitionBound {
 impl RangePartitionBound {
     fn row(&self) -> &Row {
         match *self {
-            RangePartitionBound::Inclusive(ref row) => row,
-            RangePartitionBound::Exclusive(ref row) => row,
+            RangePartitionBound::Inclusive(ref row)
+            | RangePartitionBound::Exclusive(ref row) => row,
         }
     }
 }
@@ -391,17 +391,10 @@ impl AlterTableBuilder {
 #[cfg(test)]
 mod tests {
 
-    use std::thread;
     use std::time::{Duration, Instant};
 
     use env_logger;
-    use tokio::reactor::Core;
 
-    use ClientBuilder;
-    use Column;
-    use DataType;
-    use SchemaBuilder;
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use schema::tests::simple_schema;
     use super::*;
 

@@ -111,7 +111,7 @@ impl PartitionSchema {
         };
 
         let mut hash_partitions = Vec::with_capacity(pb.hash_bucket_schemas.len());
-        for hash in pb.hash_bucket_schemas.iter() {
+        for hash in &pb.hash_bucket_schemas {
             let columns = hash.columns.iter().map(&column_to_id).collect::<Vec<_>>();
             hash_partitions.push(HashPartitionSchema::new(columns,
                                                           hash.num_buckets as u32,
@@ -179,14 +179,14 @@ pub struct Partition {
 
 impl fmt::Debug for Partition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[({:?}), ({:?}))", &self.lower_bound_key, &self.upper_bound_key)
+        write!(f, "[({:?}), ({:?}))", self.lower_bound_key, self.upper_bound_key)
     }
 }
 
 impl cmp::PartialEq for Partition {
     fn eq(&self, other: &Partition) -> bool {
-        &self.lower_bound_key == &other.lower_bound_key &&
-            &self.upper_bound_key == &other.upper_bound_key
+        self.lower_bound_key == other.lower_bound_key &&
+            self.upper_bound_key == other.upper_bound_key
     }
 }
 

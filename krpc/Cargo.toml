@@ -17,7 +17,7 @@ tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-proto = "0.1"
 tacho = "0.4"
-itertools = "0.6"
+itertools = "0.7"
 
 [build-dependencies]
 curl = "0.4"

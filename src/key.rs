@@ -17,51 +17,50 @@ use Value;
 
 /// Murmur2 hash implementation returning 64-bit hashes.
 pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
-    let m: u64 = 0xc6a4a7935bd1e995;
-    let r: u8 = 47;
+    const M: u64 = 0xc6a4_a793_5bd1_e995;
+    const R: u8 = 47;
 
-    let mut h : u64 = seed ^ ((data.len() as u64).wrapping_mul(m));
+    let mut h : u64 = seed ^ ((data.len() as u64).wrapping_mul(M));
 
     while data.len() >= 8 {
         let mut k = NativeEndian::read_u64(data);
 
-        k = k.wrapping_mul(m);
-        k ^= k >> r;
-        k = k.wrapping_mul(m);
+        k = k.wrapping_mul(M);
+        k ^= k >> R;
+        k = k.wrapping_mul(M);
         h ^= k;
-        h = h.wrapping_mul(m);
+        h = h.wrapping_mul(M);
 
         data = &data[8..];
     };
 
     let len = data.len();
-    if len > 6 { h ^= (data[6] as u64) << 48; }
-    if len > 5 { h ^= (data[5] as u64) << 40; }
-    if len > 4 { h ^= (data[4] as u64) << 32; }
-    if len > 3 { h ^= (data[3] as u64) << 24; }
-    if len > 2 { h ^= (data[2] as u64) << 16; }
-    if len > 1 { h ^= (data[1] as u64) << 8; }
-    if len > 0 { h ^= data[0] as u64;
-                 h = h.wrapping_mul(m) }
+    if len > 6 { h ^= u64::from(data[6]) << 48; }
+    if len > 5 { h ^= u64::from(data[5]) << 40; }
+    if len > 4 { h ^= u64::from(data[4]) << 32; }
+    if len > 3 { h ^= u64::from(data[3]) << 24; }
+    if len > 2 { h ^= u64::from(data[2]) << 16; }
+    if len > 1 { h ^= u64::from(data[1]) << 8; }
+    if len > 0 { h ^= u64::from(data[0]); h = h.wrapping_mul(M) }
 
-    h ^= h >> r;
-    h = h.wrapping_mul(m);
-    h ^= h >> r;
+    h ^= h >> R;
+    h = h.wrapping_mul(M);
+    h ^= h >> R;
     h
 }
 
 pub fn encode_primary_key(row: &Row) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
-    try!(encode_columns(row, 0..row.schema().num_primary_key_columns(), &mut buf));
+    encode_columns(row, 0..row.schema().num_primary_key_columns(), &mut buf)?;
     Ok(buf)
 }
 
 pub fn encode_partition_key(partition_schema: &PartitionSchema, row: &Row) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     for hash_schema in partition_schema.hash_partition_schemas() {
-        try!(encode_hash_partition_key(&hash_schema, row, &mut buf));
+        encode_hash_partition_key(hash_schema, row, &mut buf)?;
     }
-    try!(encode_range_partition_key(partition_schema.range_partition_schema(), row, &mut buf));
+    encode_range_partition_key(partition_schema.range_partition_schema(), row, &mut buf)?;
     Ok(buf)
 }
 
@@ -75,8 +74,8 @@ pub fn encode_hash_partition_key(hash_schema: &HashPartitionSchema,
                                  row: &Row,
                                  buf: &mut Vec<u8>) -> Result<()> {
     let len = buf.len();
-    try!(encode_columns(row, hash_schema.columns().iter().cloned(), buf));
-    let bucket = murmur2_64(&buf[len..], hash_schema.seed() as u64) % hash_schema.num_buckets() as u64;
+    encode_columns(row, hash_schema.columns().iter().cloned(), buf)?;
+    let bucket = murmur2_64(&buf[len..], u64::from(hash_schema.seed())) % u64::from(hash_schema.num_buckets());
     buf.truncate(len);
     buf.write_u32::<BigEndian>(bucket as u32).unwrap();
     Ok(())
@@ -87,7 +86,7 @@ where I: Iterator<Item=usize> + ExactSizeIterator {
     let columns = idxs.len();
     let mut column = 1;
     for idx in idxs {
-        try!(encode_column(row, idx, column == columns, buf));
+        encode_column(row, idx, column == columns, buf)?;
         column += 1;
     }
     Ok(())
@@ -95,11 +94,11 @@ where I: Iterator<Item=usize> + ExactSizeIterator {
 
 fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) -> Result<()> {
     match row.schema().columns()[idx].data_type() {
-        DataType::Int8 => buf.push((try!(row.get::<i8>(idx)) ^ i8::MIN) as u8),
-        DataType::Int16 => buf.write_i16::<BigEndian>(try!(row.get::<i16>(idx)) ^ i16::MIN).unwrap(),
-        DataType::Int32 => buf.write_i32::<BigEndian>(try!(row.get::<i32>(idx)) ^ i32::MIN).unwrap(),
-        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(try!(row.get::<i64>(idx)) ^ i64::MIN).unwrap(),
-        DataType::Binary | DataType::String => encode_binary(try!(row.get(idx)), is_last, buf),
+        DataType::Int8 => buf.push((row.get::<i8>(idx)? ^ i8::MIN) as u8),
+        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx)? ^ i16::MIN).unwrap(),
+        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx)? ^ i32::MIN).unwrap(),
+        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(row.get::<i64>(idx)? ^ i64::MIN).unwrap(),
+        DataType::Binary | DataType::String => encode_binary(row.get(idx)?, is_last, buf),
         DataType::Bool | DataType::Float | DataType::Double => {
             panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
         },
@@ -125,7 +124,7 @@ pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row> {
 
     let num_primary_key_columns = row.schema().num_primary_key_columns();
     for idx in 0..num_primary_key_columns {
-        key = try!(decode_column(&mut row, idx, idx + 1 == num_primary_key_columns, key));
+        key = decode_column(&mut row, idx, idx + 1 == num_primary_key_columns, key)?;
     }
 
     if !key.is_empty() {
@@ -144,7 +143,7 @@ pub fn decode_range_partition_key(schema: &Schema,
 
     for &idx in range_partition_schema.columns() {
         if key.is_empty() { break; }
-        key = try!(decode_column(&mut row, idx, idx == last_idx, key));
+        key = decode_column(&mut row, idx, idx == last_idx, key)?;
     }
 
     if !key.is_empty() {
@@ -175,13 +174,13 @@ fn decode_column<'a>(row: &mut Row, idx: usize, is_last: bool, key: &'a [u8]) ->
                 Ok(&key[8..])
             },
             DataType::Binary => {
-                let (remaining, value) = try!(decode_binary(key, is_last));
+                let (remaining, value) = decode_binary(key, is_last)?;
                 row.set_unchecked(idx, value);
                 Ok(remaining)
             },
             DataType::String => {
-                let (remaining, value) = try!(decode_binary(key, is_last));
-                row.set_unchecked(idx, try!(String::from_utf8(value)));
+                let (remaining, value) = decode_binary(key, is_last)?;
+                row.set_unchecked(idx, String::from_utf8(value)?);
                 Ok(remaining)
             },
             DataType::Bool | DataType::Float | DataType::Double => {
@@ -315,7 +314,7 @@ fn is_cell_incremented(lower: &Row, upper: &Row, idx: usize) -> bool {
 
     match lower.schema().columns()[idx].data_type() {
         DataType::Bool => {
-            lower.get::<bool>(idx).unwrap() == false && upper.get::<bool>(idx).unwrap() == true
+            !lower.get::<bool>(idx).unwrap() && upper.get::<bool>(idx).unwrap()
         },
         DataType::Int8 => {
             let lower = lower.get::<i8>(idx).unwrap();
