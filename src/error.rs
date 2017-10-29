@@ -24,6 +24,7 @@ pub enum Error {
     InvalidArgument(String),
 
     /// A Kudu RPC error.
+    /// TODO: delete this
     Rpc(krpc::RpcError),
 
     /// A Kudu Master error.

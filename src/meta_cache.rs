@@ -12,12 +12,15 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::{
-    Poll,
     Future,
+    Poll,
+    future,
 };
+use futures::future::Either;
 use parking_lot::Mutex;
 
 use Error;
+use HostPort;
 use MasterErrorCode;
 use PartitionSchema;
 use RaftRole;
@@ -25,10 +28,16 @@ use Result;
 use Schema;
 use TableId;
 use TabletId;
+use TabletServerId;
 use backoff::Backoff;
 use master::MasterProxy;
 use pb::ExpectField;
-use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
+use pb::master::{
+    MasterService,
+    GetTableLocationsRequestPb,
+    GetTableLocationsResponsePb,
+    TabletLocationsPb,
+};
 use tablet::Tablet;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
@@ -77,20 +86,6 @@ impl Entry {
         }
     }
 
-    /// Compare this entry against a partition key to determine if the key is covered by the entry
-    /// (`Ordering::Equal`), after the entry (`Ordering::Lower`), or before the entry
-    /// (`Ordering::Greater`).
-    fn cmp_partition_key(&self, partition_key: &[u8]) -> Ordering {
-        let upper_bound = self.partition_upper_bound();
-        if !upper_bound.is_empty() && partition_key >= upper_bound {
-            Ordering::Less
-        } else if partition_key < self.partition_lower_bound() {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        }
-    }
-
     fn contains_partition_key(&self, partition_key: &[u8]) -> bool {
         let upper_bound = self.partition_upper_bound();
         (upper_bound.is_empty() || partition_key < upper_bound)
@@ -134,6 +129,10 @@ impl Entry {
     }
 }
 
+/// TODO:
+///     - Retry RPCS that fail with tablet not running.
+///     - Limit the number of concurrent lookups, if it's not already being done by the master
+///       proxy.
 #[derive(Clone)]
 pub struct MetaCache {
     master: MasterProxy,
@@ -165,101 +164,68 @@ impl MetaCache {
         }
     }
 
-    /*
-    pub fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> {
-        unimplemented!();
+    pub fn entry(&self, partition_key: Vec<u8>) -> impl Future<Item=Entry, Error=Error> {
+        self.extract(partition_key, Entry::clone)
     }
-    */
 
-    /*
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
-        self.extract_cached(partition_key, |entry| entry.clone())
+        self.extract_cached(partition_key, &Entry::clone)
     }
-    */
 
-    /*
-    pub fn tablet_id<F>(&self,
-                        partition_key: Vec<u8>,
-                        deadline: Instant,
-                        cb: F)
-    where F: FnOnce(Result<Option<TabletId>>) + Send + 'static {
-        let extractor = |entry: &Entry| {
+    pub fn tablet_id<F>(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<TabletId>, Error=Error> {
+        self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 Some(tablet.id())
             } else {
                 None
             }
-        };
-        self.extract(partition_key, deadline, backoff(), extractor, cb);
+        })
     }
-    */
 
-    /*
-    pub fn tablet_leader<F>(&self,
-                            partition_key: Vec<u8>,
-                            deadline: Instant,
-                            cb: F)
-    where F: FnOnce(Result<Option<(TabletId, Vec<SocketAddr>)>>) + Send + 'static {
-        let mut addrs = Vec::with_capacity(1);
-        let extractor = move |entry: &Entry| {
+    pub fn tablet_leader(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<(TabletServerId, Vec<HostPort>)>,
+                                                                       Error=Error> {
+        self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
-                if tablet.replicas()[0].role() == RaftRole::Leader {
-                    addrs.extend_from_slice(&tablet.replicas()[0].resolved_rpc_addrs());
-                }
-                Some((tablet.id(), addrs))
+                tablet.replicas()
+                      .iter()
+                      .find(|replica| replica.role() == RaftRole::Leader)
+                      .map(|replica| (*replica.id(), replica.rpc_addrs().to_owned()))
             } else {
                 None
             }
-        };
-        self.extract(partition_key, deadline, backoff(), extractor, cb);
+        })
     }
-    */
 
-    /*
-    fn extract<Extractor, T, F>(&self,
-                                partition_key: Vec<u8>,
-                                deadline: Instant,
-                                backoff: Backoff,
-                                extractor: Extractor,
-                                cb: F)
-    where Extractor: Fn(&Entry) -> T + Send + 'static,
-          F: FnOnce(Result<T>) + Send + 'static {
+    fn extract<Extractor, T>(&self,
+                             partition_key: Vec<u8>,
+                             extractor: Extractor) -> impl Future<Item=T, Error=Error>
+    where Extractor: Fn(&Entry) -> T + Send + Sync {
 
-        if let Some(value) = self.extract_cached(&*partition_key, extractor) {
-            return cb(Ok(value));
+        if let Some(value) = self.extract_cached(&*partition_key, &extractor) {
+            return Either::A(future::ok(value));
         };
 
-        let request = GetTableLocationsRequestPb {
+        let request = Box::new(GetTableLocationsRequestPb {
             table: self.inner.table.into(),
             partition_key_start: Some(partition_key.clone()),
+            partition_key_end: None,
             max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
-            ..Default::default()
-        };
-
-        let meta_cache = self.clone();
-        /*
-        self.master.get_table_locations(deadline, request, move |resp| {
-            match resp {
-                Ok(mut resp) => {
-                    meta_cache.add_tablet_locations(partition_key,
-                                                    resp.take_tablet_locations().into_vec(),
-                                                    extractor,
-                                                    cb);
-                },
-                Err(Error::Master(ref error)) if error.code() == MasterErrorCode::TabletNotRunning => {
-                    let duration = Duration::from_millis(backoff.next_backoff_ms());
-                    let messenger = meta_cache.master.messenger().clone();
-                    messenger.timer(duration, Box::new(move || {
-                        meta_cache.extract(partition_key, deadline, backoff, extractor, cb);
-                    }));
-                }
-                Err(error) => cb(Err(error)),
-            }
         });
-        */
-        unimplemented!()
+        let request = MasterService::get_table_locations(request,
+                                                         Instant::now() + self.master.options().admin_timeout,
+                                                         &[]);
+
+        let mut meta_cache = self.clone();
+        Either::B(
+            meta_cache
+                .master
+                .send(request)
+                .and_then(move |response: GetTableLocationsResponsePb| {
+                    meta_cache.add_tablet_locations(&*partition_key,
+                                                    response.tablet_locations,
+                                                    &extractor)
+                }))
     }
-    */
 
     pub fn table(&self) -> TableId {
         self.inner.table
@@ -273,28 +239,23 @@ impl MetaCache {
         &self.inner.partition_schema
     }
 
-    /*
-    fn add_tablet_locations<F, Extractor, T>(&self,
-                                             partition_key: Vec<u8>,
-                                             tablets: Vec<TabletLocationsPb>,
-                                             extractor: Extractor,
-                                             cb: F)
-    where Extractor: Fn(&Entry) -> T + Send + 'static,
-          F: FnOnce(Result<T>) + Send + 'static {
-        let meta_cache = self.clone();
-        thread::spawn(move || {
-            match meta_cache.tablet_locations_to_entries(&partition_key, tablets) {
-                Ok(entries) => {
-                    meta_cache.splice_entries(entries);
-                    cb(Ok(meta_cache.extract_cached(&partition_key, extractor).unwrap()));
-                },
-                Err(error) => cb(Err(error)),
-            }
-        });
-    }
-    */
+    fn add_tablet_locations<Extractor, T>(&self,
+                                          partition_key: &[u8],
+                                          tablets: Vec<TabletLocationsPb>,
+                                          extractor: Extractor) -> Result<T>
+    where Extractor: Fn(&Entry) -> T + Send + Sync {
+        let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
+        let index = match entries.binary_search_by_key(&partition_key, |entry| entry.partition_lower_bound()) {
+            Ok(index) | Err(index) => index,
+        };
+        debug_assert!(entries[index].contains_partition_key(partition_key));
+        let value = extractor(&entries[index]);
 
-    fn extract_cached<Extractor, T>(&self, partition_key: &[u8], extractor: Extractor) -> Option<T>
+        self.splice_entries(entries);
+        Ok(value)
+    }
+
+    fn extract_cached<Extractor, T>(&self, partition_key: &[u8], extractor: &Extractor) -> Option<T>
     where Extractor: Fn(&Entry) -> T {
         let entries = self.inner.entries.lock();
         match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
@@ -326,51 +287,6 @@ impl MetaCache {
 
         left.append(&mut right);
     }
-
-    /*
-    fn splice_entries(&self, mut new_entries: Vec<Entry>) {
-        let mut entries = self.inner.entries.lock();
-        let splice_point = match entries.binary_search_by(|entry| entry.cmp_entry(&new_entries[0])) {
-            Ok(idx) | Err(idx) => idx,
-        };
-
-        let mut existing_entries = entries.drain(splice_point..).collect::<Vec<_>>();
-
-        let mut existing_entry = existing_entries.pop_front();
-        let mut new_entry = new_entries.pop_front();
-
-        loop {
-            match (existing_entry.take(), new_entry.take()) {
-                (Some(existing), Some(new)) => match existing.cmp_entry(&new) {
-                    Ordering::Equal => {
-                        // Remove all existing entries that overlap the new entry.
-                        // TODO: test this once range add/drop is implemented.
-                        while let Some(existing) = existing_entries.pop_front() {
-                            if existing.cmp_entry(&new) != Ordering::Equal {
-                                existing_entries.push_front(existing);
-                                break;
-                            }
-                        }
-                        entries.push(new)
-                    },
-                    Ordering::Less => {
-                        entries.push(existing);
-                        new_entry = Some(new);
-                    },
-                    Ordering::Greater => {
-                        entries.push(new);
-                        existing_entry = Some(existing);
-                    },
-                },
-                (Some(existing), None) => entries.push(existing),
-                (None, Some(new)) => entries.push(new),
-                (None, None) => break,
-            }
-            if existing_entry.is_none() { existing_entry = existing_entries.pop_front(); }
-            if new_entry.is_none() { new_entry = new_entries.pop_front(); }
-        }
-    }
-    */
 
     /// Converts the results of a `GetTableLocations` RPC to a set of entries for the meta cache.
     /// The entries are guaranteed to be contiguous in the partition key space. The partition key
@@ -406,9 +322,9 @@ impl MetaCache {
         }
 
         for tablet in tablets {
-            let tablet = try!(Tablet::from_pb(&self.inner.primary_key_schema,
-                                              self.inner.partition_schema.clone(),
-                                              tablet));
+            let tablet = Tablet::from_pb(&self.inner.primary_key_schema,
+                                         self.inner.partition_schema.clone(),
+                                         tablet)?;
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
                                                       tablet.partition().lower_bound_key().to_owned()));

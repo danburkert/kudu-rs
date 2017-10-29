@@ -25,7 +25,7 @@ extern crate vec_map;
 #[cfg(any(feature="quickcheck", test))]
 #[macro_use] extern crate quickcheck;
 
-#[macro_use] extern crate futures;
+extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 extern crate tokio_core as tokio;

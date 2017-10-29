@@ -81,6 +81,10 @@ impl MasterProxy {
             epoch,
         }
     }
+
+    pub fn options(&self) -> &Options {
+        &self.inner.options
+    }
 }
 
 struct Inner {
