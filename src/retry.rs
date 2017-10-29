@@ -32,6 +32,8 @@ enum State<R> where R: KuduResponse {
     Waiting(Option<Request>),
 }
 
+/// A future which wraps an in-flight Kudu RPC, and retries it after a backoff period if it fails
+/// with a retriable error.
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct Retry<R> where R: KuduResponse {
     backoff: Backoff,
@@ -60,7 +62,7 @@ impl <R> Retry<R> where R: KuduResponse {
 
     fn fail(&mut self, request: &Request) -> Result<(), Error> {
         let errors = mem::replace(&mut self.errors, Vec::new());
-        let description = format!("RPC {}.{} failed", request.service, request.method);
+        let description = format!("{}.{} RPC failed", request.service, request.method);
         Err(Error::Compound(description, errors))
     }
 }
