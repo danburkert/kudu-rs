@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::Bound;
-use std::collections::VecDeque;
+use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
@@ -16,8 +16,6 @@ use futures::{
     Future,
 };
 use parking_lot::Mutex;
-use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
-use pb::ExpectField;
 
 use Error;
 use MasterErrorCode;
@@ -29,6 +27,8 @@ use TableId;
 use TabletId;
 use backoff::Backoff;
 use master::MasterProxy;
+use pb::ExpectField;
+use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
 use tablet::Tablet;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
@@ -303,14 +303,38 @@ impl MetaCache {
         }
     }
 
+    fn splice_entries(&self, entries: Vec<Entry>) {
+        let mut left = self.inner.entries.lock();
+
+        // NLL hack.
+        let mut right = {
+            let lower_bound = entries[0].partition_lower_bound();
+            let upper_bound = entries[entries.len() - 1].partition_lower_bound();
+
+            let mut right = left.split_off(lower_bound);
+
+            if upper_bound.is_empty() {
+                BTreeMap::new()
+            } else {
+                right.split_off(upper_bound)
+            }
+        };
+
+        for entry in entries {
+            left.insert(entry.partition_lower_bound().to_owned(), entry);
+        }
+
+        left.append(&mut right);
+    }
+
     /*
-    fn splice_entries(&self, mut new_entries: VecDeque<Entry>) {
+    fn splice_entries(&self, mut new_entries: Vec<Entry>) {
         let mut entries = self.inner.entries.lock();
         let splice_point = match entries.binary_search_by(|entry| entry.cmp_entry(&new_entries[0])) {
             Ok(idx) | Err(idx) => idx,
         };
 
-        let mut existing_entries = entries.drain(splice_point..).collect::<VecDeque<_>>();
+        let mut existing_entries = entries.drain(splice_point..).collect::<Vec<_>>();
 
         let mut existing_entry = existing_entries.pop_front();
         let mut new_entry = new_entries.pop_front();
@@ -355,20 +379,20 @@ impl MetaCache {
     fn tablet_locations_to_entries(&self,
                                    partition_key: &[u8],
                                    tablets: Vec<TabletLocationsPb>)
-                                   -> Result<VecDeque<Entry>> {
+                                   -> Result<Vec<Entry>> {
         if tablets.is_empty() {
             // If there are no tablets in the response, then the table is empty. If
             // there were any tablets in the table they would have been returned, since
             // the master guarantees that the if the partition key falls in a
             // non-covered range, the previous tablet will be returned, and we did not
             // set an upper bound partition key on the request.
-            let mut entries = VecDeque::with_capacity(1);
-            entries.push_back(Entry::non_covered_range(Vec::new(), Vec::new()));
+            let mut entries = Vec::with_capacity(1);
+            entries.push(Entry::non_covered_range(Vec::new(), Vec::new()));
             return Ok(entries);
         }
 
         let tablet_count = tablets.len();
-        let mut entries = VecDeque::with_capacity(tablets.len());
+        let mut entries = Vec::with_capacity(tablets.len());
         let mut last_upper_bound: Vec<u8> = tablets[0].partition
                                                       .as_ref()
                                                       .expect_field("TabletLocationsPb", "partition")?
@@ -378,7 +402,7 @@ impl MetaCache {
         if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
-            entries.push_back(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
+            entries.push(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
         }
 
         for tablet in tablets {
@@ -386,23 +410,31 @@ impl MetaCache {
                                               self.inner.partition_schema.clone(),
                                               tablet));
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
-                entries.push_back(Entry::non_covered_range(last_upper_bound,
-                                                           tablet.partition().lower_bound_key().to_owned()));
+                entries.push(Entry::non_covered_range(last_upper_bound,
+                                                      tablet.partition().lower_bound_key().to_owned()));
             }
             last_upper_bound = tablet.partition().upper_bound_key().to_owned();
-            entries.push_back(Entry::Tablet(tablet));
+            entries.push(Entry::Tablet(tablet));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
-            entries.push_back(Entry::non_covered_range(last_upper_bound, Vec::new()));
+            entries.push(Entry::non_covered_range(last_upper_bound, Vec::new()));
         }
 
-        trace!("discovered table locations: {:?}", entries);
+        trace!("{:?}: discovered entries: {:?}", self, entries);
         Ok(entries)
     }
 
     pub fn clear(&self) {
         self.inner.entries.lock().clear()
+    }
+}
+
+impl fmt::Debug for MetaCache {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MetaCache")
+         .field("table", &self.inner.table)
+         .finish()
     }
 }
 
