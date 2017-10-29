@@ -2,6 +2,8 @@
 #![allow(unused_variables)]
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::collections::Bound;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,7 +11,10 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use futures::Poll;
+use futures::{
+    Poll,
+    Future,
+};
 use parking_lot::Mutex;
 use pb::master::{GetTableLocationsRequestPb, TabletLocationsPb};
 use pb::ExpectField;
@@ -86,6 +91,12 @@ impl Entry {
         }
     }
 
+    fn contains_partition_key(&self, partition_key: &[u8]) -> bool {
+        let upper_bound = self.partition_upper_bound();
+        (upper_bound.is_empty() || partition_key < upper_bound)
+            && partition_key >= self.partition_lower_bound()
+    }
+
     /// Returns `Ordering::Equal` if the entries intersect, `Ordering::Less` if this entry falls
     /// before the other entry, or `Ordering::Greater` if this entry falls after the other entry.
     fn cmp_entry(&self, other: &Entry) -> Ordering {
@@ -129,11 +140,11 @@ pub struct MetaCache {
     inner: Arc<Inner>,
 }
 
-pub struct Inner {
+struct Inner {
     table: TableId,
     primary_key_schema: Schema,
     partition_schema: PartitionSchema,
-    entries: Mutex<Vec<Entry>>,
+    entries: Mutex<BTreeMap<Vec<u8>, Entry>>,
 }
 
 impl MetaCache {
@@ -149,19 +160,24 @@ impl MetaCache {
                 table: table,
                 primary_key_schema: primary_key_schema,
                 partition_schema: partition_schema,
-                entries: Mutex::new(Vec::new()),
+                entries: Mutex::new(BTreeMap::new()),
             })
         }
     }
 
-    pub fn poll_entry(&self, partition_key: &[u8]) -> Poll<Entry, Error> {
-        unimplemented!()
+    /*
+    pub fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> {
+        unimplemented!();
     }
+    */
 
+    /*
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
         self.extract_cached(partition_key, |entry| entry.clone())
     }
+    */
 
+    /*
     pub fn tablet_id<F>(&self,
                         partition_key: Vec<u8>,
                         deadline: Instant,
@@ -176,6 +192,7 @@ impl MetaCache {
         };
         self.extract(partition_key, deadline, backoff(), extractor, cb);
     }
+    */
 
     /*
     pub fn tablet_leader<F>(&self,
@@ -198,6 +215,7 @@ impl MetaCache {
     }
     */
 
+    /*
     fn extract<Extractor, T, F>(&self,
                                 partition_key: Vec<u8>,
                                 deadline: Instant,
@@ -241,6 +259,7 @@ impl MetaCache {
         */
         unimplemented!()
     }
+    */
 
     pub fn table(&self) -> TableId {
         self.inner.table
@@ -254,6 +273,7 @@ impl MetaCache {
         &self.inner.partition_schema
     }
 
+    /*
     fn add_tablet_locations<F, Extractor, T>(&self,
                                              partition_key: Vec<u8>,
                                              tablets: Vec<TabletLocationsPb>,
@@ -272,16 +292,18 @@ impl MetaCache {
             }
         });
     }
+    */
 
     fn extract_cached<Extractor, T>(&self, partition_key: &[u8], extractor: Extractor) -> Option<T>
     where Extractor: Fn(&Entry) -> T {
         let entries = self.inner.entries.lock();
-        match entries.binary_search_by(|entry| entry.cmp_partition_key(partition_key)) {
-            Ok(index) => Some(extractor(&entries[index])),
-            Err(_) => None,
+        match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
+            Some(ref entry) if entry.1.contains_partition_key(partition_key) => Some(extractor(&entry.1)),
+            _ => None,
         }
     }
 
+    /*
     fn splice_entries(&self, mut new_entries: VecDeque<Entry>) {
         let mut entries = self.inner.entries.lock();
         let splice_point = match entries.binary_search_by(|entry| entry.cmp_entry(&new_entries[0])) {
@@ -324,6 +346,7 @@ impl MetaCache {
             if new_entry.is_none() { new_entry = new_entries.pop_front(); }
         }
     }
+    */
 
     /// Converts the results of a `GetTableLocations` RPC to a set of entries for the meta cache.
     /// The entries are guaranteed to be contiguous in the partition key space. The partition key

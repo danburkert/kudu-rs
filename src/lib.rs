@@ -33,9 +33,9 @@ extern crate tokio_core as tokio;
 pub mod pb;
 
 mod retry;
-mod master;
+pub mod master;
 mod client;
-mod meta_cache;
+pub mod meta_cache;
 mod table;
 mod tablet;
 mod server;

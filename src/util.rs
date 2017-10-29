@@ -1,19 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
-use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use std::time::{UNIX_EPOCH, Instant, SystemTime};
+use std::time::{UNIX_EPOCH, SystemTime};
 
 use chrono;
-use futures::{Async, Future, Poll, Stream};
 use ifaces;
-use timer;
 
 use DataType;
 use Row;
-use backoff::Backoff;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
