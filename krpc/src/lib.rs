@@ -111,7 +111,7 @@ pub struct Response<T> where T: Message + Default {
 impl <T> Response<T> where T: Message + Default {
     pub fn failed(request: Request, error: Error) -> Response<T> {
         let (completer, receiver) = oneshot::channel();
-        completer.send(Err((error, request)));
+        completer.send(Err((error, request))).unwrap();
 
         Response {
             receiver,

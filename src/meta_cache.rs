@@ -246,7 +246,8 @@ impl MetaCache {
     where Extractor: Fn(&Entry) -> T + Send + Sync {
         let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
         let index = match entries.binary_search_by_key(&partition_key, |entry| entry.partition_lower_bound()) {
-            Ok(index) | Err(index) => index,
+            Ok(index) => index,
+            Err(index) => index - 1,
         };
         debug_assert!(entries[index].contains_partition_key(partition_key));
         let value = extractor(&entries[index]);
@@ -358,9 +359,9 @@ impl fmt::Debug for MetaCache {
 mod tests {
 
     use std::time::{Duration, Instant};
-    use std::sync::mpsc::sync_channel;
 
     use env_logger;
+    use tokio::reactor::Core;
 
     use Client;
     use ClientBuilder;
@@ -369,17 +370,21 @@ mod tests {
     use mini_cluster::MiniCluster;
     use schema::tests::simple_schema;
 
+    use super::*;
+
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
     }
 
-    /*
     #[test]
     fn single_tablet() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::default();
+        let mut cluster = MiniCluster::default();
+        let mut reactor = Core::new().unwrap();
 
-        let client = ClientBuilder::new(cluster.master_addrs().to_owned()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = simple_schema();
 
@@ -387,12 +392,10 @@ mod tests {
         table_builder.set_range_partition_columns(vec!["key".to_owned()]);
         table_builder.set_num_replicas(1);
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
 
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
-
-        let (send, recv) = sync_channel(0);
 
         {
             let entries = cache.inner.entries.lock().clone();
@@ -400,29 +403,23 @@ mod tests {
         }
 
         {
-            let send = send.clone();
-            cache.entry(vec![], deadline(), move |entry| {
-                send.send(entry).unwrap();
-            });
-            let entry = recv.recv().unwrap().unwrap();
+            let entry = reactor.run(cache.entry(vec![])).expect("entry");
 
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.partition_lower_bound());
             assert_eq!(b"", entry.partition_upper_bound());
 
             let entries = cache.inner.entries.lock().clone();
-            assert!(entry.equiv(&entries[0]));
+            assert_eq!(1, entries.len());
+            assert!(entry.equiv(entries.values().next().unwrap()));
 
             assert!(entry.equiv(&cache.cached_entry(b"").unwrap()));
             assert!(entry.equiv(&cache.cached_entry(b"foo").unwrap()));
         }
+
         cache.clear();
         {
-            let send = send.clone();
-            cache.entry(b"some-key".as_ref().to_owned(), deadline(), move |entry| {
-                send.send(entry).unwrap();
-            });
-            let entry = recv.recv().unwrap().unwrap();
+            let entry = reactor.run(cache.entry(b"some-key".as_ref().to_owned())).expect("entry");
 
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.partition_lower_bound());
@@ -433,9 +430,12 @@ mod tests {
     #[test]
     fn multi_tablet() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::default();
+        let mut cluster = MiniCluster::default();
+        let mut reactor = Core::new().unwrap();
 
-        let client = ClientBuilder::new(cluster.master_addrs().to_owned()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = simple_schema();
 
@@ -443,24 +443,18 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
 
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
 
-        let (send, recv) = sync_channel(1);
-
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 0, 1], deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-        let first = recv.recv().unwrap().unwrap();
+        let first = reactor.run(cache.entry(vec![0, 0, 0, 0, 1])).expect("entry");
 
         assert!(first.is_tablet());
         assert_eq!(b"", first.partition_lower_bound());
         assert_eq!(vec![0, 0, 0, 1], first.partition_upper_bound());
 
-        let entries = cache.inner.entries.lock().clone();
+        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
         assert_eq!(10, entries.len());
         assert!(first.equiv(&entries[0]));
 
@@ -468,13 +462,10 @@ mod tests {
         assert!(cache.cached_entry(b"foo").is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
 
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 11], deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-        let last = recv.recv().unwrap().unwrap();
+        let last = reactor.run(cache.entry(vec![0, 0, 0, 11])).expect("entry");
 
-        let entries = cache.inner.entries.lock().clone();
+        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+
         assert_eq!(11, entries.len());
         assert!(entries[10].equiv(&last));
 
@@ -482,28 +473,22 @@ mod tests {
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10, 5]).is_none());
 
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 9], deadline(), move |entry| {
-            let result = s.send(entry);
-            result.unwrap();
-        });
-        let _ = recv.recv().unwrap().unwrap();
+        reactor.run(cache.entry(vec![0, 0, 0, 9])).expect("entry");
         assert_eq!(11, cache.inner.entries.lock().len());
 
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 10], deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-        let _ = recv.recv().unwrap().unwrap();
+        reactor.run(cache.entry(vec![0, 0, 0, 10])).expect("entry");
         assert_eq!(12, cache.inner.entries.lock().len());
     }
 
     #[test]
     fn multi_tablet_concurrent() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::default();
+        let mut cluster = MiniCluster::default();
+        let mut reactor = Core::new().unwrap();
 
-        let client = ClientBuilder::new(cluster.master_addrs().to_owned()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = simple_schema();
 
@@ -511,28 +496,14 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
 
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
 
-        let (send, recv) = sync_channel(2);
-
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 0], deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-
-        let s = send.clone();
-        cache.entry(vec![0, 0, 0, 8], deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-
-        recv.recv().unwrap().unwrap();
-        recv.recv().unwrap().unwrap();
-
-        let entries = cache.inner.entries.lock().clone();
+        reactor.run(cache.entry(vec![0, 0, 0, 0]).join(cache.entry(vec![0, 0, 0, 9])))
+               .expect("entry");
+        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
         // Technically this could be 10 if the first request comes back before the second is
         // initiated, but in practice this doesn't really happen.
         assert!(entries.len() == 12);
@@ -541,9 +512,12 @@ mod tests {
     #[test]
     fn non_covered_ranges() {
         let _ = env_logger::init();
-        let cluster = MiniCluster::default();
+        let mut cluster = MiniCluster::default();
+        let mut reactor = Core::new().unwrap();
 
-        let client = ClientBuilder::new(cluster.master_addrs().to_owned()).build().unwrap();
+        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
+                                       .build()
+                                       .expect("client");
 
         let schema = simple_schema();
 
@@ -571,19 +545,13 @@ mod tests {
         split.set(0, "c").unwrap();
         table_builder.add_range_partition_split(split);
 
-        let table_id = client.create_table(table_builder, deadline()).unwrap();
-        client.wait_for_table_creation_by_id(&table_id, deadline()).unwrap();
+        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
 
-        let table = client.open_table_by_id(&table_id, deadline()).unwrap();
+        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
-        let (send, recv) = sync_channel(10);
 
-        let s = send.clone();
-        cache.entry(b"\0".as_ref().to_owned(), deadline(), move |entry| {
-            s.send(entry).unwrap();
-        });
-        recv.recv().unwrap().unwrap();
-        let entries = cache.inner.entries.lock().clone();
+        reactor.run(cache.entry(vec![0])).expect("entry");
+        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
         assert_eq!(6, entries.len());
 
         let expected: Vec<(&[u8], &[u8], bool)> = vec![ (b"",  b"a", false),
@@ -608,14 +576,13 @@ mod tests {
 
         for (key, expected_entries) in cases {
             cache.clear();
-            let s = send.clone();
-            cache.entry(key.to_owned(), deadline(), move |entry| {
-                s.send(entry).unwrap();
-            });
-            recv.recv().unwrap().unwrap();
-            assert_eq!(&entries[6 - expected_entries..], &cache.inner.entries.lock().clone()[..],
-                       "key: {:?}, expected entries: {}, entries: {:?}", key, expected_entries, &cache.inner.entries.lock().clone()[..]);
+            reactor.run(cache.entry(key.to_owned())).expect("entry");
+
+            let new_entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+
+            assert_eq!(&entries[6 - expected_entries..], &new_entries[..],
+                       "key: {:?}, expected entries: {}, entries: {:?}",
+                       key, expected_entries, &new_entries[..]);
         }
     }
-    */
 }

@@ -29,7 +29,7 @@ parking_lot = "0.4"
 prost = "0.2"
 prost-derive = "0.2"
 prost-types = "0.2"
-quickcheck = { version = "0.3", optional = true }
+quickcheck = { version = "0.4", optional = true }
 rand = "0.3.14"
 tokio-core = "0.1"
 tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
@@ -45,8 +45,8 @@ tar = "0.4"
 
 [dev-dependencies]
 tempdir = "0.3"
-env_logger = "*"
-quickcheck = "0.3"
+env_logger = "0.4"
+quickcheck = "0.4"
 
 [replace]
 "tacho:0.4.2" = { git = "https://github.com/danburkert/tacho" }
