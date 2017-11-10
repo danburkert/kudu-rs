@@ -8,16 +8,18 @@ use std::net::{
 use std::str::FromStr;
 use std::vec;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostPort {
-    pub host: String,
+    /// The host.
+    pub host: Box<str>,
+    /// The port.
     pub port: u16,
 }
 
 impl From<SocketAddr> for HostPort {
     fn from(addr: SocketAddr) -> HostPort {
         HostPort {
-            host: format!("{}", addr.ip()),
+            host: format!("{}", addr.ip()).into_boxed_str(),
             port: addr.port(),
         }
     }
@@ -26,7 +28,7 @@ impl From<SocketAddr> for HostPort {
 impl From<(String, u16)> for HostPort {
     fn from((host, port): (String, u16)) -> HostPort {
         HostPort {
-            host,
+            host: host.into_boxed_str(),
             port
         }
     }
@@ -45,7 +47,7 @@ impl HostPort {
         // Attempt to parse as an IpAddr.
         if let Ok(addr) = IpAddr::from_str(&hostport) {
             return Ok(HostPort {
-                host: format!("{}", addr),
+                host: format!("{}", addr).into_boxed_str(),
                 port: default_port,
             });
         }
@@ -60,7 +62,7 @@ impl HostPort {
                                                     format!("invalid hostport: {:?}", hostport)))?;
 
         Ok(HostPort {
-            host,
+            host: host.into_boxed_str(),
             port,
         })
     }
@@ -69,7 +71,7 @@ impl HostPort {
 impl ToSocketAddrs for HostPort {
     type Iter = vec::IntoIter<SocketAddr>;
     fn to_socket_addrs(&self) -> io::Result<vec::IntoIter<SocketAddr>> {
-        (self.host.as_str(), self.port).to_socket_addrs()
+        (&*self.host, self.port).to_socket_addrs()
     }
 }
 
@@ -94,7 +96,7 @@ mod tests {
     fn hostport_parse() {
 
         let hostport = HostPort {
-            host: "host01.example.com".to_string(),
+            host: "host01.example.com".to_string().into_boxed_str(),
             port: 80,
         };
 

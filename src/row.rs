@@ -350,6 +350,7 @@ impl OperationEncoder {
         self.data.extend_from_slice(null_columns.data());
 
         let mut offset = self.data.len();
+        // TODO: use reserve, and get rid of truncate
         self.data.resize(offset + schema.row_size(), 0);
         for (idx, column) in schema.columns().iter().enumerate() {
             if !set_columns.get(idx) { continue; }
@@ -386,6 +387,14 @@ impl OperationEncoder {
             direct += column.data_type().size();
         }
         (direct, indirect_data.values().map(|data| data.len()).sum())
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len() + self.indirect_data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 
     pub fn clear(&mut self) {

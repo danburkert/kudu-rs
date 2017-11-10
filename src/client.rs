@@ -45,6 +45,7 @@ use Result;
 use Schema;
 use TableId;
 use TabletServer;
+use tserver;
 use backoff::Backoff;
 use master::MasterProxy;
 use meta_cache::MetaCache;
@@ -55,11 +56,12 @@ use table::TableBuilder;
 
 /// A Kudu database client.
 ///
-/// Encapsulates the connection to a Kudu cluster. Only a single `Client` instance should be used
-/// per application.
+/// Encapsulates the connection to a Kudu cluster. Only a single instance should be used per
+/// application per cluster.
 #[derive(Clone)]
 pub struct Client {
     master: MasterProxy,
+    tserver_proxies: tserver::ProxyCache,
     options: Options,
     meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
     latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
@@ -70,8 +72,10 @@ impl Client {
     /// Creates a new client with the provided configuration.
     fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
         let master = MasterProxy::new(master_addresses, options.clone());
+        let tserver_proxies = tserver::ProxyCache::new(options.clone());
         Client {
             master,
+            tserver_proxies,
             options,
             meta_caches: Arc::new(Mutex::new(HashMap::new())),
             latest_observed_timestamp: Arc::new(Mutex::new(0)),

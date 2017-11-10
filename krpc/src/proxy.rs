@@ -50,7 +50,7 @@ pub enum AsyncSend {
 
 impl Proxy {
 
-    pub fn spawn(hostports: Vec<HostPort>,
+    pub fn spawn(hostports: Box<[HostPort]>,
                  options: Options,
                  threadpool: CpuPool,
                  remote: &Remote)
@@ -123,7 +123,7 @@ impl fmt::Debug for ConnectionState {
 }
 
 struct ProxyTask {
-    hostports: Vec<HostPort>,
+    hostports: Box<[HostPort]>,
     options: Options,
     threadpool: CpuPool,
     handle: Handle,

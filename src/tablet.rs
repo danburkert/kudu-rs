@@ -55,7 +55,7 @@ impl Tablet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Replica {
     id: TabletServerId,
-    rpc_addrs: Vec<HostPort>,
+    rpc_addrs: Box<[HostPort]>,
     role: RaftRole,
 }
 
@@ -76,18 +76,11 @@ impl Replica {
         self.role
     }
 
-    /*
-    /// The resolved RPC addresses.
-    pub fn resolved_rpc_addrs(&self) -> &[SocketAddr] {
-        &self.resolved_rpc_addrs
-    }
-    */
-
     /// Creates a new `Replica` from a replica protobuf message.
     pub(crate) fn from_pb(pb: ReplicaPb) -> Result<Replica> {
         let role = pb.role();
         let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-        let rpc_addrs = pb.ts_info.rpc_addresses.into_iter().map(HostPort::from).collect();
+        let rpc_addrs = pb.ts_info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
         Ok(Replica { id, rpc_addrs, role })
     }
 }

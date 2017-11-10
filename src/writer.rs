@@ -6,8 +6,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::time::{Duration, Instant};
 
-use kudu_pb::tserver;
+use pb::tserver;
 use parking_lot::{Mutex, MutexGuard};
+use futures::Async;
 
 use Client;
 use Error;
@@ -20,7 +21,7 @@ use TabletId;
 use backoff::Backoff;
 use error;
 use key;
-use kudu_pb::wire_protocol::{RowOperationsPB_Type as OperationTypePB};
+use pb::row_operations_pb::{Type as OperationTypePb};
 use meta_cache::MetaCache;
 use queue_map::QueueMap;
 use row::OperationEncoder;
@@ -310,12 +311,12 @@ pub enum OperationType {
 }
 
 impl OperationType {
-    fn as_pb(self) -> OperationTypePB {
+    fn as_pb(self) -> OperationTypePb {
         match self {
-            OperationType::Insert => OperationTypePB::INSERT,
-            OperationType::Update => OperationTypePB::UPDATE,
-            OperationType::Upsert => OperationTypePB::UPSERT,
-            OperationType::Delete => OperationTypePB::DELETE,
+            OperationType::Insert => OperationTypePb::INSERT,
+            OperationType::Update => OperationTypePb::UPDATE,
+            OperationType::Upsert => OperationTypePb::UPSERT,
+            OperationType::Delete => OperationTypePb::DELETE,
         }
     }
 }
@@ -416,8 +417,7 @@ impl FlushStats {
 
 impl Writer {
 
-    #[doc(hidden)]
-    pub fn new(table: Table, config: WriterConfig) -> Writer {
+    pub(crate) fn new(table: Table, config: WriterConfig) -> Writer {
         let flush = FlushState {
             stats: FlushStats::new(0),
             lookups_outstanding: 0,
@@ -441,6 +441,10 @@ impl Writer {
             }),
             event_channel: event_channel,
         }
+    }
+
+    pub fn poll_ready(&mut self) -> Async<()> {
+
     }
 
     pub fn insert(&self, row: Row) {
@@ -778,7 +782,7 @@ impl Batch {
         debug_assert_eq!(data.len(), direct_buffered_data, "direct data length");
         debug_assert_eq!(indirect_data.len(), indirect_buffered_data, "indirect data length");
 
-        let mut message = tserver::WriteRequestPB::new();
+        let mut message = tserver::WriteRequestPb::new();
         message.mut_row_operations().set_rows(data);
         message.mut_row_operations().set_indirect_data(indirect_data);
         message.set_schema(writer.schema().as_pb());
@@ -848,7 +852,7 @@ impl Batch {
     fn handle_response(mut self: Box<Self>, result: Result<()>, mut rpc: Rpc) {
         match result {
             Ok(_) => {
-                let response = rpc.mut_response::<tserver::WriteResponsePB>();
+                let response = rpc.mut_response::<tserver::WriteResponsePb>();
 
                 trace!("batch response: {:?}", response);
 
@@ -942,6 +946,7 @@ impl <F> FlushCallback for F where F: FnOnce(FlushStats) + Send {
     }
 }
 
+/*
 #[cfg(test)]
 mod test {
 
@@ -1036,3 +1041,4 @@ mod test {
         assert_eq!(flush.data(), 128);
     }
 }
+*/

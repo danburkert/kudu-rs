@@ -193,7 +193,7 @@ impl ConnectToCluster {
         let now = Instant::now();
         let mut responses = FuturesUnordered::new();
         for addr in addrs {
-            let mut proxy = Proxy::spawn(vec![addr.clone()],
+            let mut proxy = Proxy::spawn(Box::new([addr.clone()]),
                                          options.rpc.clone(),
                                          options.threadpool.clone(),
                                          &options.remote);

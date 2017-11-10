@@ -48,7 +48,10 @@ fn init(mut options: Options) -> (CalculatorServer, Core, Proxy, tacho::Reporter
     options.scope = Some(scope);
     let server = CalculatorServer::start();
     let reactor = Core::new().unwrap();
-    let proxy = Proxy::spawn(vec![server.addr().into()], options, threadpool, &reactor.remote());
+    let proxy = Proxy::spawn(vec![server.addr().into()].into_boxed_slice(),
+                             options,
+                             threadpool,
+                             &reactor.remote());
     (server, reactor, proxy, reporter)
 }
 

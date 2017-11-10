@@ -32,23 +32,25 @@ extern crate tokio_core as tokio;
 
 pub mod pb;
 
-mod retry;
-pub mod master;
-mod client;
-pub mod meta_cache;
-mod table;
-mod tablet;
-mod server;
-//mod writer;
 mod backoff;
 mod bit_set;
+mod client;
 mod error;
 mod key;
 mod partition;
+mod retry;
 mod row;
 mod schema;
+mod server;
+mod table;
+mod tablet;
+mod tserver;
 mod util;
 mod value;
+//mod writer;
+mod writer2;
+pub mod master;
+pub mod meta_cache;
 
 #[cfg(test)]
 mod mini_cluster;
@@ -323,7 +325,6 @@ macro_rules! id {
 }
 
 id!(MasterId);
-id!(ReplicaId);
 id!(TableId);
 id!(TabletId);
 id!(TabletServerId);
