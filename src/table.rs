@@ -128,12 +128,12 @@ impl Table {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RangePartitionBound {
-    Inclusive(Row),
-    Exclusive(Row),
+    Inclusive(Row<'static>),
+    Exclusive(Row<'static>),
 }
 
 impl RangePartitionBound {
-    fn row(&self) -> &Row {
+    fn row(&self) -> &Row<'static> {
         match *self {
             RangePartitionBound::Inclusive(ref row)
             | RangePartitionBound::Exclusive(ref row) => row,
@@ -147,7 +147,7 @@ pub struct TableBuilder {
     hash_partitions: Vec<(Vec<String>, u32, Option<u32>)>,
     range_partition_columns: Vec<String>,
     range_partitions: Vec<(RangePartitionBound, RangePartitionBound)>,
-    range_partition_splits: Vec<Row>,
+    range_partition_splits: Vec<Row<'static>>,
     num_replicas: Option<u32>,
 }
 
@@ -208,7 +208,7 @@ impl TableBuilder {
         self
     }
 
-    pub fn add_range_partition_split(&mut self, split: Row) -> &mut TableBuilder {
+    pub fn add_range_partition_split(&mut self, split: Row<'static>) -> &mut TableBuilder {
         self.range_partition_splits.push(split);
         self
     }

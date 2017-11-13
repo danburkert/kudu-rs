@@ -245,7 +245,7 @@ impl Schema {
         &self.inner.column_offsets
     }
 
-    pub fn new_row(&self) -> Row {
+    pub fn new_row<'a>(&self) -> Row<'a> {
         Row::new(self.clone())
     }
 

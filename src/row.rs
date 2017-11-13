@@ -1,6 +1,7 @@
 use std::cmp;
 use std::fmt;
 use std::time::SystemTime;
+use std::borrow::Cow;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -19,59 +20,92 @@ use Schema;
 use Value;
 use util;
 
-#[derive(Clone)]
-pub struct Row {
-    data: Box<[u8]>,
-    indirect_data: VecMap<Vec<u8>>,
-    set_columns: BitSet,
-    null_columns: BitSet,
+/// Holds either owned or borrowed row data.
+///
+/// Similar to `std::borrow::Cow::<[u8]>`, but the borrowed variant holds a mutable reference, and
+/// the owned variant holds a boxed slice instead of a vec.
+enum Data<'data> {
+
+    /// Borrowed row data.
+    ///
+    /// The data is laid out contiguously as follows:
+    ///   - column-data
+    ///   - is-null bitmap, if any columns are nullable
+    Borrowed(&'data mut [u8]),
+
+    /// Owned row data.
+    ///
+    /// The data is laid out contiguously as follows:
+    ///   - is-set bitmap
+    ///   - is-null bitmap, if any columns are nullable
+    ///   - column-data
+    Owned(Box<[u8]>),
+}
+
+impl <'data> Data<'data> {
+
+    fn clone_borrowed_data(schema: &Schema, borrowed_data: &[u8]) -> Box<[u8]> {
+        let row_len = schema.row_size();
+        let bitset_len = BitSetT::byte_len(schema.num_columns());
+        let data_len = row_len
+                     + if schema.has_nullable_columns() { bitset_len } else { 0 }
+                     + bitset_len;
+        debug_assert_eq!(borrowed_data.len(), data_len - bitset_len);
+
+        let data = Vec::with_capacity(data_len);
+        // TODO: this leaves some trailing bits set, is that a problem?
+        data.resize(bitset_len, 0xFF);
+        if schema.has_nullable_columns() {
+            data.extend_from_slice(&borrowed_data[row_len..]);
+        }
+        data.extend_from_slice(&borrowed_data[..row_len]);
+        data.into_boxed_slice()
+    }
+
+    fn into_owned(&mut self, schema: &Schema) {
+        if let Data::Borrowed(data) = *self {
+            *self = Data::Owned(schema, data)
+        }
+    }
+}
+
+pub struct Row<'data> {
+    data: Data<'data>,
+    owned_data: VecMap<Vec<u8>>,
     schema: Schema,
 }
 
-// TODO: unset/unset_by_name.  Should zero out existing values so that equality can still be fast.
-// TODO: remove varlen column bytes from `data` (right now it takes up 16 useless bytes) (is this
-// as easy as changing them to 0 width in the Value trait?).
-impl Row {
-    pub fn new(schema: Schema) -> Row {
+// TODO: unset/unset_by_name.
+impl <'data> Row<'data> {
+
+    /// Creates a new owned row.
+    pub(crate) fn new(schema: Schema) -> Row<'data> {
+        let row_len = schema.row_size();
+        let bitset_len = BitSetT::byte_len(schema.num_columns());
+        let data_len = row_len
+                     + if schema.has_nullable_columns() { bitset_len } else { 0 }
+                     + bitset_len;
+
         let num_columns = schema.columns().len();
-        let null_columns = if schema.has_nullable_columns() { BitSet::with_capacity(num_columns) }
-                           else { BitSet::with_capacity(0) };
-        let data = vec![0; schema.row_size()].into_boxed_slice();
+
+        let data = Data::Owned(vec![0; data_len].into_boxed_slice());
         Row {
-            data: data,
-            indirect_data: VecMap::with_capacity(num_columns),
-            set_columns: BitSet::with_capacity(num_columns),
-            null_columns: null_columns,
-            schema: schema,
+            data,
+            indirect_data: VecMap::new(),
+            schema,
         }
     }
 
-    pub fn set<'a, V>(&mut self, idx: usize, value: V) -> Result<&mut Row> where V: Value<'a> {
-        try!(self.check_column_for_write::<V>(idx));
+    pub fn set<V>(&mut self, idx: usize, value: V) -> Result<&mut Self> where V: Value<'data> {
+        self.check_column_for_write::<V>(idx)?;
         unsafe {
             Ok(self.set_unchecked(idx, value))
         }
     }
 
-    pub fn set_by_name<'a, V>(&mut self, column: &str, value: V) -> Result<&mut Row> where V: Value<'a> {
+    pub fn set_by_name<V>(&mut self, column: &str, value: V) -> Result<&mut Row<'data>> where V: Value<'data> {
         if let Some(idx) = self.schema.column_index(column) {
             self.set(idx, value)
-        } else {
-            Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
-        }
-    }
-
-    pub fn set_null(&mut self, idx: usize) -> Result<&mut Row> {
-        try!(self.check_column_for_nullability(idx));
-        self.set_columns.insert(idx);
-        self.null_columns.insert(idx);
-        self.indirect_data.remove(idx);
-        Ok(self)
-    }
-
-    pub fn set_null_by_name(&mut self, column: &str) -> Result<&mut Row> {
-        if let Some(idx) = self.schema.column_index(column) {
-            self.set_null(idx)
         } else {
             Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
         }
@@ -80,7 +114,7 @@ impl Row {
     pub unsafe fn set_unchecked<'a, V>(&mut self,
                                        idx: usize,
                                        value: V)
-                                       -> &mut Row where V: Value<'a> {
+                                       -> &mut Self where V: Value<'data> {
         debug_assert!(self.check_column_for_write::<V>(idx).is_ok());
         self.set_columns.insert(idx);
         if value.is_null() {
@@ -98,8 +132,29 @@ impl Row {
         self
     }
 
-    pub fn get<'a, V>(&'a self, idx: usize) -> Result<V> where V: Value<'a> {
-        try!(self.check_column_for_read::<V>(idx));
+    pub fn set_null(&mut self, idx: usize) -> Result<&mut Row<'data>> {
+        self.check_column_for_nullability(idx)?;
+        self.set_columns.insert(idx);
+        self.null_columns.insert(idx);
+        self.indirect_data.remove(idx);
+        Ok(self)
+    }
+
+    pub fn set_null_unchecked(&mut self, idx: usize) -> &mut Row<'data> {
+        debug_assert!(self.check_column_for_nullability(idx).is_ok());
+
+    }
+
+    pub fn set_null_by_name(&mut self, column: &str) -> Result<&mut Row<'data>> {
+        if let Some(idx) = self.schema.column_index(column) {
+            self.set_null(idx)
+        } else {
+            Err(Error::InvalidArgument(format!("unknown column '{}'", column)))
+        }
+    }
+
+    pub fn get<'self_, V>(&'self_ self, idx: usize) -> Result<V> where V: Value<'self_> {
+        self.check_column_for_read::<V>(idx)?;
         if !self.set_columns.get(idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
                                                self.schema.columns()[idx].name(), idx)))
@@ -120,7 +175,7 @@ impl Row {
         }
     }
 
-    pub fn get_by_name<'a, V>(&'a self, column: &str) -> Result<Option<V>> where V: Value<'a> {
+    pub fn get_by_name<'self_, V>(&'self_ self, column: &str) -> Result<Option<V>> where V: Value<'self_> {
         if let Some(idx) = self.schema.column_index(column) {
             self.get(idx)
         } else {
@@ -166,8 +221,31 @@ impl Row {
         &self.schema
     }
 
+    fn to_owned(&mut self) {
+        if let Data::Borrowed(data) = *self {
+            let row_len = self.schema.row_size();
+            let bitset_len = BitSetT::byte_len(self.schema.num_columns());
+            let data_len = row_len
+                        + if self.schema.has_nullable_columns() { bitset_len } else { 0 }
+                        + bitset_len;
+
+            let data = Vec::with_capacity(data_len);
+            // TODO: this leaves some trailing bits set, is that a problem?
+            data.resize(bitset_len, 0xFF);
+            if self.schema.has_nullable_columns() {
+                data.extend_from_slice(&data[row_len..]);
+            }
+            data.extend_from_slice(&data[..row_len]);
+            *self = Data::Owned(data.into_boxed_slice());
+        }
+    }
+
+    pub fn into_owned(&self) -> Row<'static> {
+        unimplemented!()
+    }
+
     /// Checks that the column with the specified index has the expected type.
-    fn check_column_for_write<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
+    fn check_column_for_write<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
         if idx >= self.schema.columns().len() {
             return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                       idx, self.schema)));
@@ -198,7 +276,7 @@ impl Row {
     }
 
     /// Checks that the column with the specified index has the expected type.
-    fn check_column_for_read<'a, V>(&self, idx: usize) -> Result<()> where V: Value<'a> {
+    fn check_column_for_read<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
         if idx >= self.schema.columns().len() {
             return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                       idx, self.schema)));
@@ -241,27 +319,50 @@ impl Row {
     }
 }
 
-impl fmt::Debug for Row {
+impl <'data> Clone for Row<'data> {
+    fn clone(&self) -> Row<'data> {
+        let schema = self.schema.clone();
+        // Copy the direct data.
+        let data = match self.data {
+            Data::Owned(data) => Data::Owned(data.clone()),
+            Data::Borrowed(data) => Data::Owned(Data::clone_borrowed_data(&schema, data)),
+        };
+
+        let mut row = Row {
+            data,
+            owned_data: VecMap::with_capacity(self.owned_data.capacity()),
+            schema,
+        };
+
+        // Copy the indirect data, and fixup the data pointers to match.
+        for (&idx, data) in &self.owned_data {
+            self.set_unchecked(idx, data.clone());
+        }
+        row
+    }
+}
+
+impl <'data> fmt::Debug for Row<'data> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
         for (idx, column) in self.schema.columns().iter().enumerate() {
             if !self.set_columns.get(idx) { continue; }
 
             if is_first { is_first = false; }
-            else { try!(write!(f, ", ")) }
+            else { write!(f, ", ")? }
 
-            try!(write!(f, "{:?} {:?}=", column.data_type(), column.name()));
+            write!(f, "{:?} {:?}=", column.data_type(), column.name())?;
             if self.is_null(idx).unwrap() {
-                try!(write!(f, "NULL"))
+                write!(f, "NULL")?
             } else {
-                try!(util::fmt_cell(f, self, idx));
+                util::fmt_cell(f, self, idx)?;
             }
         }
         Ok(())
     }
 }
 
-impl cmp::PartialEq for Row {
+impl <'data> cmp::PartialEq for Row<'data> {
     fn eq(&self, other: &Row) -> bool {
         self.schema == other.schema &&
             self.set_columns == other.set_columns &&
@@ -271,11 +372,11 @@ impl cmp::PartialEq for Row {
     }
 }
 
-impl cmp::Eq for Row {}
+impl <'data> cmp::Eq for Row<'data>  {}
 
 /// `Row`s can be compared based on primary key column values. If the schemas do not match or if
 /// some of the primary key columns are not set, the ordering is not defined.
-impl cmp::PartialOrd for Row {
+impl <'data> cmp::PartialOrd for Row<'data> {
     fn partial_cmp(&self, other: &Row) -> Option<cmp::Ordering> {
         if self.schema != other.schema { return None; }
 
@@ -343,7 +444,7 @@ impl OperationEncoder {
     }
 
     pub fn encode_row(&mut self, op_type: OperationType, row: &Row) {
-        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema } = *row;
+        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *row;
 
         self.data.push(op_type as u8);
         self.data.extend_from_slice(set_columns.data());

@@ -39,9 +39,18 @@ pub enum OperationKind {
     Delete,
 }
 
-struct Operation {
-    row: Row,
+struct Operation<'data> {
+    row: Row<'data>,
     kind: OperationKind,
+}
+
+impl <'data> Operation<'data> {
+    fn into_owned(self) -> Operation<'static> {
+        Operation {
+            row: self.row.into_owned(),
+            kind: self.kind,
+        }
+    }
 }
 
 impl OperationKind {
@@ -264,7 +273,7 @@ struct BatchStats {
 }
 
 struct OperationsInLookup {
-    rows: VecDeque<Operation>,
+    rows: VecDeque<Operation<'static>>,
     futures: FuturesOrdered<Box<Future<Item=Option<TabletId>, Error=Error>>>,
 }
 
@@ -280,11 +289,11 @@ impl OperationsInLookup {
     pub fn push(&mut self,
                 op: Operation,
                 future: Box<Future<Item=Option<TabletId>, Error=Error>>) {
-        self.rows.push_back(op);
+        self.rows.push_back(op.into_owned());
         self.futures.push(future);
     }
 
-    pub fn poll(&mut self) -> Option<(Operation, Result<Option<TabletId>, Error>)> {
+    pub fn poll(&mut self) -> Option<(Operation<'static>, Result<Option<TabletId>, Error>)> {
         match self.futures.poll() {
             Ok(Async::Ready(None)) | Ok(Async::NotReady) => None,
             Ok(Async::Ready(Some(tablet_id))) => Some((self.rows.pop_front().unwrap(), Ok(tablet_id))),

@@ -119,7 +119,7 @@ fn encode_binary(value: &[u8], is_last: bool, buf: &mut Vec<u8>) {
     }
 }
 
-pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row> {
+pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row<'static>> {
     let mut row = schema.new_row();
 
     let num_primary_key_columns = row.schema().num_primary_key_columns();
@@ -136,7 +136,7 @@ pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row> {
 
 pub fn decode_range_partition_key(schema: &Schema,
                                   range_partition_schema: &RangePartitionSchema,
-                                  mut key: &[u8]) -> Result<Row> {
+                                  mut key: &[u8]) -> Result<Row<'static>> {
     let mut row = schema.new_row();
     if range_partition_schema.columns().is_empty() { return Ok(row) }
     let last_idx = *range_partition_schema.columns().last().unwrap();

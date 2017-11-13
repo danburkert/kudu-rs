@@ -1,3 +1,26 @@
+trait BitSetT {
+    fn get_bit(&self, idx: usize);
+    fn set_bit(&mut self, idx: usize);
+    fn clear_bit(&mut self, idx: usize);
+    fn byte_len(num_bits: usize) {
+        (num_bits + 7) / 8
+    }
+}
+
+impl BitSetT for T where T: AsMut<[u8]> {
+    fn get_bit(&self, idx: usize) -> bool {
+        self.as_mut()[idx >> 3] & (1 << (idx & 7)) > 0
+    }
+
+    fn set_bit(&mut self, idx: usize) {
+        self.as_mut()[idx >> 3] |= 1 << (idx & 7)
+    }
+
+    fn clear_bit(&mut self, idx: usize) {
+        self.as_mut()[idx >> 3] &= !(1 << (idx & 7))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BitSet {
     data: Box<[u8]>,

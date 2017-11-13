@@ -173,8 +173,8 @@ pub struct Partition {
     lower_bound_key: Vec<u8>,
     upper_bound_key: Vec<u8>,
     hash_partitions: Vec<u32>,
-    range_lower_bound: Row,
-    range_upper_bound: Row,
+    range_lower_bound: Row<'static>,
+    range_upper_bound: Row<'static>,
 }
 
 impl fmt::Debug for Partition {
