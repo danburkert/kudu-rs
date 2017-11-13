@@ -1,7 +1,7 @@
 use std::str;
 use std::time::SystemTime;
 
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{ByteOrder, LittleEndian, NativeEndian};
 
 use DataType;
 use Result;
@@ -30,9 +30,12 @@ pub trait Value<'data>: Sized {
     #[doc(hidden)]
     fn indirect_data(self) -> Vec<u8> { unreachable!() }
     #[doc(hidden)]
+    // TODO: make unsafe
     fn from_data(data: &'data [u8]) -> Result<Self>;
     #[doc(hidden)]
-    fn from_null() -> Self { unreachable!() }
+    fn owned_data(self) -> Option<Vec<u8>> { None }
+    #[doc(hidden)]
+    fn null() -> Option<Self> { None }
 }
 
 impl <'data> Value<'data> for bool {
@@ -115,7 +118,13 @@ impl <'data> Value<'data> for &'data [u8] {
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
     fn indirect_data(self) -> Vec<u8> { self.to_owned() }
-    fn from_data(data: &'data [u8]) -> Result<&[u8]> { Ok(data) }
+    fn from_data(data: &[u8]) -> Result<&[u8]> {
+        let len = NativeEndian::read_u64(data[8..16]) as usize;
+        let ptr = NativeEndian::read_u64(data[0..8]) as *const u8;
+        unsafe {
+            Ok(slice::from_raw_parts(ptr, len))
+        }
+    }
 }
 
 impl <'data> Value<'data> for Vec<u8> {
@@ -126,7 +135,9 @@ impl <'data> Value<'data> for Vec<u8> {
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
     fn indirect_data(self) -> Vec<u8> { self }
-    fn from_data(data: &[u8]) -> Result<Vec<u8>> { Ok(data.to_owned()) }
+    fn from_data(data: &[u8]) -> Result<Vec<u8>> {
+        Ok(data.to_owned())
+    }
 }
 
 impl <'data> Value<'data> for &'data str {
@@ -137,7 +148,9 @@ impl <'data> Value<'data> for &'data str {
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
     fn indirect_data(self) -> Vec<u8> { self.as_bytes().to_owned() }
-    fn from_data(data: &[u8]) -> Result<&str> { str::from_utf8(data).map_err(From::from) }
+    fn from_data(data: &[u8]) -> Result<&str> {
+        str::from_utf8(data).map_err(From::from)
+    }
 }
 
 impl <'data> Value<'data> for String {
@@ -148,7 +161,9 @@ impl <'data> Value<'data> for String {
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
     fn indirect_data(self) -> Vec<u8> { self.into_bytes() }
-    fn from_data(data: &[u8]) -> Result<String> { str::from_utf8(data).map(str::to_owned).map_err(From::from) }
+    fn from_data(data: &[u8]) -> Result<String> {
+        str::from_utf8(data).map(str::to_owned).map_err(From::from)
+    }
 }
 
 impl <'data, V> Value<'data> for Option<V> where V: Value<'data> {
@@ -161,7 +176,7 @@ impl <'data, V> Value<'data> for Option<V> where V: Value<'data> {
     fn is_null(&self) -> bool { self.is_none() }
     fn indirect_data(self) -> Vec<u8> { self.unwrap().indirect_data() }
     fn from_data(data: &'data [u8]) -> Result<Option<V>> { V::from_data(data).map(Some) }
-    fn from_null() -> Option<V> { None }
+    fn null() -> Option<Self> { Some(None) }
 }
 
 #[cfg(test)]

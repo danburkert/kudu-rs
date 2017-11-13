@@ -1,7 +1,8 @@
+use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
+use std::marker::PhantomData;
 use std::time::SystemTime;
-use std::borrow::Cow;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -20,59 +21,11 @@ use Schema;
 use Value;
 use util;
 
-/// Holds either owned or borrowed row data.
-///
-/// Similar to `std::borrow::Cow::<[u8]>`, but the borrowed variant holds a mutable reference, and
-/// the owned variant holds a boxed slice instead of a vec.
-enum Data<'data> {
-
-    /// Borrowed row data.
-    ///
-    /// The data is laid out contiguously as follows:
-    ///   - column-data
-    ///   - is-null bitmap, if any columns are nullable
-    Borrowed(&'data mut [u8]),
-
-    /// Owned row data.
-    ///
-    /// The data is laid out contiguously as follows:
-    ///   - is-set bitmap
-    ///   - is-null bitmap, if any columns are nullable
-    ///   - column-data
-    Owned(Box<[u8]>),
-}
-
-impl <'data> Data<'data> {
-
-    fn clone_borrowed_data(schema: &Schema, borrowed_data: &[u8]) -> Box<[u8]> {
-        let row_len = schema.row_size();
-        let bitset_len = BitSetT::byte_len(schema.num_columns());
-        let data_len = row_len
-                     + if schema.has_nullable_columns() { bitset_len } else { 0 }
-                     + bitset_len;
-        debug_assert_eq!(borrowed_data.len(), data_len - bitset_len);
-
-        let data = Vec::with_capacity(data_len);
-        // TODO: this leaves some trailing bits set, is that a problem?
-        data.resize(bitset_len, 0xFF);
-        if schema.has_nullable_columns() {
-            data.extend_from_slice(&borrowed_data[row_len..]);
-        }
-        data.extend_from_slice(&borrowed_data[..row_len]);
-        data.into_boxed_slice()
-    }
-
-    fn into_owned(&mut self, schema: &Schema) {
-        if let Data::Borrowed(data) = *self {
-            *self = Data::Owned(schema, data)
-        }
-    }
-}
-
 pub struct Row<'data> {
-    data: Data<'data>,
+    data: Box<[u8]>,
     owned_data: VecMap<Vec<u8>>,
     schema: Schema,
+    _marker: PhantomData<&'data [u8]>,
 }
 
 // TODO: unset/unset_by_name.
@@ -93,6 +46,7 @@ impl <'data> Row<'data> {
             data,
             indirect_data: VecMap::new(),
             schema,
+            _marker: Default::default(),
         }
     }
 
@@ -159,12 +113,12 @@ impl <'data> Row<'data> {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
                                                self.schema.columns()[idx].name(), idx)))
         } else if self.schema.has_nullable_columns() && self.null_columns.get(idx) {
-            if V::is_nullable() {
-                Ok(V::from_null())
-            }
-            else {
+            if let Some(null) = V::null() {
+                Ok(null)
+            } else {
                 Err(Error::InvalidArgument(format!("column '{}' ({}) is null",
                                                    self.schema.columns()[idx].name(), idx)))
+
             }
         } else if V::is_var_len() {
             V::from_data(&self.indirect_data[idx])
