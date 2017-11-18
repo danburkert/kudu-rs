@@ -12,6 +12,7 @@ use EncodingType;
 use Error;
 use Result;
 use Row;
+use bitmap;
 
 /// `Column` instances hold metadata information about columns in a Kudu table.
 ///
@@ -166,11 +167,14 @@ impl fmt::Debug for Column {
 
 #[derive(Clone, Debug)]
 struct Inner {
+    // TODO: switch columns and column_offsets to be a Box<[]>.
     columns: Vec<Column>,
     columns_by_name: HashMap<String, usize>,
     column_offsets: Vec<usize>,
     num_primary_key_columns: usize,
-    row_size: usize,
+
+    /// Length of the encoded columns.
+    row_len: usize,
     has_nullable_columns: bool,
 }
 
@@ -184,23 +188,23 @@ impl Schema {
     fn new(columns: Vec<Column>, num_primary_key_columns: usize) -> Schema {
         let mut columns_by_name = HashMap::with_capacity(columns.len());
         let mut column_offsets = Vec::with_capacity(columns.len());
-        let mut row_size = 0;
+        let mut row_len = 0;
         let mut has_nullable_columns = false;
         for (idx, column) in columns.iter().enumerate() {
             columns_by_name.insert(column.name().to_string(), idx);
-            column_offsets.push(row_size);
-            row_size += column.data_type.size();
+            column_offsets.push(row_len);
+            row_len += column.data_type.size();
             has_nullable_columns |= column.is_nullable();
         }
 
         Schema {
             inner: Arc::new(Inner {
-                columns: columns,
-                columns_by_name: columns_by_name,
-                column_offsets: column_offsets,
-                num_primary_key_columns: num_primary_key_columns,
-                row_size: row_size,
-                has_nullable_columns: has_nullable_columns,
+                columns,
+                columns_by_name,
+                column_offsets,
+                num_primary_key_columns,
+                row_len,
+                has_nullable_columns,
             })
         }
     }
@@ -233,10 +237,17 @@ impl Schema {
         Schema::new(self.primary_key().to_owned(), self.num_primary_key_columns())
     }
 
-    pub fn row_size(&self) -> usize {
-        self.inner.row_size
+    #[inline]
+    pub fn bitmap_len(&self) -> usize {
+        bitmap::len(self.inner.columns.len())
     }
 
+    #[inline]
+    pub fn row_len(&self) -> usize {
+        self.inner.row_len
+    }
+
+    #[inline]
     pub fn has_nullable_columns(&self) -> bool {
         self.inner.has_nullable_columns
     }

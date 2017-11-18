@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 use std::marker::PhantomData;
@@ -6,7 +5,7 @@ use std::time::SystemTime;
 
 use byteorder::{ByteOrder, LittleEndian};
 
-use bit_set::BitSet;
+use bitmap;
 use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
@@ -22,6 +21,12 @@ use Value;
 use util;
 
 pub struct Row<'data> {
+    /// The row data.
+    ///
+    /// Laid out as follows:
+    ///     - is-set bitmap
+    ///     - is-null bitmap
+    ///     - column values
     data: Box<[u8]>,
     owned_data: VecMap<Vec<u8>>,
     schema: Schema,
@@ -33,18 +38,16 @@ impl <'data> Row<'data> {
 
     /// Creates a new owned row.
     pub(crate) fn new(schema: Schema) -> Row<'data> {
-        let row_len = schema.row_size();
-        let bitset_len = BitSetT::byte_len(schema.num_columns());
+        let row_len = schema.row_len();
+        let bitmap_len = schema.bitmap_len();
         let data_len = row_len
-                     + if schema.has_nullable_columns() { bitset_len } else { 0 }
-                     + bitset_len;
+                     + if schema.has_nullable_columns() { bitmap_len } else { 0 }
+                     + bitmap_len;
 
-        let num_columns = schema.columns().len();
-
-        let data = Data::Owned(vec![0; data_len].into_boxed_slice());
+        let data = vec![0; data_len].into_boxed_slice();
         Row {
             data,
-            indirect_data: VecMap::new(),
+            owned_data: VecMap::new(),
             schema,
             _marker: Default::default(),
         }
@@ -70,17 +73,24 @@ impl <'data> Row<'data> {
                                        value: V)
                                        -> &mut Self where V: Value<'data> {
         debug_assert!(self.check_column_for_write::<V>(idx).is_ok());
-        self.set_columns.insert(idx);
+        bitmap::set(&mut *self.data, idx);
+
+        let bitmap_len = self.schema.bitmap_len();
         if value.is_null() {
-            self.null_columns.insert(idx);
-            self.indirect_data.remove(idx);
+            bitmap::set(&mut self.data[bitmap_len..], idx);
+            self.owned_data.remove(idx);
         } else {
-            if self.schema.has_nullable_columns() { self.null_columns.remove(idx); }
-            if V::is_var_len() {
-                self.indirect_data.insert(idx, value.indirect_data());
+            let mut row_offset = bitmap_len;
+            if self.schema.has_nullable_columns() {
+                bitmap::clear(&mut self.data[bitmap_len..], idx);
+                row_offset += bitmap_len;
+            }
+
+            value.copy_data(&mut self.data[row_offset..]);
+            if let Some(owned_data) = value.owned_data() {
+                self.owned_data.insert(idx, owned_data);
             } else {
-                let offset = self.schema.column_offsets()[idx];
-                value.copy_data(&mut self.data[offset..offset+V::size()]);
+                self.owned_data.remove(idx);
             }
         }
         self
@@ -88,15 +98,11 @@ impl <'data> Row<'data> {
 
     pub fn set_null(&mut self, idx: usize) -> Result<&mut Row<'data>> {
         self.check_column_for_nullability(idx)?;
-        self.set_columns.insert(idx);
-        self.null_columns.insert(idx);
-        self.indirect_data.remove(idx);
+        let bitmap_len = self.schema.bitmap_len();
+        bitmap::set(&mut self.data[bitmap_len..], idx);
+        bitmap::set(&mut *self.data, idx);
+        self.owned_data.remove(idx);
         Ok(self)
-    }
-
-    pub fn set_null_unchecked(&mut self, idx: usize) -> &mut Row<'data> {
-        debug_assert!(self.check_column_for_nullability(idx).is_ok());
-
     }
 
     pub fn set_null_by_name(&mut self, column: &str) -> Result<&mut Row<'data>> {
@@ -109,23 +115,31 @@ impl <'data> Row<'data> {
 
     pub fn get<'self_, V>(&'self_ self, idx: usize) -> Result<V> where V: Value<'self_> {
         self.check_column_for_read::<V>(idx)?;
-        if !self.set_columns.get(idx) {
+        let bitmap_len = self.schema.bitmap_len();
+
+        // Split the data slice into the is_set bitmap, the is_null bitmap, and the row.
+        let (is_set, data) = self.data.split_at(bitmap_len);
+        let (is_null, row) = if self.schema.has_nullable_columns() {
+            data.split_at(bitmap_len)
+        } else {
+            let empty: &'static [u8] = &[];
+            (empty, data)
+        };
+
+        if bitmap::get(is_set, idx) {
             Err(Error::InvalidArgument(format!("column '{}' ({}) is not set",
                                                self.schema.columns()[idx].name(), idx)))
-        } else if self.schema.has_nullable_columns() && self.null_columns.get(idx) {
+        } else if self.schema.has_nullable_columns() && bitmap::get(is_null, idx) {
             if let Some(null) = V::null() {
                 Ok(null)
             } else {
                 Err(Error::InvalidArgument(format!("column '{}' ({}) is null",
                                                    self.schema.columns()[idx].name(), idx)))
-
             }
-        } else if V::is_var_len() {
-            V::from_data(&self.indirect_data[idx])
         } else {
             let offset = self.schema.column_offsets()[idx];
             let len = V::size();
-            V::from_data(&self.data[offset..offset+len])
+            unsafe { Ok(V::from_data(&row[offset..offset+len])) }
         }
     }
 
@@ -142,7 +156,9 @@ impl <'data> Row<'data> {
             Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                idx, self.schema)))
         } else {
-            Ok(self.schema.has_nullable_columns() && self.null_columns.get(idx))
+            let bitmap_len = self.schema.bitmap_len();
+            Ok(self.schema.has_nullable_columns() &&
+               bitmap::get(&self.data[bitmap_len..], idx))
         }
     }
 
@@ -159,7 +175,7 @@ impl <'data> Row<'data> {
             Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
                                                idx, self.schema)))
         } else {
-            Ok(self.set_columns.get(idx))
+            Ok(bitmap::get(&*self.data, idx))
         }
     }
 
@@ -175,27 +191,35 @@ impl <'data> Row<'data> {
         &self.schema
     }
 
-    fn to_owned(&mut self) {
-        if let Data::Borrowed(data) = *self {
-            let row_len = self.schema.row_size();
-            let bitset_len = BitSetT::byte_len(self.schema.num_columns());
-            let data_len = row_len
-                        + if self.schema.has_nullable_columns() { bitset_len } else { 0 }
-                        + bitset_len;
+    pub fn into_owned(mut self) -> Row<'static> {
+        // Find all borrowed var len columns, and copy them into owned_data.
+        { // NLL hack
+            let bitmap_len = self.schema.bitmap_len();
+            let (bitmaps, row_data) = self.data.split_at_mut(
+                if self.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
 
-            let data = Vec::with_capacity(data_len);
-            // TODO: this leaves some trailing bits set, is that a problem?
-            data.resize(bitset_len, 0xFF);
-            if self.schema.has_nullable_columns() {
-                data.extend_from_slice(&data[row_len..]);
+            for (idx, column) in self.schema.columns().iter().enumerate() {
+                let data_type = column.data_type();
+                if !data_type.is_var_len() ||
+                !bitmap::get(bitmaps, idx) ||
+                (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) ||
+                self.owned_data.contains_key(idx) {
+                    continue;
+                }
+                let column_offset = self.schema.column_offsets()[idx];
+                let data = unsafe { Vec::<u8>::from_data(&row_data[column_offset..]) };
+                data.copy_data(&mut row_data[column_offset..]);
+                self.owned_data.insert(idx, data);
             }
-            data.extend_from_slice(&data[..row_len]);
-            *self = Data::Owned(data.into_boxed_slice());
         }
-    }
 
-    pub fn into_owned(&self) -> Row<'static> {
-        unimplemented!()
+        // Copy the fields to a new row with a static lifetime.
+        Row {
+            data: self.data,
+            owned_data: self.owned_data,
+            schema: self.schema,
+            _marker: PhantomData::default(),
+        }
     }
 
     /// Checks that the column with the specified index has the expected type.
@@ -249,7 +273,7 @@ impl <'data> Row<'data> {
     }
 
     #[cfg(any(feature="quickcheck", test))]
-    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row where G: quickcheck::Gen {
+    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static> where G: quickcheck::Gen {
         use quickcheck::Arbitrary;
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {
@@ -275,23 +299,21 @@ impl <'data> Row<'data> {
 
 impl <'data> Clone for Row<'data> {
     fn clone(&self) -> Row<'data> {
-        let schema = self.schema.clone();
-        // Copy the direct data.
-        let data = match self.data {
-            Data::Owned(data) => Data::Owned(data.clone()),
-            Data::Borrowed(data) => Data::Owned(Data::clone_borrowed_data(&schema, data)),
-        };
-
+        // Copy the inline and borrowed data.
         let mut row = Row {
-            data,
-            owned_data: VecMap::with_capacity(self.owned_data.capacity()),
-            schema,
+            data: self.data.clone(),
+            owned_data: VecMap::with_capacity(self.owned_data.len()),
+            schema: self.schema.clone(),
+            _marker: PhantomData::default(),
         };
 
-        // Copy the indirect data, and fixup the data pointers to match.
-        for (&idx, data) in &self.owned_data {
-            self.set_unchecked(idx, data.clone());
+        // Copy the owned data.
+        for (idx, data) in &self.owned_data {
+            unsafe {
+                row.set_unchecked(idx, data.to_owned());
+            }
         }
+
         row
     }
 }
@@ -300,7 +322,7 @@ impl <'data> fmt::Debug for Row<'data> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
         for (idx, column) in self.schema.columns().iter().enumerate() {
-            if !self.set_columns.get(idx) { continue; }
+            if !bitmap::get(&*self.data, idx) { continue; }
 
             if is_first { is_first = false; }
             else { write!(f, ", ")? }
@@ -318,11 +340,14 @@ impl <'data> fmt::Debug for Row<'data> {
 
 impl <'data> cmp::PartialEq for Row<'data> {
     fn eq(&self, other: &Row) -> bool {
+        unimplemented!()
+        /*
         self.schema == other.schema &&
             self.set_columns == other.set_columns &&
             self.null_columns == other.null_columns &&
             self.data == other.data &&
             self.indirect_data == other.indirect_data
+            */
     }
 }
 
@@ -332,6 +357,8 @@ impl <'data> cmp::Eq for Row<'data>  {}
 /// some of the primary key columns are not set, the ordering is not defined.
 impl <'data> cmp::PartialOrd for Row<'data> {
     fn partial_cmp(&self, other: &Row) -> Option<cmp::Ordering> {
+        unimplemented!()
+        /*
         if self.schema != other.schema { return None; }
 
         for (idx, column) in self.schema.primary_key().iter().enumerate() {
@@ -350,6 +377,7 @@ impl <'data> cmp::PartialOrd for Row<'data> {
             } else { return None; }
         }
         Some(cmp::Ordering::Equal)
+        */
     }
 }
 
@@ -398,50 +426,54 @@ impl OperationEncoder {
     }
 
     pub fn encode_row(&mut self, op_type: OperationType, row: &Row) {
-        let Row { ref data, ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *row;
-
+        self.data.reserve(1 + row.data.len());
         self.data.push(op_type as u8);
-        self.data.extend_from_slice(set_columns.data());
-        self.data.extend_from_slice(null_columns.data());
-
+        let bitmap_len = row.schema.bitmap_len();
+        let (bitmaps, row_data) = row.data.split_at(
+            if row.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
+        self.data.extend_from_slice(bitmaps);
         let mut offset = self.data.len();
-        // TODO: use reserve, and get rid of truncate
-        self.data.resize(offset + schema.row_size(), 0);
-        for (idx, column) in schema.columns().iter().enumerate() {
-            if !set_columns.get(idx) { continue; }
-            if column.is_nullable() && null_columns.get(idx) { continue; }
+        for (idx, column) in row.schema.columns().iter().enumerate() {
+            if !bitmap::get(bitmaps, idx) ||
+               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
 
             let data_type = column.data_type();
-            let size = data_type.size();
+            let column_offset = row.schema.column_offsets()[idx];
+            let width = data_type.size();
             if data_type.is_var_len() {
-                let data = &indirect_data[idx];
+                let data: &[u8] = unsafe { Value::from_data(&row_data[column_offset..]) };
                 LittleEndian::write_u64(&mut self.data[offset..], self.indirect_data.len() as u64);
                 LittleEndian::write_u64(&mut self.data[offset+8..], data.len() as u64);
                 self.indirect_data.extend_from_slice(data);
             } else {
-                let column_offset = schema.column_offsets()[idx];
-                self.data[offset..offset+size].copy_from_slice(&data[column_offset..column_offset+size]);
+                self.data.extend_from_slice(&row_data[column_offset..column_offset + width]);
             }
-            offset += size;
+            offset += width;
         }
-        self.data.truncate(offset);
     }
 
     /// Returns the direct and indirect encoded length for the row.
-    pub fn encoded_len(row: &Row) -> (usize, usize) {
-        let Row { ref indirect_data, ref set_columns, ref null_columns, ref schema, .. } = *row;
+    pub fn encoded_len(row: &Row) -> usize {
+        let mut len = 1; // op type
 
-        let mut direct = 1; // op type
+        let bitmap_len = row.schema.bitmap_len();
+        len += bitmap_len;
 
-        direct += set_columns.data().len();
-        direct += null_columns.data().len();
+        let (bitmaps, row_data) = row.data.split_at(
+            if row.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
 
-        for (idx, column) in schema.columns().iter().enumerate() {
-            if !set_columns.get(idx) { continue; }
-            if column.is_nullable() && null_columns.get(idx) { continue; }
-            direct += column.data_type().size();
+        for (idx, column) in row.schema.columns().iter().enumerate() {
+            if !bitmap::get(bitmaps, idx) ||
+               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
+
+            len += column.data_type().size();
+            if column.data_type().is_var_len() {
+                let offset = row.schema.column_offsets()[idx];
+                let slice: &[u8] = unsafe { Value::from_data(&row_data[offset..]) };
+                len += slice.len()
+            }
         }
-        (direct, indirect_data.values().map(|data| data.len()).sum())
+        len
     }
 
     pub fn len(&self) -> usize {

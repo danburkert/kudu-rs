@@ -153,8 +153,7 @@ impl Writer {
             },
         };
 
-        let (direct_len, indirect_len) = OperationEncoder::encoded_len(&op.row);
-        let encoded_len = direct_len + indirect_len;
+        let encoded_len = OperationEncoder::encoded_len(&op.row);
 
         // Sanity check: if the operation is bigger than the max batch data size,
         // then we must reject it.
@@ -179,8 +178,7 @@ impl Writer {
     }
 
     fn buffer_operation(&mut self, tablet_id: TabletId, op: Operation) {
-        let (direct_len, indirect_len) = OperationEncoder::encoded_len(&op.row);
-        let encoded_len = direct_len + indirect_len;
+        let encoded_len = OperationEncoder::encoded_len(&op.row);
 
         // Sanity check: if the operation is bigger than the max batch data size,
         // then we must reject it.

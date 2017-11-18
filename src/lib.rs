@@ -33,7 +33,7 @@ extern crate tokio_core as tokio;
 pub mod pb;
 
 mod backoff;
-mod bit_set;
+mod bitmap;
 mod client;
 mod error;
 mod key;

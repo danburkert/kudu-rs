@@ -1,15 +1,15 @@
-trait BitSetT {
-    fn get_bit(&self, idx: usize);
+pub trait BitSet {
+    fn get_bit(&self, idx: usize) -> bool;
     fn set_bit(&mut self, idx: usize);
     fn clear_bit(&mut self, idx: usize);
-    fn byte_len(num_bits: usize) {
+    fn byte_len(num_bits: usize) -> usize {
         (num_bits + 7) / 8
     }
 }
 
-impl BitSetT for T where T: AsMut<[u8]> {
+impl <T> BitSet for T where T: AsRef<[u8]> + AsMut<[u8]> {
     fn get_bit(&self, idx: usize) -> bool {
-        self.as_mut()[idx >> 3] & (1 << (idx & 7)) > 0
+        self.as_ref()[idx >> 3] & (1 << (idx & 7)) > 0
     }
 
     fn set_bit(&mut self, idx: usize) {
@@ -21,42 +21,13 @@ impl BitSetT for T where T: AsMut<[u8]> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BitSet {
-    data: Box<[u8]>,
-}
-
-impl BitSet {
-    pub fn with_capacity(num_bits: usize) -> BitSet {
-        BitSet {
-            data: vec![0; (num_bits + 7) / 8].into_boxed_slice()
-        }
-    }
-
-    pub fn get(&self, idx: usize) -> bool {
-        self.data[idx >> 3] & (1 << (idx & 7)) > 0
-    }
-
-    pub fn insert(&mut self, idx: usize) {
-        self.data[idx >> 3] |= 1 << (idx & 7)
-    }
-
-    pub fn remove(&mut self, idx: usize) {
-        self.data[idx >> 3] &= !(1 << (idx & 7))
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &*self.data
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_bitset() {
-        let bitset = BitSet::with_capacity(16);
-        assert_eq!(bitset.get(0), false);
+        let bitset = vec![0; BitSet::byte_len(16)];
+        assert_eq!(bitset.get_bit(0), false);
     }
 }
