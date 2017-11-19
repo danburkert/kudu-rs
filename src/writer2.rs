@@ -18,7 +18,6 @@ use futures::stream::{
 use Client;
 use Error;
 use PartitionSchema;
-use Row;
 use Schema;
 use Table;
 use TabletId;
@@ -28,42 +27,9 @@ use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
 };
-use pb::row_operations_pb::{Type as OperationTypePb};
-use row::OperationEncoder;
+use OperationEncoder;
+use Operation;
 use tserver;
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum OperationKind {
-    Insert,
-    Update,
-    Upsert,
-    Delete,
-}
-
-struct Operation<'data> {
-    row: Row<'data>,
-    kind: OperationKind,
-}
-
-impl <'data> Operation<'data> {
-    fn into_owned(self) -> Operation<'static> {
-        Operation {
-            row: self.row.into_owned(),
-            kind: self.kind,
-        }
-    }
-}
-
-impl OperationKind {
-    fn as_pb(self) -> OperationTypePb {
-        match self {
-            OperationKind::Insert => OperationTypePb::Insert,
-            OperationKind::Update => OperationTypePb::Update,
-            OperationKind::Upsert => OperationTypePb::Upsert,
-            OperationKind::Delete => OperationTypePb::Delete,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
@@ -182,7 +148,7 @@ impl Writer {
     }
 
     fn buffer_operation(&mut self, tablet_id: TabletId, op: Operation) {
-        let batch_to_send: Option<OperationEncoder> = None;
+        let mut batch_to_send: Option<OperationEncoder> = None;
 
         let encoded_len = OperationEncoder::encoded_len(&op.row);
 
@@ -201,7 +167,7 @@ impl Writer {
                     unimplemented!("max # of in-flight batches for tablet reached");
                 } else {
                     batcher.batches_in_flight += 1;
-                    let batch_to_send = Some(mem::replace(&mut batcher.buffer, OperationEncoder::new()));
+                    batch_to_send = Some(mem::replace(&mut batcher.buffer, OperationEncoder::new()));
                 }
             }
             batcher.buffer.encode_row(op.kind.as_pb(), &op.row);

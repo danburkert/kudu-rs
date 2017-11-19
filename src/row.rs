@@ -1,20 +1,12 @@
 use std::cmp;
 use std::fmt;
 use std::marker::PhantomData;
-use std::time::SystemTime;
-
-use byteorder::{ByteOrder, LittleEndian};
 
 use bitmap;
 use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
-use pb::RowOperationsPb;
-use pb::row_operations_pb::{Type as OperationType};
-
-use DataType;
 use Error;
-use RangePartitionBound;
 use Result;
 use Schema;
 use Value;
@@ -27,9 +19,9 @@ pub struct Row<'data> {
     ///     - is-set bitmap
     ///     - is-null bitmap
     ///     - column values
-    data: Box<[u8]>,
-    owned_data: VecMap<Vec<u8>>,
-    schema: Schema,
+    pub(crate) data: Box<[u8]>,
+    pub(crate) owned_data: VecMap<Vec<u8>>,
+    pub(crate) schema: Schema,
     _marker: PhantomData<&'data [u8]>,
 }
 
@@ -378,128 +370,6 @@ impl <'data> cmp::PartialOrd for Row<'data> {
         }
         Some(cmp::Ordering::Equal)
         */
-    }
-}
-
-// TODO: move below to own file
-
-pub(crate) struct OperationEncoder {
-    data: Vec<u8>,
-    indirect_data: Vec<u8>,
-}
-
-impl OperationEncoder {
-    pub fn new() -> OperationEncoder {
-        OperationEncoder {
-            data: Vec::new(),
-            indirect_data: Vec::new(),
-        }
-    }
-
-    pub fn with_capacity(data: usize, indirect_data: usize) -> OperationEncoder {
-        OperationEncoder {
-            data: Vec::with_capacity(data),
-            indirect_data: Vec::with_capacity(indirect_data),
-        }
-    }
-
-    pub fn encode_range_split(&mut self, row: &Row) {
-        self.encode_row(OperationType::SplitRow, row);
-    }
-
-    pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
-        let (lower_bound, lower_bound_type) = match *lower {
-            RangePartitionBound::Inclusive(ref row) => (row, OperationType::RangeLowerBound),
-            RangePartitionBound::Exclusive(ref row) => (row, OperationType::ExclusiveRangeLowerBound),
-        };
-        let (upper_bound, upper_bound_type) = match *upper {
-            RangePartitionBound::Inclusive(ref row) => (row, OperationType::InclusiveRangeUpperBound),
-            RangePartitionBound::Exclusive(ref row) => (row, OperationType::RangeUpperBound),
-        };
-
-        self.encode_row(lower_bound_type, lower_bound);
-        self.encode_row(upper_bound_type, upper_bound);
-    }
-
-    pub fn encode_range_partition_split(&mut self, split: &Row) {
-        self.encode_row(OperationType::SplitRow, split);
-    }
-
-    pub fn encode_row(&mut self, op_type: OperationType, row: &Row) {
-        self.data.reserve(1 + row.data.len());
-        self.data.push(op_type as u8);
-        let bitmap_len = row.schema.bitmap_len();
-        let (bitmaps, row_data) = row.data.split_at(
-            if row.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
-        self.data.extend_from_slice(bitmaps);
-        let mut offset = self.data.len();
-        for (idx, column) in row.schema.columns().iter().enumerate() {
-            if !bitmap::get(bitmaps, idx) ||
-               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
-
-            let data_type = column.data_type();
-            let column_offset = row.schema.column_offsets()[idx];
-            let width = data_type.size();
-            if data_type.is_var_len() {
-                let data: &[u8] = unsafe { Value::from_data(&row_data[column_offset..]) };
-                LittleEndian::write_u64(&mut self.data[offset..], self.indirect_data.len() as u64);
-                LittleEndian::write_u64(&mut self.data[offset+8..], data.len() as u64);
-                self.indirect_data.extend_from_slice(data);
-            } else {
-                self.data.extend_from_slice(&row_data[column_offset..column_offset + width]);
-            }
-            offset += width;
-        }
-    }
-
-    /// Returns the encoded length for the row.
-    /// TODO: it's pretty wasteful to do this as a separate step than encode_row.
-    pub fn encoded_len(row: &Row) -> usize {
-        let mut len = 1; // op type
-
-        let bitmap_len = row.schema.bitmap_len();
-        len += bitmap_len;
-
-        let (bitmaps, row_data) = row.data.split_at(
-            if row.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
-
-        for (idx, column) in row.schema.columns().iter().enumerate() {
-            if !bitmap::get(bitmaps, idx) ||
-               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
-
-            len += column.data_type().size();
-            if column.data_type().is_var_len() {
-                let offset = row.schema.column_offsets()[idx];
-                let slice: &[u8] = unsafe { Value::from_data(&row_data[offset..]) };
-                len += slice.len()
-            }
-        }
-        len
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len() + self.indirect_data.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.data.clear();
-        self.indirect_data.clear();
-    }
-
-    pub fn unwrap(self) -> (Vec<u8>, Vec<u8>) {
-        let OperationEncoder { data, indirect_data } = self;
-        (data, indirect_data)
-    }
-
-    pub fn into_pb(self) -> RowOperationsPb {
-        RowOperationsPb {
-            rows: Some(self.data),
-            indirect_data: Some(self.indirect_data),
-        }
     }
 }
 

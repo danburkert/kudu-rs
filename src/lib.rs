@@ -32,11 +32,13 @@ extern crate tokio_core as tokio;
 
 pub mod pb;
 
+//mod writer;
 mod backoff;
 mod bitmap;
 mod client;
 mod error;
 mod key;
+mod operation;
 mod partition;
 mod retry;
 mod row;
@@ -47,7 +49,6 @@ mod tablet;
 mod tserver;
 mod util;
 mod value;
-//mod writer;
 mod writer2;
 pub mod master;
 pub mod meta_cache;
@@ -57,12 +58,13 @@ mod mini_cluster;
 
 pub use client::*;
 pub use error::*;
+pub use operation::*;
 pub use partition::*;
 pub use row::Row;
 pub use schema::*;
+pub use server::*;
 pub use table::*;
 pub use tablet::*;
-pub use server::*;
 pub use value::Value;
 //pub use writer::*;
 

@@ -2,10 +2,9 @@ use std::str;
 use std::time::SystemTime;
 use std::slice;
 
-use byteorder::{ByteOrder, LittleEndian, NativeEndian};
+use byteorder::{ByteOrder, LittleEndian};
 
 use DataType;
-use Result;
 use util::{time_to_us, us_to_time};
 
 /// Marker trait for types which can be stored in a Kudu column.
@@ -127,13 +126,13 @@ impl <'data> Value<'data> for &'data [u8] {
     fn size() -> usize { 16 }
     fn is_var_len() -> bool { true }
     fn copy_data(&self, dest: &mut [u8]) {
-        NativeEndian::write_u64(&mut dest[8..16], self.len() as u64);
-        NativeEndian::write_u64(dest, self.as_ptr() as u64);
+        LittleEndian::write_u64(&mut dest[8..16], self.len() as u64);
+        LittleEndian::write_u64(dest, self.as_ptr() as u64);
     }
     fn owned_data(self) -> Option<Vec<u8>> { None }
     unsafe fn from_data(data: &[u8]) -> &[u8] {
-        let len = NativeEndian::read_u64(&data[8..16]) as usize;
-        let ptr = NativeEndian::read_u64(data) as *const u8;
+        let len = LittleEndian::read_u64(&data[8..16]) as usize;
+        let ptr = LittleEndian::read_u64(data) as *const u8;
         slice::from_raw_parts(ptr, len)
     }
 }
