@@ -15,6 +15,7 @@ use futures::stream::{
     FuturesUnordered,
 };
 
+use Client;
 use Error;
 use PartitionSchema;
 use Row;
@@ -153,14 +154,17 @@ impl Writer {
             },
         };
 
-        let encoded_len = OperationEncoder::encoded_len(&op.row);
-
-        // Sanity check: if the operation is bigger than the max batch data size,
-        // then we must reject it.
-        if encoded_len > self.config.max_data_per_batch {
-            self.fail_operation(op, Error::InvalidArgument(
-                    "row operation size is greater than the max batch size".to_owned()));
-            return;
+        let mut tablet_id = self.meta_cache.tablet_id(partition_key);
+        if !self.operations_in_lookup.is_empty() {
+            self.operations_in_lookup.push(op, Box::new(tablet_id));
+            self.poll_operations_in_lookup();
+        } else {
+            match tablet_id.poll() {
+                Ok(Async::Ready(Some(tablet_id))) => self.buffer_operation(tablet_id, op),
+                Ok(Async::Ready(None)) => self.fail_operation(op, Error::NoRangePartition),
+                Ok(Async::NotReady) => self.operations_in_lookup.push(op, Box::new(tablet_id)),
+                Err(error) => self.fail_operation(op, error),
+            }
         }
     }
 
@@ -178,6 +182,8 @@ impl Writer {
     }
 
     fn buffer_operation(&mut self, tablet_id: TabletId, op: Operation) {
+        let batch_to_send: Option<OperationEncoder> = None;
+
         let encoded_len = OperationEncoder::encoded_len(&op.row);
 
         // Sanity check: if the operation is bigger than the max batch data size,
@@ -187,8 +193,6 @@ impl Writer {
                     "row operation size is greater than the max batch size".to_owned()));
             return;
         }
-
-        let batch_to_send: Option<OperationEncoder> = None;
 
         { // NLL hack.
             let batcher = self.batchers.entry(tablet_id).or_insert_with(Batcher::new);
@@ -209,7 +213,13 @@ impl Writer {
     }
 
     fn send_batch(&mut self, tablet_id: TabletId, operations: OperationEncoder) {
+        let mut request = WriteRequestPb::default();
+        request.tablet_id = tablet_id.to_string().into_bytes();
+        request.schema = Some(self.schema().as_pb());
+        request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
+        request.row_operations = Some(operations.into_pb());
 
+        //self.meta_cache.tablet_leader(
     }
 
     pub fn flush(self) -> Flush {
@@ -218,6 +228,10 @@ impl Writer {
 
     fn schema(&self) -> &Schema {
         self.table.schema()
+    }
+
+    fn client(&self) -> &Client {
+        self.table.client()
     }
 
     fn partition_schema(&self) -> &PartitionSchema {

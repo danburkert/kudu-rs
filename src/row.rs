@@ -452,7 +452,8 @@ impl OperationEncoder {
         }
     }
 
-    /// Returns the direct and indirect encoded length for the row.
+    /// Returns the encoded length for the row.
+    /// TODO: it's pretty wasteful to do this as a separate step than encode_row.
     pub fn encoded_len(row: &Row) -> usize {
         let mut len = 1; // op type
 

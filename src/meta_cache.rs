@@ -172,7 +172,7 @@ impl MetaCache {
         self.extract_cached(partition_key, &Entry::clone)
     }
 
-    pub fn tablet_id<F>(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<TabletId>, Error=Error> {
+    pub fn tablet_id(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<TabletId>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 Some(tablet.id())
