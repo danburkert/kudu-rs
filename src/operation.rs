@@ -166,14 +166,17 @@ pub(crate) struct Iter<'a> {
 }
 
 impl <'a> Iterator for Iter<'a> {
-    type Item = Row<'a>;
+    type Item = Operation<'a>;
 
-    fn next(&mut self) -> Option<Row<'a>> {
+    fn next(&mut self) -> Option<Operation<'a>> {
         let Iter { ref encoder, ref schema, ref mut offset } = *self;
 
         if *offset >= encoder.len() {
             return None;
         }
+
+        let op_type = encoder.data[*offset] as i32;
+        *offset += 1;
 
         let mut row = schema.new_row();
 
@@ -226,6 +229,15 @@ impl <'a> Iterator for Iter<'a> {
             }
             *offset += column.data_type().size();
         }
-        Some(row)
+
+        let kind = match OperationTypePb::from_i32(op_type).unwrap_or_default() {
+            OperationTypePb::Insert => OperationKind::Insert,
+            OperationTypePb::Update => OperationKind::Update,
+            OperationTypePb::Delete => OperationKind::Delete,
+            OperationTypePb::Upsert => OperationKind::Upsert,
+            other => panic!("unexpected operation type: {:?}", other),
+        };
+
+        Some(Operation { row, kind })
     }
 }

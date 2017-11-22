@@ -11,6 +11,7 @@ use Result;
 use Schema;
 use Value;
 use util;
+use DataType;
 
 pub struct Row<'data> {
     /// The row data.

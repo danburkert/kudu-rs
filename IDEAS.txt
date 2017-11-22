@@ -1,0 +1,3 @@
+- Wrap the request protobuf of krpc::Request in an Arc so that multiple RPCs can
+  be in flight at once and share the same underlying message. This is
+  important, especially, for speculative execution.

@@ -182,14 +182,13 @@ impl MetaCache {
         })
     }
 
-    pub fn tablet_leader(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<(TabletServerId, Box<[HostPort]>)>,
-                                                                       Error=Error> {
+    pub fn tablet_leader(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 tablet.replicas()
                       .iter()
                       .find(|replica| replica.role() == RaftRole::Leader)
-                      .map(|replica| (*replica.id(), replica.rpc_addrs().to_owned().into_boxed_slice()))
+                      .map(|replica| replica.rpc_addrs().to_owned().into_boxed_slice())
             } else {
                 None
             }

@@ -2,7 +2,7 @@ use std::collections::{
     HashMap,
     VecDeque,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::mem;
 
 use futures::{
@@ -24,6 +24,7 @@ use TabletId;
 use key;
 use meta_cache::MetaCache;
 use pb::tserver::{
+    TabletServerService,
     WriteRequestPb,
     WriteResponsePb,
 };
@@ -178,14 +179,42 @@ impl Writer {
         }
     }
 
-    fn send_batch(&mut self, tablet_id: TabletId, operations: OperationEncoder) {
+    fn send_batch(&mut self,
+                  tablet_id: TabletId,
+                  //partition_key: Vec<u8>,
+                  operations: OperationEncoder) {
+
         let mut request = WriteRequestPb::default();
         request.tablet_id = tablet_id.to_string().into_bytes();
         request.schema = Some(self.schema().as_pb());
         request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
         request.row_operations = Some(operations.into_pb());
+        let request = TabletServerService::write(Box::new(request),
+                                                 Instant::now() + self.config.flush_timeout,
+                                                 &[]);
 
-        //self.meta_cache.tablet_leader(
+        let tserver_proxies = self.tserver_proxies.clone();
+        /*
+        let fut = self.meta_cache
+                      .tablet_leader(partition_key)
+                      .and_then(move |tablet_leader| match tablet_leader {
+                          Some((tablet_server, hostports)) => {
+                              let mut proxy = tserver_proxies.get(hostports);
+                              // TODO: this is an utter hack.  Completely missing retry logic.
+                              proxy.send::<WriteResponsePb>(request)
+                          },
+                          None => unimplemented!("no leader?"),
+                      })
+                      .map(|response: WriteResponsePb| {
+                          BatchStats {
+                            successful_operations: usize,
+                            failed_operations: usize,
+                            data: usize,
+                          }
+                      });
+
+        self.batches_in_flight.push(Box::new(fut));
+        */
     }
 
     pub fn flush(self) -> Flush {
@@ -218,7 +247,7 @@ struct Flush {
     errors: ErrorCollector,
 }
 
-struct ErrorCollector {
+pub(crate) struct ErrorCollector {
 }
 
 struct Batcher {

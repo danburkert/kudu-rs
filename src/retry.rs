@@ -20,8 +20,9 @@ use timer::{
 
 use Error;
 use MasterError;
+use TabletServerError;
 use backoff::Backoff;
-use pb::master::*;
+use pb::{master, tserver};
 
 pub trait KuduResponse : Message + Default {
     fn into_result(self) -> Result<Self, Error> where Self: Sized;
@@ -77,7 +78,7 @@ impl <R> Future for Retry<R> where R: KuduResponse {
             // NotReady, otherwise the unreachable! branch below can be hit.
             let state = mem::replace(&mut self.state, State::Waiting(None));
 
-            // Poll the in-fligh RPC to see if it's complete.
+            // Poll the in-flight RPC to see if it's complete.
             let request = match state {
                 State::InFlight(mut response) => {
                     let (error, request) = match response.poll() {
@@ -130,19 +131,20 @@ impl <R> Future for Retry<R> where R: KuduResponse {
 }
 
 macro_rules! infallible_response {
-    ($type:ident) => {
+    ($type:ty) => {
         impl KuduResponse for $type {
             fn into_result(self) -> Result<$type, Error> { Ok(self) }
         }
     };
 }
 
-infallible_response!(PingResponsePb);
+infallible_response!(master::PingResponsePb);
+infallible_response!(tserver::PingResponsePb);
 
 macro_rules! master_response {
     ($type:ident) => {
-        impl KuduResponse for $type {
-            fn into_result(self) -> Result<$type, Error> {
+        impl KuduResponse for master::$type {
+            fn into_result(self) -> Result<master::$type, Error> {
                 match self.error {
                     Some(error) => Err(MasterError::from(error).into()),
                     None => Ok(self),
@@ -164,3 +166,18 @@ master_response!(IsCreateTableDoneResponsePb);
 master_response!(ListMastersResponsePb);
 master_response!(ListTablesResponsePb);
 master_response!(ListTabletServersResponsePb);
+
+macro_rules! tserver_response {
+    ($type:ident) => {
+        impl KuduResponse for tserver::$type {
+            fn into_result(self) -> Result<tserver::$type, Error> {
+                match self.error {
+                    Some(error) => Err(TabletServerError::from(error).into()),
+                    None => Ok(self),
+                }
+            }
+        }
+    };
+}
+
+tserver_response!(WriteResponsePb);
