@@ -23,6 +23,7 @@ mod transport;
 
 use std::fmt;
 use std::marker;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::{
@@ -40,9 +41,9 @@ use prost::Message;
 pub use error::{Error, RpcError, RpcErrorCode};
 pub use hostport::HostPort;
 pub use pb::rpc::{RequestIdPb as RequestId};
-pub use proxy::{Proxy, AsyncSend};
+pub use proxy::Proxy;
 
-pub trait RequestBody: Send {
+pub trait RequestBody: Send + Sync {
     fn encoded_len(&self) -> usize;
     fn encode_length_delimited(&self, dst: &mut BytesMut);
 }
@@ -56,36 +57,63 @@ impl <M> RequestBody for M where M: Message {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Descriptor<Req, Resp>
+where Req: Message + 'static,
+      Resp: Message + Default {
+    service: &'static str,
+    method: &'static str,
+    required_feature_flags: &'static [u32],
+    deadline: Instant,
+    _marker: marker::PhantomData<(Req, Resp)>,
+}
+
+impl <Req, Resp> Descriptor<Req, Resp>
+where Req: Message + 'static,
+      Resp: Message + Default {
+
+    pub fn new(service: &'static str, method: &'static str, deadline: Instant) -> Descriptor<Req, Resp> {
+        Descriptor {
+            service,
+            method,
+            required_feature_flags: &[],
+            deadline,
+            _marker: marker::PhantomData::default(),
+        }
+    }
+
+    /// Sets the required feature flags of the request.
+    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Descriptor<Req, Resp> {
+        self.required_feature_flags = required_feature_flags;
+        self
+    }
+}
+
 /// An RPC request builder.
-pub struct Request {
+struct Request {
+    pub body: Arc<RequestBody>,
     pub service: &'static str,
     pub method: &'static str,
     pub required_feature_flags: &'static [u32],
-    pub body: Box<RequestBody>,
     pub timestamp: Instant,
     pub deadline: Instant,
 }
 
 impl Request {
     /// Creates a new [Request].
-    pub fn new(service: &'static str,
-               method: &'static str,
-               body: Box<RequestBody>,
-               deadline: Instant) -> Request {
+    pub fn new<Req, Resp>(body: Arc<RequestBody>,
+                          descriptor: Descriptor<Req, Resp>)
+                          -> Request
+    where Req: Message + 'static,
+        Resp: Message + Default {
         Request {
-            service,
-            method,
-            required_feature_flags: &[],
             body,
+            service: descriptor.service,
+            method: descriptor.method,
+            required_feature_flags: descriptor.required_feature_flags,
             timestamp: Instant::now(),
-            deadline,
+            deadline: descriptor.deadline,
         }
-    }
-
-    /// Sets the required feature flags of the request.
-    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Request {
-        self.required_feature_flags = required_feature_flags;
-        self
     }
 }
 
@@ -99,40 +127,32 @@ impl fmt::Debug for Request {
     }
 }
 
-type RpcResult = Result<(Bytes, Vec<Bytes>, Request),
-                        (Error, Request)>;
+type RpcResult = Result<(Bytes, Vec<Bytes>), Error>;
 
 #[must_use = "futures do nothing unless polled"]
-pub struct Response<T> where T: Message + Default {
+pub struct RpcFuture<Resp> where Resp: Message + Default {
     receiver: oneshot::Receiver<RpcResult>,
-    _marker: marker::PhantomData<T>,
+    _marker: marker::PhantomData<Resp>,
 }
 
-impl <T> Response<T> where T: Message + Default {
-    pub fn failed(request: Request, error: Error) -> Response<T> {
-        let (completer, receiver) = oneshot::channel();
-        completer.send(Err((error, request))).unwrap();
-
-        Response {
+impl <Resp> RpcFuture<Resp> where Resp: Message + Default {
+    /// Returns a new `RpcFuture` wrapping the provided oneshot receiver.
+    fn new(receiver: oneshot::Receiver<RpcResult>) -> RpcFuture<Resp> {
+        RpcFuture {
             receiver,
-            _marker: marker::PhantomData,
+            _marker: marker::PhantomData::default(),
         }
     }
 }
 
-impl <T> Future for Response<T> where T: Message + Default {
-    type Item = (T, Vec<Bytes>, Request);
-    type Error = (Error, Request);
+impl <Resp> Future for RpcFuture<Resp> where Resp: Message + Default {
+    type Item = (Resp, Vec<Bytes>);
+    type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.receiver.poll().expect("RPC dropped") {
-            Async::Ready(Ok((bytes, sidecars, request))) => match T::decode_length_delimited(&bytes) {
-                Ok(body) => Ok(Async::Ready((body, sidecars, request))),
-                Err(error) => Err((error.into(), request)),
-            },
-            Async::Ready(Err((error, request))) => Err((error, request)),
-            Async::NotReady => Ok(Async::NotReady),
-        }
+        let (bytes, sidecars) = try_ready!(self.receiver.poll().map_err(|_| -> Error { unreachable!("RPC dropped"); }))?;
+        let body = Resp::decode_length_delimited(&bytes)?;
+        Ok(Async::Ready((body, sidecars)))
     }
 }
 
@@ -159,12 +179,12 @@ impl Rpc {
 
     /// Completes the RPC.
     pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
-        let _ = self.completer.send(Ok((body, sidecars, self.request)));
+        let _ = self.completer.send(Ok((body, sidecars)));
     }
 
     /// Fails the RPC.
     fn fail(self, error: Error) {
-        let _ = self.completer.send(Err((error, self.request)));
+        let _ = self.completer.send(Err(error));
     }
 }
 

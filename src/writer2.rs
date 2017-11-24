@@ -2,6 +2,7 @@ use std::collections::{
     HashMap,
     VecDeque,
 };
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::mem;
 
@@ -189,7 +190,7 @@ impl Writer {
         request.schema = Some(self.schema().as_pb());
         request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
         request.row_operations = Some(operations.into_pb());
-        let request = TabletServerService::write(Box::new(request),
+        let request = TabletServerService::write(Arc::new(request),
                                                  Instant::now() + self.config.flush_timeout,
                                                  &[]);
 
@@ -213,7 +214,7 @@ impl Writer {
                           }
                       });
 
-        self.batches_in_flight.push(Box::new(fut));
+        self.batches_in_flight.push(Arc::new(fut));
         */
     }
 

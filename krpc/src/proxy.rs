@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::marker;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cpupool::CpuPool;
@@ -20,32 +20,19 @@ use tokio::reactor::{
     Remote,
 };
 
+use Descriptor;
 use Error;
 use HostPort;
 use Options;
 use Request;
-use Response;
 use Rpc;
-use RpcResult;
+use RpcFuture;
 use connection::Connection;
 use connector::Connector;
 
 #[derive(Clone)]
 pub struct Proxy {
     sender: mpsc::Sender<Rpc>,
-}
-
-/// The result of an asynchronous remote method call.
-#[must_use]
-#[derive(Debug)]
-pub enum AsyncSend {
-    /// The RPC was sent. The response will be returned through the included future.
-    Ready(oneshot::Receiver<RpcResult>),
-    /// The connection is not ready.
-    ///
-    /// The current task will be scheduled to receive a notification when the `Proxy` is ready to
-    /// send.
-    NotReady(Request),
 }
 
 impl Proxy {
@@ -86,7 +73,13 @@ impl Proxy {
     ///
     /// Typically users will not call this directly, but rather through a generated service trait
     /// implemented by `Proxy`.
-    pub fn send<T>(&mut self, request: Request) -> Response<T> where T: Message + Default {
+    pub fn send<Req, Resp>(&mut self,
+                           descriptor: Descriptor<Req, Resp>,
+                           request: Arc<Req>) -> RpcFuture<Resp>
+    where Req: Message + 'static,
+          Resp: Message + Default {
+        let request = Request::new(request, descriptor);
+
         let (completer, receiver) = oneshot::channel();
         let rpc = Rpc {
             request,
@@ -99,10 +92,7 @@ impl Proxy {
             Err(..) => unreachable!(),
         }
 
-        Response {
-            receiver,
-            _marker: marker::PhantomData,
-        }
+        RpcFuture::new(receiver)
     }
 }
 

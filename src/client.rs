@@ -85,7 +85,7 @@ impl Client {
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
     pub fn create_table(&mut self, builder: TableBuilder) -> impl Future<Item=TableId, Error=Error> {
-        let pb = match builder.into_pb().map(Box::new) {
+        let pb = match builder.into_pb().map(Arc::new) {
             Ok(pb) => pb,
             Err(error) => return Either::B(future::err(error)),
         };
@@ -132,7 +132,7 @@ impl Client {
                  .and_then(move |_| {
 
                     let request = MasterService::is_create_table_done(
-                        Box::new(IsCreateTableDoneRequestPb { table: state.table.into() }),
+                        Arc::new(IsCreateTableDoneRequestPb { table: state.table.into() }),
                         state.client.deadline(), &[]);
 
                     state.client
@@ -161,7 +161,7 @@ impl Client {
     }
 
     fn do_delete_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=(), Error=Error>{
-        let request = MasterService::delete_table(Box::new(DeleteTableRequestPb { table }),
+        let request = MasterService::delete_table(Arc::new(DeleteTableRequestPb { table }),
                                                   self.deadline(), &[]);
 
         self.master.send(request).map(|_: DeleteTableResponsePb| ())
@@ -183,7 +183,7 @@ impl Client {
         }
 
         pb.table = identifier;
-        let request = MasterService::alter_table(Box::new(pb), self.deadline(), &[]);
+        let request = MasterService::alter_table(Arc::new(pb), self.deadline(), &[]);
         let client: Client = self.clone();
         let result = self.master.send(request).and_then(move |resp: AlterTableResponsePb| {
             let table_id = str::from_utf8(resp.table_id())
@@ -232,7 +232,7 @@ impl Client {
                  .and_then(move |_| {
 
                     let request = MasterService::is_alter_table_done(
-                        Box::new(IsAlterTableDoneRequestPb { table: state.table.into() }),
+                        Arc::new(IsAlterTableDoneRequestPb { table: state.table.into() }),
                         state.client.deadline(), &[]);
 
                     state.client
@@ -257,10 +257,10 @@ impl Client {
     /// Lists all tables with the a name matching the provided prefix, and their associated table ID.
     pub fn list_tables_with_prefix<S>(&mut self, name_prefix: S) -> impl Future<Item=Vec<(String, TableId)>, Error=Error>
     where S: Into<String> {
-        self.do_list_tables(Box::new(ListTablesRequestPb { name_filter: Some(name_prefix.into()) }))
+        self.do_list_tables(Arc::new(ListTablesRequestPb { name_filter: Some(name_prefix.into()) }))
     }
 
-    fn do_list_tables(&mut self, request: Box<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
+    fn do_list_tables(&mut self, request: Arc<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
         let request = MasterService::list_tables(request, self.deadline(), &[]);
 
         self.master.send(request).and_then(|response: ListTablesResponsePb| {
@@ -308,7 +308,7 @@ impl Client {
     }
 
     fn do_open_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=Table, Error=Error> {
-        let request = MasterService::get_table_schema(Box::new(GetTableSchemaRequestPb { table }),
+        let request = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }),
                                                       self.deadline(), &[]);
 
         let client = self.clone();

@@ -12,11 +12,12 @@ use futures::{
 };
 use futures::stream::FuturesUnordered;
 use krpc::{
+    Descriptor,
     HostPort,
     Proxy,
-    Request,
-    Response,
+    RpcFuture,
 };
+use prost::Message;
 
 use pb::master::*;
 use Error;
@@ -24,8 +25,9 @@ use MasterError;
 use MasterErrorCode;
 use Options;
 use retry::{
-    Retry,
-    KuduResponse,
+    Retriable,
+    RetryFuture,
+    RetryProxy,
 };
 
 #[derive(Clone)]
@@ -47,13 +49,17 @@ impl MasterProxy {
         unimplemented!()
     }
 
-    pub fn send<T>(&mut self, request: Request) -> MasterResponse<T> where T: KuduResponse + 'static {
+    pub fn send<Req, Resp>(&mut self,
+                           descriptor: Descriptor<Req, Resp>,
+                           request: Arc<Req>) -> MasterFuture<Req, Resp>
+    where Req: Message + 'static,
+          Resp: Retriable {
         let epoch = self.inner.epoch();
 
         if let Some((ref mut proxy, cache_epoch)) = self.cache {
             if epoch == cache_epoch {
-                let response = proxy.send(request);
-                return MasterResponse {
+                let response = proxy.send_retriable(request);
+                return MasterFuture {
                     inner: Arc::clone(&self.inner),
                     state: Some(State::InFlight(response)),
                     epoch,
@@ -75,7 +81,7 @@ impl MasterProxy {
             None => (),
         }
 
-        MasterResponse {
+        MasterFuture {
             inner: Arc::clone(&self.inner),
             state: Some(State::Connecting(connection, request)),
             epoch,
@@ -126,24 +132,24 @@ impl Inner {
     }
 }
 
-enum State<T> where T: KuduResponse {
+enum State<Req, Resp>
+where Req: Message + 'static, Resp: Retriable {
     Connecting(Shared<ConnectToCluster>, Request),
-    InFlight(Response<T>),
+    InFlight(RetryFuture<Req, Resp>),
 }
 
-
 #[must_use = "futures do nothing unless polled"]
-pub struct MasterResponse<T> where T: KuduResponse {
+pub struct MasterFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
     inner: Arc<Inner>,
-    state: Option<State<T>>,
+    state: Option<State<Req, Resp>>,
     epoch: usize,
 }
 
-impl <T> Future for MasterResponse<T> where T: KuduResponse {
-    type Item = T;
+impl <Req, Resp> Future for MasterFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
+    type Item = Resp;
     type Error = Error;
 
-    fn poll(&mut self) -> Poll<T, Error> {
+    fn poll(&mut self) -> Poll<Resp, Error> {
         let state = self.state.take().unwrap();
 
         let mut response = match state {
@@ -184,7 +190,7 @@ impl <T> Future for MasterResponse<T> where T: KuduResponse {
 
 #[must_use = "futures do nothing unless polled"]
 struct ConnectToCluster {
-    responses: FuturesUnordered<Retry<ConnectToMasterResponsePb>>,
+    responses: FuturesUnordered<RetryFuture<ConnectToMasterRequestPb, ConnectToMasterResponsePb>>,
     errors: Vec<Error>,
 }
 
@@ -197,12 +203,13 @@ impl ConnectToCluster {
                                          options.rpc.clone(),
                                          options.threadpool.clone(),
                                          &options.remote);
+            let descriptor = MasterService::connect_to_master(
 
             let response = proxy.send(
                 MasterService::connect_to_master(Default::default(),
                                                  now + options.admin_timeout,
                                                  &[MasterFeatures::ConnectToMaster as u32]));
-            responses.push(Retry::wrap(response, proxy, options.timer.clone()));
+            responses.push(RetryFuture::wrap(response, proxy, options.timer.clone()));
         }
 
         ConnectToCluster {

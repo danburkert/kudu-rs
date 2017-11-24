@@ -1,3 +1,7 @@
 - Wrap the request protobuf of krpc::Request in an Arc so that multiple RPCs can
   be in flight at once and share the same underlying message. This is
   important, especially, for speculative execution.
+
+- Combine krpc::Request and krpc::Descriptor into krpc::Call.
+- The internal in-flight call in krpc should be renamed Rpc. Rpc is just a
+  type-erased Call.

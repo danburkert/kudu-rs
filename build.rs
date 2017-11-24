@@ -66,19 +66,14 @@ impl prost_build::ServiceGenerator for KuduServiceGenerator {
             for method in &service.methods {
                 method.comments.append_with_indent(1, buf);
                 buf.push_str(&format!("    pub fn {}(\n", method.name));
-                buf.push_str(&format!("        request: ::std::boxed::Box<{}>,\n", method.input_type));
                 buf.push_str("        deadline: ::std::time::Instant,\n");
-                buf.push_str("        required_feature_flags: &'static [u32],\n");
-                buf.push_str("    ) -> ::krpc::Request {\n");
+                buf.push_str(&format!("    ) -> ::krpc::Descriptor<{}, {}> {{\n", method.input_type, method.output_type));
 
-                buf.push_str("        ::krpc::Request {\n");
-                buf.push_str(&format!("            service: \"{}.{}\",\n", service.package, service.proto_name));
-                buf.push_str(&format!("            method: \"{}\",\n", method.proto_name));
-                buf.push_str("            required_feature_flags,\n");
-                buf.push_str("            body: request,\n");
-                buf.push_str("            timestamp: ::std::time::Instant::now(),\n");
+                buf.push_str("        ::krpc::Descriptor::new(\n");
+                buf.push_str(&format!("            \"{}.{}\",\n", service.package, service.proto_name));
+                buf.push_str(&format!("            \"{}\",\n", method.proto_name));
                 buf.push_str("            deadline,\n");
-                buf.push_str("        }\n");
+                buf.push_str("        )\n");
                 buf.push_str("    }\n");
             }
 

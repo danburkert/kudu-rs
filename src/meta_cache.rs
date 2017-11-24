@@ -204,7 +204,7 @@ impl MetaCache {
             return Either::A(future::ok(value));
         };
 
-        let request = Box::new(GetTableLocationsRequestPb {
+        let request = Arc::new(GetTableLocationsRequestPb {
             table: self.inner.table.into(),
             partition_key_start: Some(partition_key.clone()),
             partition_key_end: None,
