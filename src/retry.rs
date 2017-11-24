@@ -1,5 +1,4 @@
 use std::mem;
-use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -9,7 +8,7 @@ use futures::{
     Poll,
 };
 use krpc::{
-    Descriptor,
+    Call,
     Proxy,
     RpcFuture,
 };
@@ -25,39 +24,31 @@ use TabletServerError;
 use backoff::Backoff;
 use pb::{master, tserver};
 
-pub trait Retriable : Message + Default {
+pub(crate) trait Retriable : Message + Default {
     fn into_result(self) -> Result<Self, Error> where Self: Sized;
 }
 
-pub trait RetryProxy {
+pub(crate) trait RetryProxy {
 
-    fn send_retriable<Req, Resp>(self,
-                                 descriptor: Descriptor<Req, Resp>,
-                                 request: Arc<Req>,
-                                 timer: Timer)
-                                 -> RetryFuture<Req, Resp>
+    fn send_retriable<Req, Resp>(self, call: Call<Req, Resp>, timer: Timer) -> RetryFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable;
 }
 
 impl RetryProxy for Proxy {
-    pub fn send_retriable<Req, Resp>(self,
-                                     descriptor: Descriptor<Req, Resp>,
-                                     request: Arc<Req>,
-                                     timer: Timer)
-                                     -> RetryFuture<Req, Resp>
+    fn send_retriable<Req, Resp>(mut self, call: Call<Req, Resp>, timer: Timer) -> RetryFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable {
         let mut backoff = Backoff::default();
         let sleep = timer.sleep(backoff.next_backoff());
-        let state = State::InFlight(self.send(descriptor, request));
+        let state = State::InFlight(self.send(call.clone()));
 
         RetryFuture {
             backoff,
             proxy: self,
             timer,
-            request,
-            descriptor,
+            call,
+            sleep,
             state,
             errors: Vec::new(),
         }
@@ -76,40 +67,18 @@ pub(crate) struct RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Ret
     backoff: Backoff,
     proxy: Proxy,
     timer: Timer,
-    descriptor: Descriptor<Req, Resp>,
-    request: Arc<Req>,
-
+    call: Call<Req, Resp>,
     sleep: Sleep,
     state: State<Resp>,
     errors: Vec<Error>,
 }
 
-impl <Req, Resp> RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
-
-    pub fn send(proxy: Proxy,
-                timer: Timer,
-                descriptor: Descriptor<Req, Resp>,
-                request: Arc<Req>) {
-        let mut backoff = Backoff::default();
-        let sleep = timer.sleep(backoff.next_backoff());
-        let state = State::InFlight(proxy.send(descriptor, request));
-
-        RetryFuture {
-            backoff,
-            proxy,
-            timer,
-            request,
-            descriptor,
-            state,
-            errors: Vec::new(),
-        }
-    }
-
-    fn fail(&mut self) -> Result<(), Error> {
-        let errors = mem::replace(&mut self.errors, Vec::new());
-        let description = format!("{}.{} RPC failed", self.descriptor.service, self.descriptor.method);
-        Err(Error::Compound(description, errors))
-    }
+fn fail<Req, Resp>(errors: &mut Vec<Error>, call: &Call<Req, Resp>) -> Result<(), Error>
+where Req: Message + 'static,
+      Resp: Retriable {
+    let errors = mem::replace(errors, Vec::new());
+    let description = format!("RPC failed: {:?}", call);
+    Err(Error::Compound(description, errors))
 }
 
 impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
@@ -119,8 +88,9 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             // Poll the in-flight RPC to see if it's complete.
-            match self.state {
-                State::InFlight(mut response) => {
+            // NLL hack.
+            let state = match self.state {
+                State::InFlight(ref mut response) => {
                     let error = match response.poll() {
                         Ok(Async::Ready((response, sidecars))) => match response.into_result() {
                             Ok(response) => return Ok(Async::Ready((response, sidecars))),
@@ -134,25 +104,25 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
                     let is_retriable = error.is_retriable();
                     self.errors.push(error);
                     if !is_retriable {
-                        self.fail()?;
+                        fail(&mut self.errors, &self.call)?;
                     }
-                    *self.state = State::Waiting;
+                    State::Waiting
                 },
                 State::Waiting =>  {
                     try_ready!(self.sleep.poll().map_err(|_| -> Error { unreachable!() }));
                     let backoff = self.backoff.next_backoff();
-                    if request.deadline < Instant::now() + backoff {
+                    if self.call.deadline() < Instant::now() + backoff {
                         self.errors.push(Error::TimedOut);
-                        self.fail()?;
+                        fail(&mut self.errors, &self.call)?;
                     }
 
-                    let response = self.proxy.as_mut().unwrap().send(self.descriptor.clone(), self.request.clone());
+                    let response = self.proxy.send(self.call.clone());
                     let sleep = self.timer.sleep(backoff);
                     self.sleep = sleep;
-                    self.state = State::InFlight(response);
-                    // Fall through for another trip through the loop.
+                    State::InFlight(response)
                 },
             };
+            self.state = state;
         }
     }
 }

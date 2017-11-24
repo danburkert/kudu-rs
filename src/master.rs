@@ -12,10 +12,9 @@ use futures::{
 };
 use futures::stream::FuturesUnordered;
 use krpc::{
-    Descriptor,
+    Call,
     HostPort,
     Proxy,
-    RpcFuture,
 };
 use prost::Message;
 
@@ -31,7 +30,7 @@ use retry::{
 };
 
 #[derive(Clone)]
-pub struct MasterProxy {
+pub(crate) struct MasterProxy {
     cache: Option<(Proxy, usize)>,
     inner: Arc<Inner>,
 }
@@ -49,19 +48,18 @@ impl MasterProxy {
         unimplemented!()
     }
 
-    pub fn send<Req, Resp>(&mut self,
-                           descriptor: Descriptor<Req, Resp>,
-                           request: Arc<Req>) -> MasterFuture<Req, Resp>
+    pub fn send<Req, Resp>(&mut self, call: Call<Req, Resp>) -> MasterFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable {
         let epoch = self.inner.epoch();
 
         if let Some((ref mut proxy, cache_epoch)) = self.cache {
             if epoch == cache_epoch {
-                let response = proxy.send_retriable(request);
+                let response = proxy.clone().send_retriable(call.clone(), self.inner.options.timer.clone());
                 return MasterFuture {
                     inner: Arc::clone(&self.inner),
-                    state: Some(State::InFlight(response)),
+                    call,
+                    state: State::InFlight(response),
                     epoch,
                 };
             }
@@ -73,7 +71,7 @@ impl MasterProxy {
         match connection.peek() {
             Some(Ok(proxy)) => {
                 self.cache = Some((proxy.deref().clone(), epoch));
-                return self.send(request);
+                return self.send(call);
             },
             Some(Err(_)) => {
                 self.inner.reset(epoch);
@@ -83,7 +81,8 @@ impl MasterProxy {
 
         MasterFuture {
             inner: Arc::clone(&self.inner),
-            state: Some(State::Connecting(connection, request)),
+            call,
+            state: State::Connecting(connection),
             epoch,
         }
     }
@@ -134,14 +133,15 @@ impl Inner {
 
 enum State<Req, Resp>
 where Req: Message + 'static, Resp: Retriable {
-    Connecting(Shared<ConnectToCluster>, Request),
+    Connecting(Shared<ConnectToCluster>),
     InFlight(RetryFuture<Req, Resp>),
 }
 
 #[must_use = "futures do nothing unless polled"]
-pub struct MasterFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
+pub(crate) struct MasterFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
     inner: Arc<Inner>,
-    state: Option<State<Req, Resp>>,
+    call: Call<Req, Resp>,
+    state: State<Req, Resp>,
     epoch: usize,
 }
 
@@ -150,72 +150,62 @@ impl <Req, Resp> Future for MasterFuture<Req, Resp> where Req: Message + 'static
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Resp, Error> {
-        let state = self.state.take().unwrap();
-
-        let mut response = match state {
-            State::Connecting(mut connecting, request) => {
-                match connecting.poll().map_err(|error| error.deref().clone())? {
-                    Async::Ready(proxy) => {
-                        proxy.deref().clone().send(request)
-                    },
-                    Async::NotReady => {
-                        self.state = Some(State::Connecting(connecting, request));
-                        return Ok(Async::NotReady);
-                    },
+        loop {
+            // NLL hack.
+            let state = match self.state {
+                State::Connecting(ref mut connecting) => {
+                    let proxy = try_ready!(connecting.poll().map_err(|error| error.deref().clone()));
+                    let rpc = proxy.deref().clone().send_retriable(self.call.clone(),
+                                                                   self.inner.options.timer.clone());
+                    State::InFlight(rpc)
+                },
+                State::InFlight(ref mut rpc) => {
+                    let (response, _) = try_ready!(rpc.poll());
+                    match response.into_result() {
+                        Ok(value) => return Ok(Async::Ready(value)),
+                        Err(Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. })) => {
+                            let (connection, epoch) = self.inner.reset(self.epoch);
+                            self.epoch = epoch;
+                            State::Connecting(connection)
+                        },
+                        Err(error) => return Err(error),
+                    }
                 }
-            },
-            State::InFlight(response) => response,
-        };
-
-        match response.poll().map_err(|(error, _)| error)? {
-            Async::Ready((value, _, request)) => {
-                match value.into_result() {
-                    Ok(value) => Ok(Async::Ready(value)),
-                    Err(Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. })) => {
-                        let (connection, epoch) = self.inner.reset(self.epoch);
-                        self.state = Some(State::Connecting(connection, request));
-                        self.epoch = epoch;
-                        self.poll()
-                    },
-                    Err(error) => Err(error),
-                }
-            },
-            Async::NotReady => {
-                self.state = Some(State::InFlight(response));
-                Ok(Async::NotReady)
-            },
+            };
+            self.state = state;
         }
     }
 }
 
 #[must_use = "futures do nothing unless polled"]
 struct ConnectToCluster {
-    responses: FuturesUnordered<RetryFuture<ConnectToMasterRequestPb, ConnectToMasterResponsePb>>,
+    responses: FuturesUnordered<Box<Future<Item=Proxy, Error=Error>>>,
     errors: Vec<Error>,
 }
 
 impl ConnectToCluster {
     fn new(addrs: &[HostPort], options: &Options) -> ConnectToCluster {
-        let now = Instant::now();
-        let mut responses = FuturesUnordered::new();
-        for addr in addrs {
-            let mut proxy = Proxy::spawn(Box::new([addr.clone()]),
+        let mut connect = ConnectToCluster {
+            responses: FuturesUnordered::new(),
+            errors: Vec::new(),
+        };
+
+        let mut call = MasterService::connect_to_master(Default::default(),
+                                                        Instant::now() + options.admin_timeout);
+        call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
+        for addr in addrs.iter().cloned() {
+            let mut proxy = Proxy::spawn(Box::new([addr]),
                                          options.rpc.clone(),
                                          options.threadpool.clone(),
                                          &options.remote);
-            let descriptor = MasterService::connect_to_master(
-
-            let response = proxy.send(
-                MasterService::connect_to_master(Default::default(),
-                                                 now + options.admin_timeout,
-                                                 &[MasterFeatures::ConnectToMaster as u32]));
-            responses.push(RetryFuture::wrap(response, proxy, options.timer.clone()));
+            connect.responses.push(
+                Box::new(
+                    proxy.clone()
+                         .send_retriable(call.clone(), options.timer.clone())
+                         .map(move |_| proxy)));
         }
 
-        ConnectToCluster {
-            responses,
-            errors: Vec::new(),
-        }
+        connect
     }
 }
 
@@ -225,7 +215,7 @@ impl Future for ConnectToCluster {
     fn poll(&mut self) -> Poll<Proxy, Error> {
         loop {
             match self.responses.poll() {
-                Ok(Async::Ready(Some((_, _, proxy)))) => return Ok(Async::Ready(proxy)),
+                Ok(Async::Ready(Some(proxy))) => return Ok(Async::Ready(proxy)),
                 Ok(Async::Ready(None)) => {
                     let errors = mem::replace(&mut self.errors, Vec::new());
                     return Err(Error::Compound("failed to connect to cluster".to_string(), errors));

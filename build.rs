@@ -66,12 +66,14 @@ impl prost_build::ServiceGenerator for KuduServiceGenerator {
             for method in &service.methods {
                 method.comments.append_with_indent(1, buf);
                 buf.push_str(&format!("    pub fn {}(\n", method.name));
+                buf.push_str(&format!("    request: ::std::sync::Arc<{}>,\n", method.input_type));
                 buf.push_str("        deadline: ::std::time::Instant,\n");
-                buf.push_str(&format!("    ) -> ::krpc::Descriptor<{}, {}> {{\n", method.input_type, method.output_type));
+                buf.push_str(&format!("    ) -> ::krpc::Call<{}, {}> {{\n", method.input_type, method.output_type));
 
-                buf.push_str("        ::krpc::Descriptor::new(\n");
+                buf.push_str("        ::krpc::Call::new(\n");
                 buf.push_str(&format!("            \"{}.{}\",\n", service.package, service.proto_name));
                 buf.push_str(&format!("            \"{}\",\n", method.proto_name));
+                buf.push_str("            request,\n");
                 buf.push_str("            deadline,\n");
                 buf.push_str("        )\n");
                 buf.push_str("    }\n");

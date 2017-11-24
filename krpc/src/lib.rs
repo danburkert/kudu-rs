@@ -12,6 +12,7 @@ extern crate tacho;
 #[macro_use] extern crate prost_derive;
 #[macro_use] extern crate tokio_core as tokio;
 
+mod call;
 mod connection;
 mod connector;
 mod error;
@@ -19,12 +20,10 @@ mod hostport;
 mod negotiator;
 mod pb;
 mod proxy;
+mod rpc;
 mod transport;
 
-use std::fmt;
 use std::marker;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use bytes::{
     Bytes,
@@ -38,12 +37,14 @@ use futures::{
 };
 use prost::Message;
 
+pub use call::Call;
 pub use error::{Error, RpcError, RpcErrorCode};
 pub use hostport::HostPort;
 pub use pb::rpc::{RequestIdPb as RequestId};
 pub use proxy::Proxy;
+use rpc::Rpc;
 
-pub trait RequestBody: Send + Sync {
+trait RequestBody: Send + Sync {
     fn encoded_len(&self) -> usize;
     fn encode_length_delimited(&self, dst: &mut BytesMut);
 }
@@ -54,76 +55,6 @@ impl <M> RequestBody for M where M: Message {
     }
     fn encode_length_delimited(&self, dst: &mut BytesMut) {
         Message::encode_length_delimited(self, dst).unwrap()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Descriptor<Req, Resp>
-where Req: Message + 'static,
-      Resp: Message + Default {
-    service: &'static str,
-    method: &'static str,
-    required_feature_flags: &'static [u32],
-    deadline: Instant,
-    _marker: marker::PhantomData<(Req, Resp)>,
-}
-
-impl <Req, Resp> Descriptor<Req, Resp>
-where Req: Message + 'static,
-      Resp: Message + Default {
-
-    pub fn new(service: &'static str, method: &'static str, deadline: Instant) -> Descriptor<Req, Resp> {
-        Descriptor {
-            service,
-            method,
-            required_feature_flags: &[],
-            deadline,
-            _marker: marker::PhantomData::default(),
-        }
-    }
-
-    /// Sets the required feature flags of the request.
-    pub fn required_feature_flags(&mut self, required_feature_flags: &'static [u32]) -> &mut Descriptor<Req, Resp> {
-        self.required_feature_flags = required_feature_flags;
-        self
-    }
-}
-
-/// An RPC request builder.
-struct Request {
-    pub body: Arc<RequestBody>,
-    pub service: &'static str,
-    pub method: &'static str,
-    pub required_feature_flags: &'static [u32],
-    pub timestamp: Instant,
-    pub deadline: Instant,
-}
-
-impl Request {
-    /// Creates a new [Request].
-    pub fn new<Req, Resp>(body: Arc<RequestBody>,
-                          descriptor: Descriptor<Req, Resp>)
-                          -> Request
-    where Req: Message + 'static,
-        Resp: Message + Default {
-        Request {
-            body,
-            service: descriptor.service,
-            method: descriptor.method,
-            required_feature_flags: descriptor.required_feature_flags,
-            timestamp: Instant::now(),
-            deadline: descriptor.deadline,
-        }
-    }
-}
-
-impl fmt::Debug for Request {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Request")
-         .field("service", &self.service)
-         .field("method", &self.method)
-         .field("deadline", &self.deadline)
-         .finish()
     }
 }
 
@@ -156,38 +87,6 @@ impl <Resp> Future for RpcFuture<Resp> where Resp: Message + Default {
     }
 }
 
-/// An in-flight RPC.
-struct Rpc {
-    /// The request.
-    request: Request,
-
-    /// The completer.
-    completer: oneshot::Sender<RpcResult>,
-}
-
-impl Rpc {
-
-    /// Returns `true` if the RPC has been canceled by the caller.
-    pub fn is_canceled(&self) -> bool {
-        self.completer.is_canceled()
-    }
-
-    /// Returns `true` if the RPC is timed out.
-    pub fn is_timed_out(&self, now: Instant) -> bool {
-        self.request.deadline <= now
-    }
-
-    /// Completes the RPC.
-    pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
-        let _ = self.completer.send(Ok((body, sidecars)));
-    }
-
-    /// Fails the RPC.
-    fn fail(self, error: Error) {
-        let _ = self.completer.send(Err(error));
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Maximum number of outstandings RPCs to allow per connection.
@@ -217,8 +116,4 @@ impl Default for Options {
             scope: None,
         }
     }
-}
-
-fn duration_to_us(duration: Duration) -> u64 {
-    duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64 / 1000
 }

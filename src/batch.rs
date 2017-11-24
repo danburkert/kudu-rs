@@ -6,7 +6,7 @@ use futures::{
 use krpc;
 
 use pb::tserver::{
-    TabletServerService,
+    //TabletServerService,
     WriteRequestPb,
     WriteResponsePb,
 };
@@ -70,11 +70,11 @@ struct InFlight {
 
 enum InFlightState {
     LeaderLookup {
-        request: krpc::Request,
+        call: krpc::Call<WriteRequestPb, WriteResponsePb>,
         lookup: Box<Future<Item=Option<Box<[HostPort]>>, Error=Error>>,
     },
     InFlight {
-        response: krpc::Response<WriteResponsePb>,
+        //response: krpc::Response<WriteResponsePb>,
     },
 }
 

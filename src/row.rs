@@ -11,7 +11,6 @@ use Result;
 use Schema;
 use Value;
 use util;
-use DataType;
 
 pub struct Row<'data> {
     /// The row data.
@@ -267,6 +266,7 @@ impl <'data> Row<'data> {
 
     #[cfg(any(feature="quickcheck", test))]
     pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static> where G: quickcheck::Gen {
+        use DataType;
         use quickcheck::Arbitrary;
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {

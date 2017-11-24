@@ -8,6 +8,7 @@ use std::net::{
 use std::str::FromStr;
 use std::vec;
 
+/// A host and port pair.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostPort {
     /// The host.

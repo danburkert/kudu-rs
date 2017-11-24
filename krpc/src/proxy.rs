@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Arc;
 use std::time::Instant;
 
 use cpupool::CpuPool;
@@ -20,11 +19,10 @@ use tokio::reactor::{
     Remote,
 };
 
-use Descriptor;
+use Call;
 use Error;
 use HostPort;
 use Options;
-use Request;
 use Rpc;
 use RpcFuture;
 use connection::Connection;
@@ -73,16 +71,18 @@ impl Proxy {
     ///
     /// Typically users will not call this directly, but rather through a generated service trait
     /// implemented by `Proxy`.
-    pub fn send<Req, Resp>(&mut self,
-                           descriptor: Descriptor<Req, Resp>,
-                           request: Arc<Req>) -> RpcFuture<Resp>
+    pub fn send<Req, Resp>(&mut self, call: Call<Req, Resp>) -> RpcFuture<Resp>
     where Req: Message + 'static,
           Resp: Message + Default {
-        let request = Request::new(request, descriptor);
 
         let (completer, receiver) = oneshot::channel();
         let rpc = Rpc {
-            request,
+            service: call.service,
+            method: call.method,
+            required_feature_flags: call.required_feature_flags,
+            timestamp: Instant::now(),
+            deadline: call.deadline,
+            request: call.request,
             completer,
         };
 

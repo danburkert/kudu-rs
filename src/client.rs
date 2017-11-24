@@ -90,11 +90,11 @@ impl Client {
             Err(error) => return Either::B(future::err(error)),
         };
         let deadline = self.deadline();
-        let request = MasterService::create_table(pb, deadline, &[]);
+        let call = MasterService::create_table(pb, deadline);
 
         let mut client = self.clone();
         let response = self.master
-                           .send(request)
+                           .send(call)
                            .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
                                TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
                                                                                     "table_id")?)
@@ -131,13 +131,13 @@ impl Client {
                  .map_err(|error| -> Error { panic!("timer failed: {}", error); })
                  .and_then(move |_| {
 
-                    let request = MasterService::is_create_table_done(
+                    let call = MasterService::is_create_table_done(
                         Arc::new(IsCreateTableDoneRequestPb { table: state.table.into() }),
-                        state.client.deadline(), &[]);
+                        state.client.deadline());
 
                     state.client
                          .master
-                         .send(request)
+                         .send(call)
                          .map(move |response: IsCreateTableDoneResponsePb| {
                              if response.done() {
                                  Loop::Break(())
@@ -161,10 +161,10 @@ impl Client {
     }
 
     fn do_delete_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=(), Error=Error>{
-        let request = MasterService::delete_table(Arc::new(DeleteTableRequestPb { table }),
-                                                  self.deadline(), &[]);
+        let call = MasterService::delete_table(Arc::new(DeleteTableRequestPb { table }),
+                                               self.deadline());
 
-        self.master.send(request).map(|_: DeleteTableResponsePb| ())
+        self.master.send(call).map(|_: DeleteTableResponsePb| ())
     }
 
     pub fn alter_table<S>(&mut self, table: S, alter: AlterTableBuilder) -> impl Future<Item=TableId, Error=Error>
@@ -183,9 +183,9 @@ impl Client {
         }
 
         pb.table = identifier;
-        let request = MasterService::alter_table(Arc::new(pb), self.deadline(), &[]);
+        let call = MasterService::alter_table(Arc::new(pb), self.deadline());
         let client: Client = self.clone();
-        let result = self.master.send(request).and_then(move |resp: AlterTableResponsePb| {
+        let result = self.master.send(call).and_then(move |resp: AlterTableResponsePb| {
             let table_id = str::from_utf8(resp.table_id())
                                .map_err(|error| Error::Serialization(format!("{}", error)))
                                .and_then(TableId::parse)?;
@@ -231,13 +231,13 @@ impl Client {
                  .map_err(|error| -> Error { panic!("timer failed: {}", error); })
                  .and_then(move |_| {
 
-                    let request = MasterService::is_alter_table_done(
+                    let call = MasterService::is_alter_table_done(
                         Arc::new(IsAlterTableDoneRequestPb { table: state.table.into() }),
-                        state.client.deadline(), &[]);
+                        state.client.deadline());
 
                     state.client
                          .master
-                         .send(request)
+                         .send(call)
                          .map(move |response: IsAlterTableDoneResponsePb| {
                              if response.done() {
                                  Loop::Break(())
@@ -261,9 +261,9 @@ impl Client {
     }
 
     fn do_list_tables(&mut self, request: Arc<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
-        let request = MasterService::list_tables(request, self.deadline(), &[]);
+        let call = MasterService::list_tables(request, self.deadline());
 
-        self.master.send(request).and_then(|response: ListTablesResponsePb| {
+        self.master.send(call).and_then(|response: ListTablesResponsePb| {
             let mut tables = Vec::with_capacity(response.tables.len());
             for table in response.tables {
                 tables.push((table.name, TableId::parse_bytes(&table.id)?));
@@ -273,9 +273,9 @@ impl Client {
     }
 
     pub fn list_masters(&mut self) -> impl Future<Item=Vec<Master>, Error=Error> {
-        let request = MasterService::list_masters(Default::default(), self.deadline(), &[]);
+        let call = MasterService::list_masters(Default::default(), self.deadline());
 
-        self.master.send(request).and_then(|response: ListMastersResponsePb| {
+        self.master.send(call).and_then(|response: ListMastersResponsePb| {
             let mut servers = Vec::with_capacity(response.masters.len());
             for server in response.masters {
                 servers.push(Master::from_pb(server)?);
@@ -285,9 +285,9 @@ impl Client {
     }
 
     pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServer>, Error=Error> {
-        let request = MasterService::list_tablet_servers(Default::default(), self.deadline(), &[]);
+        let call = MasterService::list_tablet_servers(Default::default(), self.deadline());
 
-        self.master.send(request).and_then(|response: ListTabletServersResponsePb| {
+        self.master.send(call).and_then(|response: ListTabletServersResponsePb| {
             let mut servers = Vec::with_capacity(response.servers.len());
             for server in response.servers {
                 servers.push(TabletServer::from_pb(server)?);
@@ -308,11 +308,11 @@ impl Client {
     }
 
     fn do_open_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=Table, Error=Error> {
-        let request = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }),
-                                                      self.deadline(), &[]);
+        let call = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }),
+                                                   self.deadline());
 
         let client = self.clone();
-        self.master.send(request).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
+        self.master.send(call).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
             static MESSAGE: &'static str = "GetTableSchemaResponsePb";
 
             let num_replicas = resp.num_replicas() as u32;

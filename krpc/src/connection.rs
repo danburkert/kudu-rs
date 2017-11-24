@@ -1,7 +1,7 @@
 use std::cmp;
 use std::fmt;
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fnv::FnvHashMap;
 use futures::{
@@ -15,7 +15,6 @@ use Options;
 use Rpc;
 use RpcError;
 use RpcErrorCode;
-use duration_to_us;
 use transport::Transport;
 
 /// `Connection` manages in-flight RPCs and throttling on a single KRPC connection.
@@ -115,8 +114,8 @@ impl Connection {
 
     /// Send an RPC. If an error is returned, the connection must be dropped.
     pub fn send(&mut self, rpc: Rpc, now: Instant) -> Result<(), ()> {
-        trace!("{:?}: send: {:?}", self, rpc.request);
-        if rpc.request.deadline < now {
+        trace!("{:?}: send: {:?}", self, rpc);
+        if rpc.deadline < now {
             rpc.fail(Error::TimedOut);
             return Ok(());
         }
@@ -127,11 +126,11 @@ impl Connection {
         let call_id = self.next_call_id();
         let send = self.transport
                        .send(call_id,
-                             rpc.request.service,
-                             rpc.request.method,
-                             rpc.request.required_feature_flags,
-                             &*rpc.request.body,
-                             Some(rpc.request.deadline - now));
+                             rpc.service,
+                             rpc.method,
+                             rpc.required_feature_flags,
+                             &*rpc.request,
+                             Some(rpc.deadline - now));
 
         // Regardless of the result of the send, add the RPC to the in-flight queue. The upstream
         // Proxy will remove it and retry it if the send failed.
@@ -152,7 +151,7 @@ impl Connection {
                     self.unthrottle();
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
                         if let Some(ref metrics) = self.metrics {
-                            metrics.successful_rpcs.add(duration_to_us(now - rpc.request.timestamp));
+                            metrics.successful_rpcs.add(duration_to_us(now - rpc.timestamp));
                         }
                         rpc.complete(body, sidecars);
                     }
@@ -169,9 +168,9 @@ impl Connection {
 
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
                         if let Some(ref metrics) = self.metrics {
-                            metrics.failed_rpcs.add(duration_to_us(now - rpc.request.timestamp));
+                            metrics.failed_rpcs.add(duration_to_us(now - rpc.timestamp));
                         }
-                        error!("{:?}: {:?} failed: {}", self, rpc.request, error);
+                        error!("{:?}: {:?} failed: {}", self, rpc, error);
                         rpc.fail(error);
                     } else {
                         error!("{:?}: RPC failed: {}", self, error);
@@ -232,4 +231,8 @@ impl Metrics {
             canceled_rpcs: canceled_rpcs,
         }
     }
+}
+
+fn duration_to_us(duration: Duration) -> u64 {
+    duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64 / 1000
 }

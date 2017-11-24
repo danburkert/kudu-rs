@@ -134,7 +134,7 @@ impl Entry {
 ///     - Limit the number of concurrent lookups, if it's not already being done by the master
 ///       proxy.
 #[derive(Clone)]
-pub struct MetaCache {
+pub(crate) struct MetaCache {
     master: MasterProxy,
     inner: Arc<Inner>,
 }
@@ -210,15 +210,14 @@ impl MetaCache {
             partition_key_end: None,
             max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
         });
-        let request = MasterService::get_table_locations(request,
-                                                         Instant::now() + self.master.options().admin_timeout,
-                                                         &[]);
+        let call = MasterService::get_table_locations(request,
+                                                      Instant::now() + self.master.options().admin_timeout);
 
         let mut meta_cache = self.clone();
         Either::B(
             meta_cache
                 .master
-                .send(request)
+                .send(call)
                 .and_then(move |response: GetTableLocationsResponsePb| {
                     meta_cache.add_tablet_locations(&*partition_key,
                                                     response.tablet_locations,
