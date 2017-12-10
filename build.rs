@@ -12,7 +12,7 @@ use curl::easy::Easy;
 use flate2::bufread::GzDecoder;
 use tar::Archive;
 
-const VERSION: &'static str = "master";
+const VERSION: &'static str = "1.6.0";
 
 fn main() {
     env_logger::init().unwrap();
@@ -37,7 +37,7 @@ fn main() {
             transfer.perform().expect("failed to download Kudu source tarball");
         }
 
-        Archive::new(GzDecoder::new(Cursor::new(data)).expect("failed to create gzip decoder"))
+        Archive::new(GzDecoder::new(Cursor::new(data)))
                 .unpack(target).expect("failed to unpack Kudu source tarball");
     }
 

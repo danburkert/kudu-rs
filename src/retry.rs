@@ -29,7 +29,6 @@ pub(crate) trait Retriable : Message + Default {
 }
 
 pub(crate) trait RetryProxy {
-
     fn send_retriable<Req, Resp>(self, call: Call<Req, Resp>, timer: Timer) -> RetryFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable;

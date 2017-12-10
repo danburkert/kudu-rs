@@ -209,6 +209,7 @@ impl MetaCache {
             partition_key_start: Some(partition_key.clone()),
             partition_key_end: None,
             max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
+            replica_type_filter: None,
         });
         let call = MasterService::get_table_locations(request,
                                                       Instant::now() + self.master.options().admin_timeout);

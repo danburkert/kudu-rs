@@ -3,19 +3,20 @@ use futures::{
     Future,
     Poll,
 };
-use krpc;
+use krpc::Call;
 
+use Error;
+use HostPort;
+use OperationEncoder;
+use TabletId;
+use meta_cache::MetaCache;
 use pb::tserver::{
     //TabletServerService,
     WriteRequestPb,
     WriteResponsePb,
 };
-use OperationEncoder;
+use retry::RetryFuture;
 use tserver;
-use Error;
-use HostPort;
-use meta_cache::MetaCache;
-use TabletId;
 
 /// `Batcher` accumulates write operations for a tablet into batches, and keeps stats on buffered
 /// and in-flight batches to to the tablet.
@@ -59,34 +60,58 @@ impl Buffer {
     }
 }
 
-struct InFlight {
+struct BatchFuture {
     meta_cache: MetaCache,
     tserver_proxies: tserver::ProxyCache,
-    tablet: TabletId,
     partition_key: Vec<u8>,
     operations: usize,
-    state: InFlightState,
+    state: State,
+    call: Call<WriteRequestPb, WriteResponsePb>,
 }
 
-enum InFlightState {
-    LeaderLookup {
-        call: krpc::Call<WriteRequestPb, WriteResponsePb>,
-        lookup: Box<Future<Item=Option<Box<[HostPort]>>, Error=Error>>,
-    },
-    InFlight {
-        //response: krpc::Response<WriteResponsePb>,
-    },
+enum State {
+    LeaderLookup(Box<Future<Item=Option<Box<[HostPort]>>, Error=Error>>),
+    InFlight(RetryFuture<WriteRequestPb, WriteResponsePb>),
 }
 
-impl Future for InFlight {
+impl Future for BatchFuture {
     type Item=BatchResult;
     type Error=BatchResult;
     fn poll(&mut self) -> Result<Async<BatchResult>, BatchResult> {
+
+        let BatchFuture { ref meta_cache,
+                          ref tserver_proxies,
+                          ref partition_key,
+                          operations,
+                          ref mut state,
+                          ref call } = *self;
+
+        let leaders = match *state {
+            State::LeaderLookup(ref mut leader_lookup) => {
+                try_ready!(leader_lookup.poll().map_err(|err| {
+                    BatchResult {
+                        call: call.clone(),
+                        response: Err(err),
+                    }
+                }))
+            },
+            State::InFlight(ref mut in_flight) => {
+                unimplemented!()
+            },
+        };
+
+        match leaders {
+            Some(leaders) => {
+            },
+            None => {
+            },
+        }
+
         unimplemented!()
     }
 }
 
 pub(crate) struct BatchResult {
-    request: Box<WriteRequestPb>,
+    call: Call<WriteRequestPb, WriteResponsePb>,
     response: Result<WriteResponsePb, Error>,
 }

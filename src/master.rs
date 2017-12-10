@@ -103,8 +103,8 @@ impl Inner {
     fn new(addrs: Vec<HostPort>, options: Options) -> Inner {
         let connection = ConnectToCluster::new(&addrs, &options).shared();
         Inner {
-            addrs: addrs,
-            options: options,
+            addrs,
+            options,
             connection: RwLock::new((connection, 0)),
         }
     }
