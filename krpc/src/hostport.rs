@@ -12,26 +12,40 @@ use std::vec;
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostPort {
     /// The host.
-    pub host: Box<str>,
+    host: Box<str>,
     /// The port.
-    pub port: u16,
+    port: u16,
+}
+
+impl HostPort {
+    /// Creates a new host, port pair.
+    pub fn new(host: String, port: u16) -> HostPort {
+        HostPort {
+            host: host.into_boxed_str(),
+            port,
+        }
+    }
+
+    /// Returns the host.
+    pub fn host(&self) -> &str {
+        &*self.host
+    }
+
+    /// Returns the port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 }
 
 impl From<SocketAddr> for HostPort {
     fn from(addr: SocketAddr) -> HostPort {
-        HostPort {
-            host: format!("{}", addr.ip()).into_boxed_str(),
-            port: addr.port(),
-        }
+        HostPort::new(addr.ip().to_string(), addr.port())
     }
 }
 
 impl From<(String, u16)> for HostPort {
     fn from((host, port): (String, u16)) -> HostPort {
-        HostPort {
-            host: host.into_boxed_str(),
-            port
-        }
+        HostPort::new(host, port)
     }
 }
 
@@ -61,30 +75,26 @@ impl HostPort {
                         .unwrap_or(Ok(default_port))
                         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput,
                                                     format!("invalid hostport: {:?}", hostport)))?;
-
-        Ok(HostPort {
-            host: host.into_boxed_str(),
-            port,
-        })
+        Ok(HostPort::new(host, port))
     }
 }
 
 impl ToSocketAddrs for HostPort {
     type Iter = vec::IntoIter<SocketAddr>;
     fn to_socket_addrs(&self) -> io::Result<vec::IntoIter<SocketAddr>> {
-        (&*self.host, self.port).to_socket_addrs()
+        (self.host(), self.port()).to_socket_addrs()
     }
 }
 
 impl fmt::Debug for HostPort {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        write!(f, "{}", self)
     }
 }
 
 impl fmt::Display for HostPort {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        write!(f, "{}:{}", self.host(), self.port())
     }
 }
 

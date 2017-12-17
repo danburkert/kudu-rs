@@ -3,12 +3,19 @@ use std::collections::{
     hash_map,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 use krpc;
-use parking_lot::Mutex;
+use parking_lot::{
+    Mutex,
+    RwLock,
+};
 
 use HostPort;
 use Options;
+use TabletServerId;
+use pb::master::TsInfoPb;
+use Error;
 
 #[derive(Clone)]
 pub struct ProxyCache {
@@ -44,4 +51,71 @@ impl ProxyCache {
             },
         }
     }
+}
+
+struct TabletServerProxy {
+    inner: Arc<RwLock<InnerTabletServer>>,
+}
+
+impl TabletServerProxy {
+
+    /// Creates a new `TabletServerProxy`.
+    fn new(options: &Options, info: TsInfoPb) -> Result<TabletServerProxy, Error> {
+        let id = TabletServerId::parse_bytes(&info.permanent_uuid)?;
+        let rpc_addrs = info.rpc_addresses
+                            .into_iter()
+                            .map(HostPort::from)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
+
+        let proxy = krpc::Proxy::spawn(rpc_addrs.clone(),
+                                       options.rpc.clone(),
+                                       options.threadpool.clone(),
+                                       &options.remote);
+
+        Ok(TabletServerProxy {
+            inner: Arc::new(RwLock::new(InnerTabletServer { id, rpc_addrs, proxy }))
+        })
+    }
+
+    /// Returns the tablet server ID.
+    fn id(&self) -> TabletServerId {
+        self.inner.read().id
+    }
+
+    /// Returns the tablet server RPC addresses.
+    fn rpc_addrs(&self) -> Box<[HostPort]> {
+        self.inner.read().rpc_addrs.clone()
+    }
+
+    /// Returns the tablet server KRPC proxy.
+    fn proxy(&self) -> krpc::Proxy {
+        self.inner.read().proxy.clone()
+    }
+
+    /// Updates the `InnerTabletServer` with refreshed information.
+    fn update(&mut self, info: TsInfoPb) {
+        debug_assert_eq!(self.id, TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
+        let mut rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>();
+        if &*rpc_addrs != &*self.rpc_addrs {
+            self.rpc_addrs = rpc_addrs.into_boxed_slice();
+            unimplemented!("update proxy");
+        }
+    }
+}
+
+struct InnerTabletServer {
+    id: TabletServerId,
+    rpc_addrs: Box<[HostPort]>,
+    proxy: krpc::Proxy,
+}
+
+impl InnerTabletServer {
+}
+
+struct RemoteTablet {
+}
+
+struct RemoteReplica {
+    tserver: TabletServerProxy,
 }

@@ -89,6 +89,7 @@ impl Master {
 pub struct TabletServer {
     id: TabletServerId,
     rpc_addrs: Vec<HostPort>,
+    /// TODO: this should be a URL to account for http/https
     http_addrs: Vec<HostPort>,
     software_version: String,
     seqno: i64,

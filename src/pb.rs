@@ -62,10 +62,7 @@ impl From<String> for partition_schema_pb::ColumnIdentifierPb {
 
 impl From<HostPortPb> for HostPort {
     fn from(hostport: HostPortPb) -> HostPort {
-        HostPort {
-            host: hostport.host.into_boxed_str(),
-            port: hostport.port as u16,
-        }
+        HostPort::new(hostport.host, hostport.port as u16)
     }
 }
 

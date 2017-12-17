@@ -55,8 +55,8 @@ impl Connector {
 
         for hostport in hostports {
             // Attempt to short-circuit DNS by parsing the host as an IP addr.
-            if let Ok(addr) = IpAddr::from_str(&hostport.host) {
-                connecting.push(Transport::connect(SocketAddr::new(addr, hostport.port),
+            if let Ok(addr) = IpAddr::from_str(&hostport.host()) {
+                connecting.push(Transport::connect(SocketAddr::new(addr, hostport.port()),
                                                    options.clone(),
                                                    &handle));
 
