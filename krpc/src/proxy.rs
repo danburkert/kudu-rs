@@ -28,6 +28,7 @@ use RpcFuture;
 use connection::Connection;
 use connector::Connector;
 
+/// `Proxy` is a handle to a remote server which allows clients to send and recieve RPCs.
 #[derive(Clone)]
 pub struct Proxy {
     sender: mpsc::Sender<Rpc>,
@@ -96,6 +97,61 @@ impl Proxy {
     }
 }
 
+/// `ConnectionState` is a state-machine which drives the `ProxyTask`.
+///
+/// ## States
+///
+/// - Quiesced
+///     The initial state. The `Quiesced` state is used when the proxy is not connected to the
+///     remote server. When the task has buffered RPCs, or when an RPC is received from the
+///     channel, the task transitions to `Connecting`.
+/// - Connecting
+///     The task is attempting to connect to the remote server. No RPCs are received from the RPC
+///     channel while connecting, so senders will (eventually) encounter backpressure.
+/// - `Connected`
+///     RPCs are received from the channel and forwarded to the connection, as connection capacity
+///     permits. If a fatal RPC error occurs, all non-failed in-flight RPCs are buffered
+///     internally, and the task transitions to `Quiesced`.
+/// - `Failed`
+///     When connecting to the remote server fails, the task is put into the `Failed` state. All
+///     buffered RPCs and RPCs received from the channel are immediately failed. After waiting for
+///     a backoff timeout period, the task will transition back to `Quiesced`.
+///
+/// ## State Diagram
+///
+/// ```
+///               +--------------+
+///               |              |
+///         +-----+    Failed    <-----+
+///         |     |              |     |
+///        e|     +--------------+     |c
+///         |                          |
+///         |                          |
+///  +------v-------+          +-------+------+
+///  |              |    a     |              |
+///  |   Quiesced   +---------->  Connecting  |
+///  |              |          |              |
+///  +------^-------+          +-------+------+
+///         |                          |
+///         |                          |
+///        d|     +--------------+     |b
+///         |     |              |     |
+///         +-----+  Connected   < ----+
+///               |              |
+///               +--------------+
+/// ```
+///
+/// ## State Transitions
+///
+/// |   | current state | event            | next state   | actions                          |
+/// | - | ------------- | ---------------- | ------------ | -------------------------------- |
+/// | a | `Quiesced`    | RPC enqueued     | `Connecting` | create a new `Connector`         |
+/// | b | `Connecting`  | connect succeeds | `Connected`  |                                  |
+/// | c | `Connecting`  | connect fails    | `Failed`     | fail buffered RPCs               |
+/// | d | `Connected`   | fatal RPC error  | `Quiesced`   | buffer non-failed in-flight RPCs |
+/// | e | `Failed`      | backoff elapsed  | `Quiesced`   |                                  |
+///
+/// TODO: add the Failed state.
 enum ConnectionState {
     Quiesced,
     Connecting(Connector),
@@ -112,6 +168,11 @@ impl fmt::Debug for ConnectionState {
     }
 }
 
+/// `ProxyTask` is a task which manages the lifecycle of TCP connections to a remote server.
+///
+///
+/// `ProxyTask` handles reconnections, buffering, will automatically attempt to reconnect to the
+/// remote server, buffer RPCs while reconnecting (when appropriate).
 struct ProxyTask {
     hostports: Box<[HostPort]>,
     options: Options,
