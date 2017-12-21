@@ -57,6 +57,13 @@ struct TabletServerProxy {
     inner: Arc<RwLock<InnerTabletServer>>,
 }
 
+
+struct InnerTabletServer {
+    id: TabletServerId,
+    rpc_addrs: Box<[HostPort]>,
+    proxy: krpc::Proxy,
+}
+
 impl TabletServerProxy {
 
     /// Creates a new `TabletServerProxy`.
@@ -95,19 +102,14 @@ impl TabletServerProxy {
 
     /// Updates the `InnerTabletServer` with refreshed information.
     fn update(&mut self, info: TsInfoPb) {
-        debug_assert_eq!(self.id, TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
-        let mut rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>();
-        if &*rpc_addrs != &*self.rpc_addrs {
-            self.rpc_addrs = rpc_addrs.into_boxed_slice();
+        let mut rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
+        let mut inner = self.inner.write();
+        debug_assert_eq!(inner.id, TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
+        if rpc_addrs != inner.rpc_addrs {
+            inner.rpc_addrs = rpc_addrs;
             unimplemented!("update proxy");
         }
     }
-}
-
-struct InnerTabletServer {
-    id: TabletServerId,
-    rpc_addrs: Box<[HostPort]>,
-    proxy: krpc::Proxy,
 }
 
 impl InnerTabletServer {
