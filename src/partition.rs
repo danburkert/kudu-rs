@@ -1,7 +1,9 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::fmt;
+use std::borrow;
 use std::cmp;
+use std::collections::HashMap;
+use std::fmt;
+use std::ops;
+use std::sync::Arc;
 
 use byteorder::{BigEndian, ByteOrder};
 use pb::{
@@ -166,6 +168,56 @@ impl fmt::Debug for PartitionKey {
     }
 }
 */
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
+pub(crate) struct PartitionKey(Box<[u8]>);
+
+impl PartitionKey {
+    pub fn empty() -> PartitionKey {
+        Vec::new().into()
+    }
+}
+
+impl ops::Deref for PartitionKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &*self.0
+    }
+}
+
+impl AsRef<[u8]> for PartitionKey {
+    fn as_ref(&self) -> &[u8] {
+        &*self.0
+    }
+}
+
+impl Into<PartitionKey> for Vec<u8> {
+    fn into(self) -> PartitionKey {
+        PartitionKey(self.into_boxed_slice())
+    }
+}
+
+impl Into<PartitionKey> for Box<[u8]> {
+    fn into(self) -> PartitionKey {
+        PartitionKey(self)
+    }
+}
+
+impl borrow::Borrow<[u8]> for PartitionKey {
+    fn borrow(&self) -> &[u8] {
+        &*self.0
+    }
+}
+
+pub(crate) trait IntoPartitionKey {
+    fn into_partition_key(&self) -> PartitionKey;
+}
+
+impl IntoPartitionKey for [u8] {
+    fn into_partition_key(&self) -> PartitionKey {
+        PartitionKey(self.to_owned().into())
+    }
+}
 
 #[derive(Clone)]
 pub struct Partition {

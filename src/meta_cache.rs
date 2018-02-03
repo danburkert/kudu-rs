@@ -39,6 +39,10 @@ use pb::master::{
     TabletLocationsPb,
 };
 use tablet::Tablet;
+use partition::{
+    IntoPartitionKey,
+    PartitionKey,
+};
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
@@ -48,20 +52,20 @@ fn backoff() -> Backoff {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Entry {
+pub(crate) enum Entry {
     Tablet(Tablet),
     NonCoveredRange {
-        partition_lower_bound: Vec<u8>,
-        partition_upper_bound: Vec<u8>,
+        partition_lower_bound: PartitionKey,
+        partition_upper_bound: PartitionKey,
     }
 }
 
 impl Entry {
 
-    fn non_covered_range(partition_lower_bound: Vec<u8>, partition_upper_bound: Vec<u8>) -> Entry {
+    fn non_covered_range(partition_lower_bound: PartitionKey, partition_upper_bound: PartitionKey) -> Entry {
         Entry::NonCoveredRange {
-            partition_lower_bound: partition_lower_bound,
-            partition_upper_bound: partition_upper_bound,
+            partition_lower_bound,
+            partition_upper_bound,
         }
     }
 
@@ -143,16 +147,16 @@ struct Inner {
     table: TableId,
     primary_key_schema: Schema,
     partition_schema: PartitionSchema,
-    entries: Mutex<BTreeMap<Vec<u8>, Entry>>,
+    entries: Mutex<BTreeMap<PartitionKey, Entry>>,
 }
 
 impl MetaCache {
 
-    pub fn new(table: TableId,
-               primary_key_schema: Schema,
-               partition_schema: PartitionSchema,
-               master: MasterProxy)
-               -> MetaCache {
+    pub(crate) fn new(table: TableId,
+                      primary_key_schema: Schema,
+                      partition_schema: PartitionSchema,
+                      master: MasterProxy)
+                      -> MetaCache {
         MetaCache {
             master: master,
             inner: Arc::new(Inner {
@@ -164,7 +168,7 @@ impl MetaCache {
         }
     }
 
-    pub fn entry(&self, partition_key: Vec<u8>) -> impl Future<Item=Entry, Error=Error> {
+    pub(crate) fn entry(&self, partition_key: PartitionKey) -> impl Future<Item=Entry, Error=Error> {
         self.extract(partition_key, Entry::clone)
     }
 
@@ -172,7 +176,7 @@ impl MetaCache {
         self.extract_cached(partition_key, &Entry::clone)
     }
 
-    pub fn tablet_id(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<TabletId>, Error=Error> {
+    pub(crate) fn tablet_id(&self, partition_key: PartitionKey) -> impl Future<Item=Option<TabletId>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 Some(tablet.id())
@@ -182,7 +186,7 @@ impl MetaCache {
         })
     }
 
-    pub fn tablet_leader(&self, partition_key: Vec<u8>) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
+    pub(crate) fn tablet_leader(&self, partition_key: PartitionKey) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 tablet.replicas()
@@ -196,7 +200,7 @@ impl MetaCache {
     }
 
     fn extract<Extractor, T>(&self,
-                             partition_key: Vec<u8>,
+                             partition_key: PartitionKey,
                              extractor: Extractor) -> impl Future<Item=T, Error=Error>
     where Extractor: Fn(&Entry) -> T + Send + Sync {
 
@@ -206,7 +210,7 @@ impl MetaCache {
 
         let request = Arc::new(GetTableLocationsRequestPb {
             table: self.inner.table.into(),
-            partition_key_start: Some(partition_key.clone()),
+            partition_key_start: Some((*partition_key).to_owned()),
             partition_key_end: None,
             max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
             replica_type_filter: None,
@@ -226,15 +230,15 @@ impl MetaCache {
                 }))
     }
 
-    pub fn table(&self) -> TableId {
+    pub(crate) fn table(&self) -> TableId {
         self.inner.table
     }
 
-    pub fn primary_key_schema(&self) -> &Schema {
+    pub(crate) fn primary_key_schema(&self) -> &Schema {
         &self.inner.primary_key_schema
     }
 
-    pub fn partition_schema(&self) -> &PartitionSchema {
+    pub(crate) fn partition_schema(&self) -> &PartitionSchema {
         &self.inner.partition_schema
     }
 
@@ -282,7 +286,7 @@ impl MetaCache {
         };
 
         for entry in entries {
-            left.insert(entry.partition_lower_bound().to_owned(), entry);
+            left.insert(entry.partition_lower_bound().into_partition_key(), entry);
         }
 
         left.append(&mut right);
@@ -303,22 +307,24 @@ impl MetaCache {
             // non-covered range, the previous tablet will be returned, and we did not
             // set an upper bound partition key on the request.
             let mut entries = Vec::with_capacity(1);
-            entries.push(Entry::non_covered_range(Vec::new(), Vec::new()));
+            entries.push(Entry::non_covered_range(PartitionKey::empty(), PartitionKey::empty()));
             return Ok(entries);
         }
 
         let tablet_count = tablets.len();
         let mut entries = Vec::with_capacity(tablets.len());
-        let mut last_upper_bound: Vec<u8> = tablets[0].partition
-                                                      .as_ref()
-                                                      .expect_field("TabletLocationsPb", "partition")?
-                                                      .partition_key_start()
-                                                      .to_owned();
+        let mut last_upper_bound: PartitionKey = tablets[0].partition
+                                                           .as_ref()
+                                                           .expect_field("TabletLocationsPb", "partition")?
+                                                           .partition_key_start()
+                                                           .to_owned()
+                                                           .into();
 
         if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
-            entries.push(Entry::non_covered_range(Vec::new(), last_upper_bound.clone()));
+            entries.push(Entry::non_covered_range(PartitionKey::empty(),
+                                                  last_upper_bound.clone()));
         }
 
         for tablet in tablets {
@@ -327,21 +333,21 @@ impl MetaCache {
                                          tablet)?;
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
-                                                      tablet.partition().lower_bound_key().to_owned()));
+                                                      tablet.partition().lower_bound_key().into_partition_key()));
             }
-            last_upper_bound = tablet.partition().upper_bound_key().to_owned();
+            last_upper_bound = tablet.partition().upper_bound_key().into_partition_key();
             entries.push(Entry::Tablet(tablet));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
-            entries.push(Entry::non_covered_range(last_upper_bound, Vec::new()));
+            entries.push(Entry::non_covered_range(last_upper_bound, PartitionKey::empty()));
         }
 
         trace!("{:?}: discovered entries: {:?}", self, entries);
         Ok(entries)
     }
 
-    pub fn clear(&self) {
+    pub(crate) fn clear(&self) {
         self.inner.entries.lock().clear()
     }
 }

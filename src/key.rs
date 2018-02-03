@@ -14,9 +14,10 @@ use Result;
 use Row;
 use Schema;
 use Value;
+use partition::PartitionKey;
 
 /// Murmur2 hash implementation returning 64-bit hashes.
-pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
+pub(crate) fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
     const M: u64 = 0xc6a4_a793_5bd1_e995;
     const R: u8 = 47;
 
@@ -49,28 +50,28 @@ pub fn murmur2_64(mut data: &[u8], seed: u64) -> u64 {
     h
 }
 
-pub fn encode_primary_key(row: &Row) -> Result<Vec<u8>> {
+pub(crate) fn encode_primary_key(row: &Row) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     encode_columns(row, 0..row.schema().num_primary_key_columns(), &mut buf)?;
     Ok(buf)
 }
 
-pub fn encode_partition_key(partition_schema: &PartitionSchema, row: &Row) -> Result<Vec<u8>> {
+pub(crate) fn encode_partition_key(partition_schema: &PartitionSchema, row: &Row) -> Result<PartitionKey> {
     let mut buf = Vec::new();
     for hash_schema in partition_schema.hash_partition_schemas() {
         encode_hash_partition_key(hash_schema, row, &mut buf)?;
     }
     encode_range_partition_key(partition_schema.range_partition_schema(), row, &mut buf)?;
-    Ok(buf)
+    Ok(buf.into())
 }
 
-pub fn encode_range_partition_key(range_schema: &RangePartitionSchema,
+pub(crate) fn encode_range_partition_key(range_schema: &RangePartitionSchema,
                                   row: &Row,
                                   buf: &mut Vec<u8>) -> Result<()> {
     encode_columns(row, range_schema.columns().iter().cloned(), buf)
 }
 
-pub fn encode_hash_partition_key(hash_schema: &HashPartitionSchema,
+pub(crate) fn encode_hash_partition_key(hash_schema: &HashPartitionSchema,
                                  row: &Row,
                                  buf: &mut Vec<u8>) -> Result<()> {
     let len = buf.len();
@@ -119,7 +120,7 @@ fn encode_binary(value: &[u8], is_last: bool, buf: &mut Vec<u8>) {
     }
 }
 
-pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row<'static>> {
+pub(crate) fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row<'static>> {
     let mut row = schema.new_row();
 
     let num_primary_key_columns = row.schema().num_primary_key_columns();
@@ -134,9 +135,9 @@ pub fn decode_primary_key(schema: &Schema, mut key: &[u8]) -> Result<Row<'static
     Ok(row)
 }
 
-pub fn decode_range_partition_key(schema: &Schema,
-                                  range_partition_schema: &RangePartitionSchema,
-                                  mut key: &[u8]) -> Result<Row<'static>> {
+pub(crate) fn decode_range_partition_key(schema: &Schema,
+                                         range_partition_schema: &RangePartitionSchema,
+                                         mut key: &[u8]) -> Result<Row<'static>> {
     let mut row = schema.new_row();
     if range_partition_schema.columns().is_empty() { return Ok(row) }
     let last_idx = *range_partition_schema.columns().last().unwrap();
@@ -356,7 +357,7 @@ fn is_cell_incremented(lower: &Row, upper: &Row, idx: usize) -> bool {
     }
 }
 
-pub fn is_row_incremented(lower: &Row, upper: &Row, idxs: &[usize]) -> bool {
+pub(crate) fn is_row_incremented(lower: &Row, upper: &Row, idxs: &[usize]) -> bool {
     let mut equals = false;
     for &idx in idxs.iter().rev() {
         if equals {
