@@ -3,6 +3,7 @@ use std::collections::{
     hash_map,
 };
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use krpc;
@@ -11,11 +12,12 @@ use parking_lot::{
     RwLock,
 };
 
+use Error;
 use HostPort;
 use Options;
 use TabletServerId;
+use pb::consensus::raft_peer_pb::Role;
 use pb::master::TsInfoPb;
-use Error;
 
 #[derive(Clone)]
 pub struct ProxyCache {
@@ -112,12 +114,27 @@ impl TabletServerProxy {
     }
 }
 
-impl InnerTabletServer {
+struct RemoteReplica {
+    tserver: TabletServerProxy,
+    role: Role,
 }
 
 struct RemoteTablet {
+    stale: AtomicBool,
+    replicas: Vec<RemoteReplica>,
 }
 
-struct RemoteReplica {
-    tserver: TabletServerProxy,
+struct TabletServers {
+    tservers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
+}
+
+impl TabletServers {
+
+    fn tablet_server(&self, id: &TabletServerId) -> krpc::Proxy {
+        self.tservers.lock()[id].clone()
+    }
+
+    fn update_tablet_server(&self) {
+        unimplemented!()
+    }
 }
