@@ -14,9 +14,11 @@ use std::time::Instant;
 use futures::{
     Future,
     Poll,
+    Sink,
     future,
 };
 use futures::future::Either;
+use futures::sync::{mpsc, oneshot};
 use parking_lot::Mutex;
 
 use Error;
@@ -29,7 +31,6 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
-use backoff::Backoff;
 use master::MasterProxy;
 use pb::ExpectField;
 use pb::master::{
@@ -46,26 +47,21 @@ use partition::{
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
-/// Backoff used for retrying after a `TABLET_NOT_RUNNING` error.
-fn backoff() -> Backoff {
-    Backoff::with_duration_range(100, 60_000_000)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Entry {
     Tablet(Tablet),
     NonCoveredRange {
-        partition_lower_bound: PartitionKey,
-        partition_upper_bound: PartitionKey,
+        lower_bound: PartitionKey,
+        upper_bound: PartitionKey,
     }
 }
 
 impl Entry {
 
-    fn non_covered_range(partition_lower_bound: PartitionKey, partition_upper_bound: PartitionKey) -> Entry {
+    fn non_covered_range(lower_bound: PartitionKey, upper_bound: PartitionKey) -> Entry {
         Entry::NonCoveredRange {
-            partition_lower_bound,
-            partition_upper_bound,
+            lower_bound,
+            upper_bound,
         }
     }
 
@@ -76,34 +72,34 @@ impl Entry {
         }
     }
 
-    fn partition_lower_bound(&self) -> &[u8] {
+    fn lower_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.partition().lower_bound_key(),
-            Entry::NonCoveredRange { ref partition_lower_bound, .. } => partition_lower_bound,
+            Entry::NonCoveredRange { ref lower_bound, .. } => lower_bound,
         }
     }
 
-    fn partition_upper_bound(&self) -> &[u8] {
+    fn upper_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.partition().upper_bound_key(),
-            Entry::NonCoveredRange { ref partition_upper_bound, .. } => partition_upper_bound,
+            Entry::NonCoveredRange { ref upper_bound, .. } => upper_bound,
         }
     }
 
     fn contains_partition_key(&self, partition_key: &[u8]) -> bool {
-        let upper_bound = self.partition_upper_bound();
+        let upper_bound = self.upper_bound();
         (upper_bound.is_empty() || partition_key < upper_bound)
-            && partition_key >= self.partition_lower_bound()
+            && partition_key >= self.lower_bound()
     }
 
     /// Returns `Ordering::Equal` if the entries intersect, `Ordering::Less` if this entry falls
     /// before the other entry, or `Ordering::Greater` if this entry falls after the other entry.
     fn cmp_entry(&self, other: &Entry) -> Ordering {
-        if !self.partition_upper_bound().is_empty() &&
-            self.partition_upper_bound() <= other.partition_lower_bound() {
+        if !self.upper_bound().is_empty() &&
+            self.upper_bound() <= other.lower_bound() {
             Ordering::Less
-        } else if !other.partition_upper_bound().is_empty() &&
-                   other.partition_upper_bound() <= self.partition_lower_bound() {
+        } else if !other.upper_bound().is_empty() &&
+                   other.upper_bound() <= self.lower_bound() {
             Ordering::Greater
         } else {
             Ordering::Equal
@@ -122,10 +118,10 @@ impl Entry {
                                a.partition().upper_bound_key() == b.partition().upper_bound_key()));
                 a.id() == b.id()
             },
-            (&Entry::NonCoveredRange { partition_lower_bound: ref a_lower,
-                                       partition_upper_bound: ref a_upper },
-             &Entry::NonCoveredRange { partition_lower_bound: ref b_lower,
-                                       partition_upper_bound: ref b_upper }) => {
+            (&Entry::NonCoveredRange { lower_bound: ref a_lower,
+                                       upper_bound: ref a_upper },
+             &Entry::NonCoveredRange { lower_bound: ref b_lower,
+                                       upper_bound: ref b_upper }) => {
                 a_lower == b_lower && a_upper == b_upper
             },
             _ => false,
@@ -139,15 +135,8 @@ impl Entry {
 ///       proxy.
 #[derive(Clone)]
 pub(crate) struct MetaCache {
-    master: MasterProxy,
     inner: Arc<Inner>,
-}
-
-struct Inner {
-    table: TableId,
-    primary_key_schema: Schema,
-    partition_schema: PartitionSchema,
-    entries: Mutex<BTreeMap<PartitionKey, Entry>>,
+    sender: mpsc::Sender<(PartitionKey, oneshot::Sender<Entry>)>,
 }
 
 impl MetaCache {
@@ -157,26 +146,27 @@ impl MetaCache {
                       partition_schema: PartitionSchema,
                       master: MasterProxy)
                       -> MetaCache {
+        let (sender, receiver) = mpsc::channel(8);
         MetaCache {
-            master: master,
             inner: Arc::new(Inner {
                 table: table,
                 primary_key_schema: primary_key_schema,
                 partition_schema: partition_schema,
                 entries: Mutex::new(BTreeMap::new()),
-            })
+            }),
+            sender,
         }
     }
 
-    pub(crate) fn entry(&self, partition_key: PartitionKey) -> impl Future<Item=Entry, Error=Error> {
+    pub(crate) fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> {
         self.extract(partition_key, Entry::clone)
     }
 
     fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
-        self.extract_cached(partition_key, &Entry::clone)
+        self.inner.extract(partition_key, &Entry::clone)
     }
 
-    pub(crate) fn tablet_id(&self, partition_key: PartitionKey) -> impl Future<Item=Option<TabletId>, Error=Error> {
+    pub(crate) fn tablet_id(&self, partition_key: &[u8]) -> impl Future<Item=Option<TabletId>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 Some(tablet.id())
@@ -186,7 +176,7 @@ impl MetaCache {
         })
     }
 
-    pub(crate) fn tablet_leader(&self, partition_key: PartitionKey) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
+    pub(crate) fn tablet_leader(&self, partition_key: &[u8]) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 tablet.replicas()
@@ -200,14 +190,24 @@ impl MetaCache {
     }
 
     fn extract<Extractor, T>(&self,
-                             partition_key: PartitionKey,
+                             partition_key: &[u8],
                              extractor: Extractor) -> impl Future<Item=T, Error=Error>
     where Extractor: Fn(&Entry) -> T + Send + Sync {
-
-        if let Some(value) = self.extract_cached(&*partition_key, &extractor) {
+        if let Some(value) = self.inner.extract(partition_key, &extractor) {
             return Either::A(future::ok(value));
         };
 
+        let (sender, receiver) = oneshot::channel();
+        Either::B(self.sender
+                      // TODO: this clone is disabling backpressure.
+                      .clone()
+                      .send((partition_key.into_partition_key(), sender))
+                      .map_err(|_| panic!("MetaCacheTask dropped"))
+                      .and_then(move |_| receiver)
+                      .map_err(|_| panic!("MetaCacheTask dropped"))
+                      .map(move |entry| extractor(&entry)))
+
+        /*
         let request = Arc::new(GetTableLocationsRequestPb {
             table: self.inner.table.into(),
             partition_key_start: Some((*partition_key).to_owned()),
@@ -217,17 +217,8 @@ impl MetaCache {
         });
         let call = MasterService::get_table_locations(request,
                                                       Instant::now() + self.master.options().admin_timeout);
+        */
 
-        let mut meta_cache = self.clone();
-        Either::B(
-            meta_cache
-                .master
-                .send(call)
-                .and_then(move |response: GetTableLocationsResponsePb| {
-                    meta_cache.add_tablet_locations(&*partition_key,
-                                                    response.tablet_locations,
-                                                    &extractor)
-                }))
     }
 
     pub(crate) fn table(&self) -> TableId {
@@ -242,13 +233,35 @@ impl MetaCache {
         &self.inner.partition_schema
     }
 
+    pub(crate) fn clear(&self) {
+        self.inner.entries.lock().clear()
+    }
+}
+
+impl fmt::Debug for MetaCache {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MetaCache")
+         .field("table", &self.table())
+         .finish()
+    }
+}
+
+struct Inner {
+    table: TableId,
+    primary_key_schema: Schema,
+    partition_schema: PartitionSchema,
+    entries: Mutex<BTreeMap<PartitionKey, Entry>>,
+}
+
+impl Inner {
+
     fn add_tablet_locations<Extractor, T>(&self,
                                           partition_key: &[u8],
                                           tablets: Vec<TabletLocationsPb>,
                                           extractor: Extractor) -> Result<T>
     where Extractor: Fn(&Entry) -> T + Send + Sync {
         let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
-        let index = match entries.binary_search_by_key(&partition_key, |entry| entry.partition_lower_bound()) {
+        let index = match entries.binary_search_by_key(&partition_key, |entry| entry.lower_bound()) {
             Ok(index) => index,
             Err(index) => index - 1,
         };
@@ -259,9 +272,9 @@ impl MetaCache {
         Ok(value)
     }
 
-    fn extract_cached<Extractor, T>(&self, partition_key: &[u8], extractor: &Extractor) -> Option<T>
+    fn extract<Extractor, T>(&self, partition_key: &[u8], extractor: &Extractor) -> Option<T>
     where Extractor: Fn(&Entry) -> T {
-        let entries = self.inner.entries.lock();
+        let entries = self.entries.lock();
         match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
             Some(ref entry) if entry.1.contains_partition_key(partition_key) => Some(extractor(&entry.1)),
             _ => None,
@@ -269,12 +282,12 @@ impl MetaCache {
     }
 
     fn splice_entries(&self, entries: Vec<Entry>) {
-        let mut left = self.inner.entries.lock();
+        let mut left = self.entries.lock();
 
         // NLL hack.
         let mut right = {
-            let lower_bound = entries[0].partition_lower_bound();
-            let upper_bound = entries[entries.len() - 1].partition_lower_bound();
+            let lower_bound = entries[0].lower_bound();
+            let upper_bound = entries[entries.len() - 1].lower_bound();
 
             let mut right = left.split_off(lower_bound);
 
@@ -286,16 +299,16 @@ impl MetaCache {
         };
 
         for entry in entries {
-            left.insert(entry.partition_lower_bound().into_partition_key(), entry);
+            left.insert(entry.lower_bound().into_partition_key(), entry);
         }
 
         left.append(&mut right);
     }
 
-    /// Converts the results of a `GetTableLocations` RPC to a set of entries for the meta cache.
-    /// The entries are guaranteed to be contiguous in the partition key space. The partition key
-    /// must match the partition key of the get table locations request. The request must not
-    /// have an end key.
+    /// Converts the results of a `GetTableLocations` RPC to a set of meta cache entries. The
+    /// entries are guaranteed to be contiguous in the partition key space. The partition key must
+    /// match the partition key of the get table locations request. The request must not have an
+    /// end key.
     fn tablet_locations_to_entries(&self,
                                    partition_key: &[u8],
                                    tablets: Vec<TabletLocationsPb>)
@@ -306,30 +319,26 @@ impl MetaCache {
             // the master guarantees that the if the partition key falls in a
             // non-covered range, the previous tablet will be returned, and we did not
             // set an upper bound partition key on the request.
-            let mut entries = Vec::with_capacity(1);
-            entries.push(Entry::non_covered_range(PartitionKey::empty(), PartitionKey::empty()));
-            return Ok(entries);
+            return Ok(vec![Entry::non_covered_range(PartitionKey::empty(), PartitionKey::empty())]);
         }
 
         let tablet_count = tablets.len();
         let mut entries = Vec::with_capacity(tablets.len());
-        let mut last_upper_bound: PartitionKey = tablets[0].partition
-                                                           .as_ref()
-                                                           .expect_field("TabletLocationsPb", "partition")?
-                                                           .partition_key_start()
-                                                           .to_owned()
-                                                           .into();
+        let mut last_upper_bound = tablets[0].partition
+                                             .as_ref()
+                                             .expect_field("TabletLocationsPb", "partition")?
+                                             .partition_key_start()
+                                             .into_partition_key();
 
         if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
-            entries.push(Entry::non_covered_range(PartitionKey::empty(),
-                                                  last_upper_bound.clone()));
+            entries.push(Entry::non_covered_range(PartitionKey::empty(), last_upper_bound.clone()));
         }
 
         for tablet in tablets {
-            let tablet = Tablet::from_pb(&self.inner.primary_key_schema,
-                                         self.inner.partition_schema.clone(),
+            let tablet = Tablet::from_pb(&self.primary_key_schema,
+                                         self.partition_schema.clone(),
                                          tablet)?;
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
@@ -346,17 +355,28 @@ impl MetaCache {
         trace!("{:?}: discovered entries: {:?}", self, entries);
         Ok(entries)
     }
+}
 
-    pub(crate) fn clear(&self) {
-        self.inner.entries.lock().clear()
+impl fmt::Debug for Inner {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MetaCache")
+         .field("table", &self.table)
+         .finish()
     }
 }
 
-impl fmt::Debug for MetaCache {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("MetaCache")
-         .field("table", &self.inner.table)
-         .finish()
+struct MetaCacheTask {
+    inner: Arc<Inner>,
+    master: MasterProxy,
+    receiver: mpsc::Receiver<(PartitionKey, oneshot::Sender<Entry>)>,
+}
+
+impl Future for MetaCacheTask {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        unimplemented!()
     }
 }
 
@@ -411,8 +431,8 @@ mod tests {
             let entry = reactor.run(cache.entry(vec![])).expect("entry");
 
             assert!(entry.is_tablet());
-            assert_eq!(b"", entry.partition_lower_bound());
-            assert_eq!(b"", entry.partition_upper_bound());
+            assert_eq!(b"", entry.lower_bound());
+            assert_eq!(b"", entry.upper_bound());
 
             let entries = cache.inner.entries.lock().clone();
             assert_eq!(1, entries.len());
@@ -427,8 +447,8 @@ mod tests {
             let entry = reactor.run(cache.entry(b"some-key".as_ref().to_owned())).expect("entry");
 
             assert!(entry.is_tablet());
-            assert_eq!(b"", entry.partition_lower_bound());
-            assert_eq!(b"", entry.partition_upper_bound());
+            assert_eq!(b"", entry.lower_bound());
+            assert_eq!(b"", entry.upper_bound());
         }
     }
 
@@ -456,8 +476,8 @@ mod tests {
         let first = reactor.run(cache.entry(vec![0, 0, 0, 0, 1])).expect("entry");
 
         assert!(first.is_tablet());
-        assert_eq!(b"", first.partition_lower_bound());
-        assert_eq!(vec![0, 0, 0, 1], first.partition_upper_bound());
+        assert_eq!(b"", first.lower_bound());
+        assert_eq!(vec![0, 0, 0, 1], first.upper_bound());
 
         let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
         assert_eq!(10, entries.len());
@@ -567,8 +587,8 @@ mod tests {
                                                         (b"s", b"",  false) ];
 
         for (entry, &(lower, upper, covered)) in entries.iter().zip(expected.iter()) {
-            assert_eq!(lower, entry.partition_lower_bound());
-            assert_eq!(upper, entry.partition_upper_bound());
+            assert_eq!(lower, entry.lower_bound());
+            assert_eq!(upper, entry.upper_bound());
             assert_eq!(covered, entry.is_tablet());
         }
 

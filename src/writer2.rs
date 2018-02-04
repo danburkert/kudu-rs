@@ -122,7 +122,7 @@ impl Writer {
             },
         };
 
-        let mut tablet_id = self.meta_cache.tablet_id(partition_key);
+        let mut tablet_id = self.meta_cache.tablet_id(&*partition_key);
         if !self.operations_in_lookup.is_empty() {
             self.operations_in_lookup.push(op, Box::new(tablet_id));
             self.poll_operations_in_lookup();
