@@ -12,12 +12,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::{
+    Async,
     Future,
     Poll,
     Sink,
-    future,
+    Stream,
 };
-use futures::future::Either;
+use futures::future::{self, Either, Map};
 use futures::sync::{mpsc, oneshot};
 use parking_lot::Mutex;
 
@@ -31,7 +32,10 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
-use master::MasterProxy;
+use master::{
+    MasterProxy,
+    MasterFuture,
+};
 use pb::ExpectField;
 use pb::master::{
     MasterService,
@@ -129,6 +133,11 @@ impl Entry {
     }
 }
 
+/*
+type MetaCacheFuture<T, Extrator> = Either<FutureResult<T, Error>,
+                                           Map<T, Extractor>>;
+*/
+
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
 ///     - Limit the number of concurrent lookups, if it's not already being done by the master
@@ -136,7 +145,7 @@ impl Entry {
 #[derive(Clone)]
 pub(crate) struct MetaCache {
     inner: Arc<Inner>,
-    sender: mpsc::Sender<(PartitionKey, oneshot::Sender<Entry>)>,
+    sender: mpsc::UnboundedSender<(PartitionKey, oneshot::Sender<Result<Entry>>)>,
 }
 
 impl MetaCache {
@@ -146,23 +155,31 @@ impl MetaCache {
                       partition_schema: PartitionSchema,
                       master: MasterProxy)
                       -> MetaCache {
-        let (sender, receiver) = mpsc::channel(8);
-        MetaCache {
-            inner: Arc::new(Inner {
-                table: table,
-                primary_key_schema: primary_key_schema,
-                partition_schema: partition_schema,
-                entries: Mutex::new(BTreeMap::new()),
-            }),
-            sender,
-        }
+        let (sender, receiver) = mpsc::unbounded();
+        let inner = Arc::new(Inner {
+            table: table,
+            primary_key_schema: primary_key_schema,
+            partition_schema: partition_schema,
+            entries: Mutex::new(BTreeMap::new()),
+        });
+
+        let task = MetaCacheTask {
+            inner: inner.clone(),
+            master: master.clone(),
+            receiver,
+            requests: BTreeMap::new(),
+            in_flight: None,
+        };
+
+        master.options().remote.spawn(move |_| task);
+        MetaCache { inner, sender, }
     }
 
     pub(crate) fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> {
         self.extract(partition_key, Entry::clone)
     }
 
-    fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
+    pub(crate) fn cached_entry(&self, partition_key: &[u8]) -> Option<Entry> {
         self.inner.extract(partition_key, &Entry::clone)
     }
 
@@ -189,36 +206,23 @@ impl MetaCache {
         })
     }
 
-    fn extract<Extractor, T>(&self,
-                             partition_key: &[u8],
-                             extractor: Extractor) -> impl Future<Item=T, Error=Error>
-    where Extractor: Fn(&Entry) -> T + Send + Sync {
+    fn extract<T>(&self,
+                  partition_key: &[u8],
+                  extractor: fn(&Entry) -> T)
+                  -> impl Future<Item=T, Error=Error> {
         if let Some(value) = self.inner.extract(partition_key, &extractor) {
             return Either::A(future::ok(value));
         };
 
-        let (sender, receiver) = oneshot::channel();
-        Either::B(self.sender
-                      // TODO: this clone is disabling backpressure.
-                      .clone()
-                      .send((partition_key.into_partition_key(), sender))
-                      .map_err(|_| panic!("MetaCacheTask dropped"))
-                      .and_then(move |_| receiver)
-                      .map_err(|_| panic!("MetaCacheTask dropped"))
-                      .map(move |entry| extractor(&entry)))
+        let partition_key = partition_key.into_partition_key();
+        let (send, recv) = oneshot::channel();
 
-        /*
-        let request = Arc::new(GetTableLocationsRequestPb {
-            table: self.inner.table.into(),
-            partition_key_start: Some((*partition_key).to_owned()),
-            partition_key_end: None,
-            max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
-            replica_type_filter: None,
-        });
-        let call = MasterService::get_table_locations(request,
-                                                      Instant::now() + self.master.options().admin_timeout);
-        */
-
+        self.sender.unbounded_send((partition_key, send));
+        Either::B(recv.then(move |result| match result {
+            Ok(Ok(entry)) => Ok(extractor(&entry)),
+            Ok(Err(error)) => Err(error),
+            Err(_) => unreachable!("MetaCacheTask cancelled"),
+        }))
     }
 
     pub(crate) fn table(&self) -> TableId {
@@ -254,6 +258,17 @@ struct Inner {
 }
 
 impl Inner {
+
+    fn add_tablet_locations_2(&self,
+                              partition_key: &[u8],
+                              tablets: Vec<TabletLocationsPb>)
+                              -> Result<(PartitionKey, PartitionKey)> {
+        let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
+        let lower_bound = entries[0].lower_bound().into_partition_key();
+        let upper_bound = entries[entries.len() - 1].upper_bound().into_partition_key();
+        self.splice_entries(entries);
+        Ok((lower_bound, upper_bound))
+    }
 
     fn add_tablet_locations<Extractor, T>(&self,
                                           partition_key: &[u8],
@@ -366,9 +381,16 @@ impl fmt::Debug for Inner {
 }
 
 struct MetaCacheTask {
+    /// Cache of tablet entries.
     inner: Arc<Inner>,
+    /// Master connection.
     master: MasterProxy,
-    receiver: mpsc::Receiver<(PartitionKey, oneshot::Sender<Entry>)>,
+    /// Queue of incoming requests.
+    receiver: mpsc::UnboundedReceiver<(PartitionKey, oneshot::Sender<Result<Entry>>)>,
+    /// Collection of outstanding entry requests, ordered by partition key.
+    requests: BTreeMap<PartitionKey, Vec<oneshot::Sender<Result<Entry>>>>,
+
+    in_flight: Option<(PartitionKey, MasterFuture<GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
 }
 
 impl Future for MetaCacheTask {
@@ -376,7 +398,88 @@ impl Future for MetaCacheTask {
     type Error = ();
 
     fn poll(&mut self) -> Poll<(), ()> {
-        unimplemented!()
+        loop {
+            // Step 1: Receive as many requests as possible, adding them to the requests map. Since
+            // requests are asynchronous we also take the opportunity to check that they haven't
+            // been cancelled, and haven't already been fulfilled.
+            while let Async::Ready(item) = self.receiver.poll()? {
+                match item {
+                    Some((partition_key, sender)) => {
+                        if sender.is_canceled() {
+                            continue;
+                        }
+                        if let Some(entry) = self.inner.extract(&*partition_key, &Entry::clone) {
+                            let _ = sender.send(Ok(entry));
+                        } else {
+                            self.requests
+                                .entry(partition_key)
+                                .or_insert_with(Vec::new)
+                                .push(sender);
+                        }
+                    },
+                    // There are no more handles to the MetaCache, so shutdown.
+                    None => return Ok(Async::Ready(())),
+                }
+            }
+
+            // Step 2: Check if the currently outstanding tablet locations lookup is complete.
+            if let Some((partition_key, mut in_flight)) = self.in_flight.take() {
+                match in_flight.poll() {
+                    Ok(Async::Ready(response)) => {
+                        // TODO: error handling
+                        let entries = self.inner.tablet_locations_to_entries(&*partition_key, response.tablet_locations).unwrap();
+                        let mut requests = self.requests.split_off(entries[0].lower_bound());
+                        { // NLL hack
+                            let upper_bound = entries[entries.len() - 1].upper_bound();
+                            if !upper_bound.is_empty() {
+                                self.requests.extend(requests.split_off(upper_bound));
+                            }
+                        }
+
+                        for (partition_key, senders) in requests {
+                            let index = match entries.binary_search_by_key(&&*partition_key, |entry| entry.lower_bound()) {
+                                Ok(index) => index,
+                                Err(index) => index - 1,
+                            };
+                            debug_assert!(entries[index].contains_partition_key(&*partition_key));
+                            for sender in senders {
+                                let _ = sender.send(Ok(entries[index].clone()));
+                            }
+                        }
+
+                        self.inner.splice_entries(entries);
+                    }
+                    Ok(Async::NotReady) => {
+                        self.in_flight = Some((partition_key, in_flight));
+                        return Ok(Async::NotReady);
+                    },
+                    Err(error) => {
+                        for sender in self.requests.remove(&partition_key).unwrap_or_default() {
+                            let _ = sender.send(Err(error.clone()));
+                        }
+                    },
+                }
+            }
+
+            // Step 3: kick off another tablet locations lookup if necessary.
+            match self.requests.keys().next() {
+                Some(partition_key) => {
+                    let request = Arc::new(GetTableLocationsRequestPb {
+                        table: self.inner.table.into(),
+                        partition_key_start: Some(partition_key.as_ref().to_owned()),
+                        partition_key_end: None,
+                        max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
+                        replica_type_filter: None,
+                    });
+                    let call = MasterService::get_table_locations(
+                        request, Instant::now() + self.master.options().admin_timeout);
+                    let resp = self.master.send(call);
+
+                    self.in_flight = Some((partition_key.clone(), resp));
+                },
+                None => return Ok(Async::NotReady),
+            }
+        }
     }
 }
 
@@ -428,7 +531,7 @@ mod tests {
         }
 
         {
-            let entry = reactor.run(cache.entry(vec![])).expect("entry");
+            let entry = reactor.run(cache.entry(&[])).expect("entry");
 
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
@@ -444,7 +547,7 @@ mod tests {
 
         cache.clear();
         {
-            let entry = reactor.run(cache.entry(b"some-key".as_ref().to_owned())).expect("entry");
+            let entry = reactor.run(cache.entry(b"some-key")).expect("entry");
 
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
@@ -473,7 +576,7 @@ mod tests {
         let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
 
-        let first = reactor.run(cache.entry(vec![0, 0, 0, 0, 1])).expect("entry");
+        let first = reactor.run(cache.entry(&[0, 0, 0, 0, 1])).expect("entry");
 
         assert!(first.is_tablet());
         assert_eq!(b"", first.lower_bound());
@@ -487,7 +590,7 @@ mod tests {
         assert!(cache.cached_entry(b"foo").is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
 
-        let last = reactor.run(cache.entry(vec![0, 0, 0, 11])).expect("entry");
+        let last = reactor.run(cache.entry(&[0, 0, 0, 11])).expect("entry");
 
         let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
 
@@ -498,10 +601,10 @@ mod tests {
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10, 5]).is_none());
 
-        reactor.run(cache.entry(vec![0, 0, 0, 9])).expect("entry");
+        reactor.run(cache.entry(&[0, 0, 0, 9])).expect("entry");
         assert_eq!(11, cache.inner.entries.lock().len());
 
-        reactor.run(cache.entry(vec![0, 0, 0, 10])).expect("entry");
+        reactor.run(cache.entry(&[0, 0, 0, 10])).expect("entry");
         assert_eq!(12, cache.inner.entries.lock().len());
     }
 
@@ -526,12 +629,10 @@ mod tests {
         let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
 
-        reactor.run(cache.entry(vec![0, 0, 0, 0]).join(cache.entry(vec![0, 0, 0, 9])))
+        reactor.run(cache.entry(&[0, 0, 0, 0]).join(cache.entry(&[0, 0, 0, 9])))
                .expect("entry");
         let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
-        // Technically this could be 10 if the first request comes back before the second is
-        // initiated, but in practice this doesn't really happen.
-        assert!(entries.len() == 12);
+        assert_eq!(entries.len(), 10);
     }
 
     #[test]
@@ -575,7 +676,7 @@ mod tests {
         let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
         let cache = table.meta_cache().clone();
 
-        reactor.run(cache.entry(vec![0])).expect("entry");
+        reactor.run(cache.entry(&[0])).expect("entry");
         let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
         assert_eq!(6, entries.len());
 
@@ -601,7 +702,7 @@ mod tests {
 
         for (key, expected_entries) in cases {
             cache.clear();
-            reactor.run(cache.entry(key.to_owned())).expect("entry");
+            reactor.run(cache.entry(key)).expect("entry");
 
             let new_entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
 

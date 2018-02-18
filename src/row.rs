@@ -60,11 +60,10 @@ impl <'data> Row<'data> {
         }
     }
 
-    pub unsafe fn set_unchecked<'a, V>(&mut self,
-                                       idx: usize,
-                                       value: V)
-                                       -> &mut Self where V: Value<'data> {
-        debug_assert!(self.check_column_for_write::<V>(idx).is_ok());
+    pub unsafe fn set_unchecked<V>(&mut self,
+                                   idx: usize,
+                                   value: V)
+                                   -> &mut Self where V: Value<'data> {
         bitmap::set(&mut *self.data, idx);
 
         let bitmap_len = self.schema.bitmap_len();
