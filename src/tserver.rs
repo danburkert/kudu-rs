@@ -3,7 +3,6 @@ use std::collections::{
     hash_map,
 };
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use krpc;
 use parking_lot::{
@@ -15,7 +14,6 @@ use Error;
 use HostPort;
 use Options;
 use TabletServerId;
-use pb::consensus::raft_peer_pb::Role;
 use pb::master::TsInfoPb;
 
 #[derive(Clone)]
@@ -54,20 +52,13 @@ impl ProxyCache {
     }
 }
 
-struct TabletServerProxy {
-    inner: Arc<RwLock<InnerTabletServer>>,
-}
+#[derive(Clone)]
+pub struct TabletServer(Arc<(TabletServerId, RwLock<(Box<[HostPort]>, krpc::Proxy)>)>);
 
-struct InnerTabletServer {
-    id: TabletServerId,
-    rpc_addrs: Box<[HostPort]>,
-    proxy: krpc::Proxy,
-}
+impl TabletServer {
 
-impl TabletServerProxy {
-
-    /// Creates a new `TabletServerProxy`.
-    fn new(options: &Options, info: TsInfoPb) -> Result<TabletServerProxy, Error> {
+    /// Creates a new `TabletServer`.
+    pub(crate) fn new(options: &Options, info: TsInfoPb) -> Result<TabletServer, Error> {
         let id = TabletServerId::parse_bytes(&info.permanent_uuid)?;
         let rpc_addrs = info.rpc_addresses
                             .into_iter()
@@ -80,59 +71,35 @@ impl TabletServerProxy {
                                        options.threadpool.clone(),
                                        &options.remote);
 
-        Ok(TabletServerProxy {
-            inner: Arc::new(RwLock::new(InnerTabletServer { id, rpc_addrs, proxy }))
-        })
+        Ok(TabletServer(Arc::new((id, RwLock::new((rpc_addrs, proxy))))))
     }
 
     /// Returns the tablet server ID.
-    fn id(&self) -> TabletServerId {
-        self.inner.read().id
+    pub fn id(&self) -> TabletServerId {
+        (self.0).0
     }
 
     /// Returns the tablet server RPC addresses.
-    fn rpc_addrs(&self) -> Box<[HostPort]> {
-        self.inner.read().rpc_addrs.clone()
+    pub fn rpc_addrs(&self) -> Box<[HostPort]> {
+        (self.0).1.read().0.clone()
     }
 
     /// Returns the tablet server KRPC proxy.
-    fn proxy(&self) -> krpc::Proxy {
-        self.inner.read().proxy.clone()
+    pub(crate) fn proxy(&self) -> krpc::Proxy {
+        (self.0).1.read().1.clone()
     }
 
     /// Updates the `InnerTabletServer` with refreshed information.
-    fn update(&mut self, info: TsInfoPb) {
+    pub(crate) fn refresh(&self, options: &Options, info: TsInfoPb) {
+        debug_assert_eq!(self.id(), TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
+
         let rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
-        let mut inner = self.inner.write();
-        debug_assert_eq!(inner.id, TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
-        if rpc_addrs != inner.rpc_addrs {
-            inner.rpc_addrs = rpc_addrs;
-            unimplemented!("update proxy");
+
+
+        let mut state = (self.0).1.write();
+        if rpc_addrs != state.0 {
+            state.0 = rpc_addrs;
+            unimplemented!("TabletServer::refresh");
         }
-    }
-}
-
-struct RemoteReplica {
-    tserver: TabletServerProxy,
-    role: Role,
-}
-
-struct RemoteTablet {
-    stale: AtomicBool,
-    replicas: Vec<RemoteReplica>,
-}
-
-struct TabletServers {
-    tservers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
-}
-
-impl TabletServers {
-
-    fn tablet_server(&self, id: &TabletServerId) -> krpc::Proxy {
-        self.tservers.lock()[id].clone()
-    }
-
-    fn update_tablet_server(&self) {
-        unimplemented!()
     }
 }

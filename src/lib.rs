@@ -51,7 +51,7 @@ mod tablet;
 mod tserver;
 mod util;
 mod value;
-mod writer2;
+//mod writer2;
 pub mod master;
 pub mod meta_cache;
 

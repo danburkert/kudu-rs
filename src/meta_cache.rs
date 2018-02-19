@@ -1,9 +1,12 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::collections::Bound;
+use std::collections::{
+    BTreeMap,
+    Bound,
+    HashMap,
+};
 use std::fmt;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::{
     Async,
@@ -13,7 +16,10 @@ use futures::{
 };
 use futures::future;
 use futures::sync::{mpsc, oneshot};
-use parking_lot::Mutex;
+use parking_lot::{
+    Mutex,
+    RwLock,
+};
 
 use Error;
 use HostPort;
@@ -23,6 +29,7 @@ use Result;
 use Schema;
 use TableId;
 use TabletId;
+use TabletServerId;
 use master::{
     MasterProxy,
     MasterFuture,
@@ -34,7 +41,11 @@ use pb::master::{
     GetTableLocationsResponsePb,
     TabletLocationsPb,
 };
-use tablet::Tablet;
+use tablet::{
+    Tablet,
+    TabletReplica,
+};
+use tserver::TabletServer;
 use partition::{
     IntoPartitionKey,
     PartitionKey,
@@ -42,21 +53,25 @@ use partition::{
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) enum Entry {
     Tablet(Tablet),
     NonCoveredRange {
         lower_bound: PartitionKey,
         upper_bound: PartitionKey,
+        deadline: Instant,
     }
 }
 
 impl Entry {
 
-    fn non_covered_range(lower_bound: PartitionKey, upper_bound: PartitionKey) -> Entry {
+    fn non_covered_range(lower_bound: PartitionKey,
+                         upper_bound: PartitionKey,
+                         deadline: Instant) -> Entry {
         Entry::NonCoveredRange {
             lower_bound,
             upper_bound,
+            deadline,
         }
     }
 
@@ -114,15 +129,19 @@ impl Entry {
                 a.id() == b.id()
             },
             (&Entry::NonCoveredRange { lower_bound: ref a_lower,
-                                       upper_bound: ref a_upper },
+                                       upper_bound: ref a_upper,
+                                       .. },
              &Entry::NonCoveredRange { lower_bound: ref b_lower,
-                                       upper_bound: ref b_upper }) => {
+                                       upper_bound: ref b_upper,
+                                       .. }) => {
                 a_lower == b_lower && a_upper == b_upper
             },
             _ => false,
         }
     }
 }
+
+type TabletServerCache = Arc<RwLock<HashMap<TabletServerId, TabletServer>>>;
 
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
@@ -183,7 +202,7 @@ impl MetaCache {
                 tablet.replicas()
                       .iter()
                       .find(|replica| replica.role() == RaftRole::Leader)
-                      .map(|replica| replica.rpc_addrs().to_owned().into_boxed_slice())
+                      .map(TabletReplica::rpc_addrs)
             } else {
                 None
             }
@@ -243,34 +262,6 @@ struct Inner {
 
 impl Inner {
 
-    fn add_tablet_locations_2(&self,
-                              partition_key: &[u8],
-                              tablets: Vec<TabletLocationsPb>)
-                              -> Result<(PartitionKey, PartitionKey)> {
-        let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
-        let lower_bound = entries[0].lower_bound().into_partition_key();
-        let upper_bound = entries[entries.len() - 1].upper_bound().into_partition_key();
-        self.splice_entries(entries);
-        Ok((lower_bound, upper_bound))
-    }
-
-    fn add_tablet_locations<Extractor, T>(&self,
-                                          partition_key: &[u8],
-                                          tablets: Vec<TabletLocationsPb>,
-                                          extractor: Extractor) -> Result<T>
-    where Extractor: Fn(&Entry) -> T + Send + Sync {
-        let entries = self.tablet_locations_to_entries(partition_key, tablets)?;
-        let index = match entries.binary_search_by_key(&partition_key, |entry| entry.lower_bound()) {
-            Ok(index) => index,
-            Err(index) => index - 1,
-        };
-        debug_assert!(entries[index].contains_partition_key(partition_key));
-        let value = extractor(&entries[index]);
-
-        self.splice_entries(entries);
-        Ok(value)
-    }
-
     fn extract<Extractor, T>(&self, partition_key: &[u8], extractor: &Extractor) -> Option<T>
     where Extractor: Fn(&Entry) -> T {
         let entries = self.entries.lock();
@@ -310,7 +301,8 @@ impl Inner {
     /// end key.
     fn tablet_locations_to_entries(&self,
                                    partition_key: &[u8],
-                                   tablets: Vec<TabletLocationsPb>)
+                                   tablets: Vec<TabletLocationsPb>,
+                                   deadline: Instant)
                                    -> Result<Vec<Entry>> {
         if tablets.is_empty() {
             // If there are no tablets in the response, then the table is empty. If
@@ -318,7 +310,9 @@ impl Inner {
             // the master guarantees that the if the partition key falls in a
             // non-covered range, the previous tablet will be returned, and we did not
             // set an upper bound partition key on the request.
-            return Ok(vec![Entry::non_covered_range(PartitionKey::empty(), PartitionKey::empty())]);
+            return Ok(vec![Entry::non_covered_range(PartitionKey::empty(),
+                                                    PartitionKey::empty(),
+                                                    deadline)]);
         }
 
         let tablet_count = tablets.len();
@@ -332,26 +326,32 @@ impl Inner {
         if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
-            entries.push(Entry::non_covered_range(PartitionKey::empty(), last_upper_bound.clone()));
+            entries.push(Entry::non_covered_range(PartitionKey::empty(),
+                                                  last_upper_bound.clone(),
+                                                  deadline));
         }
 
         for tablet in tablets {
             let tablet = Tablet::from_pb(&self.primary_key_schema,
                                          self.partition_schema.clone(),
-                                         tablet)?;
+                                         tablet,
+                                         deadline)?;
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
-                                                      tablet.partition().lower_bound_key().into_partition_key()));
+                                                      tablet.partition().lower_bound_key().into_partition_key(),
+                                                      deadline));
             }
             last_upper_bound = tablet.partition().upper_bound_key().into_partition_key();
             entries.push(Entry::Tablet(tablet));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
-            entries.push(Entry::non_covered_range(last_upper_bound, PartitionKey::empty()));
+            entries.push(Entry::non_covered_range(last_upper_bound,
+                                                  PartitionKey::empty(),
+                                                  deadline));
         }
 
-        trace!("{:?}: discovered entries: {:?}", self, entries);
+        //trace!("{:?}: discovered entries: {:?}", self, entries);
         Ok(entries)
     }
 }
@@ -411,7 +411,12 @@ impl Future for MetaCacheTask {
                 match in_flight.poll() {
                     Ok(Async::Ready(response)) => {
                         // TODO: error handling
-                        let entries = self.inner.tablet_locations_to_entries(&*partition_key, response.tablet_locations).unwrap();
+                        let deadline = Instant::now() + Duration::from_millis(u64::from(response.ttl_millis()));
+                        let entries = self.inner
+                                          .tablet_locations_to_entries(&*partition_key,
+                                                                       response.tablet_locations,
+                                                                       deadline)
+                                          .unwrap();
                         let mut requests = self.requests.split_off(entries[0].lower_bound());
                         { // NLL hack
                             let upper_bound = entries[entries.len() - 1].upper_bound();
