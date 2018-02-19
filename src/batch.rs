@@ -11,7 +11,6 @@ use OperationEncoder;
 use TabletId;
 use meta_cache::MetaCache;
 use pb::tserver::{
-    //TabletServerService,
     WriteRequestPb,
     WriteResponsePb,
 };
@@ -24,7 +23,7 @@ pub(crate) struct Batcher {
     /// The batch being accumulated. Buffers operations until it is flushed.
     pub buffer: Buffer,
 
-    /// A partition key belonging to the tablet. Used for meta cache lookups.
+    /// A partition key belonging to the tablet. Used for metacache lookups.
     pub partition_key: Vec<u8>,
 
     /// The amount of data currently in-flight to the tablet.

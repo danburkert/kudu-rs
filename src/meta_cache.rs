@@ -217,11 +217,11 @@ impl MetaCache {
         let partition_key = partition_key.into_partition_key();
         let (send, recv) = oneshot::channel();
 
-        self.sender.unbounded_send((partition_key, send));
+        self.sender.unbounded_send((partition_key, send)).expect("MetaCacheTask finished");
         Either::B(recv.then(move |result| match result {
             Ok(Ok(entry)) => Ok(extractor(&entry)),
             Ok(Err(error)) => Err(error),
-            Err(_) => unreachable!("MetaCacheTask cancelled"),
+            Err(_) => unreachable!("MetaCacheTask finished"),
         }))
     }
 

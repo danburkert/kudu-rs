@@ -238,12 +238,12 @@ impl Schema {
     }
 
     #[inline]
-    pub fn bitmap_len(&self) -> usize {
+    pub(crate) fn bitmap_len(&self) -> usize {
         bitmap::len(self.inner.columns.len())
     }
 
     #[inline]
-    pub fn row_len(&self) -> usize {
+    pub(crate) fn row_len(&self) -> usize {
         self.inner.row_len
     }
 
@@ -252,7 +252,8 @@ impl Schema {
         self.inner.has_nullable_columns
     }
 
-    pub fn column_offsets(&self) -> &[usize] {
+    #[inline]
+    pub(crate) fn column_offsets(&self) -> &[usize] {
         &self.inner.column_offsets
     }
 

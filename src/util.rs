@@ -15,17 +15,6 @@ pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
 }
 
-pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result where T: fmt::LowerHex {
-    if bytes.is_empty() {
-        return write!(f, "0x")
-    }
-    try!(write!(f, "{:#x}", bytes[0]));
-    for b in &bytes[1..] {
-        try!(write!(f, "{:x}", b));
-    }
-    Ok(())
-}
-
 pub fn time_to_us(time: &SystemTime) -> i64 {
     // TODO: do overflow checking
     match time.duration_since(UNIX_EPOCH) {
@@ -52,7 +41,15 @@ pub fn us_to_time(us: i64) -> SystemTime {
     }
 }
 
-pub fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
+pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result where T: fmt::LowerHex {
+    write!(f, "0x")?;
+    for b in bytes {
+        write!(f, "{:02x}", b)?;
+    }
+    Ok(())
+}
+
+fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
     let datetime = if timestamp < UNIX_EPOCH {
         chrono::NaiveDateTime::from_timestamp(0, 0) -
             chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
@@ -65,6 +62,11 @@ pub fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Resu
 }
 
 pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
+    debug_assert!(row.is_set(idx).unwrap());
+    if row.is_null(idx).unwrap() {
+        return write!(f, "NULL")
+    }
+
     match row.schema().columns()[idx].data_type() {
         DataType::Bool => write!(f, "{}", row.get::<bool>(idx).unwrap()),
         DataType::Int8 => write!(f, "{}", row.get::<i8>(idx).unwrap()),
@@ -144,11 +146,11 @@ mod tests {
         let mut row = schema.new_row();
 
         row.set_by_name("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
-        assert_eq!("Timestamp \"timestamp\"=1969-12-31T23:59:58.766000Z",
+        assert_eq!("{timestamp: 1969-12-31T23:59:58.766000Z}",
                    &format!("{:?}", row));
 
         row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
-        assert_eq!("Timestamp \"timestamp\"=1970-01-01T00:00:01.234000Z",
+        assert_eq!("{timestamp: 1970-01-01T00:00:01.234000Z}",
                    &format!("{:?}", row));
     }
 

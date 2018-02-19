@@ -4,7 +4,6 @@ use std::collections::{
 };
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 use krpc;
 use parking_lot::{
@@ -59,7 +58,6 @@ struct TabletServerProxy {
     inner: Arc<RwLock<InnerTabletServer>>,
 }
 
-
 struct InnerTabletServer {
     id: TabletServerId,
     rpc_addrs: Box<[HostPort]>,
@@ -104,7 +102,7 @@ impl TabletServerProxy {
 
     /// Updates the `InnerTabletServer` with refreshed information.
     fn update(&mut self, info: TsInfoPb) {
-        let mut rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
+        let rpc_addrs = info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
         let mut inner = self.inner.write();
         debug_assert_eq!(inner.id, TabletServerId::parse_bytes(&info.permanent_uuid).unwrap());
         if rpc_addrs != inner.rpc_addrs {
