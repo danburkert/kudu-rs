@@ -7,9 +7,12 @@ use std::time::{UNIX_EPOCH, SystemTime};
 
 use chrono;
 use ifaces;
+use url::Url;
 
 use DataType;
+use Result;
 use Row;
+use pb::HostPortPb;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
@@ -114,6 +117,18 @@ pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
         (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
         (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
     }
+}
+
+pub(crate) fn urls_from_pb(hostports: &[HostPortPb], https_enabled: bool) -> Result<Vec<Url>> {
+    hostports.iter()
+             .map(|hostport| {
+                Url::parse(&format!("{}://{}:{}",
+                           if https_enabled { "https" } else { "http" },
+                           hostport.host,
+                           hostport.port))
+                    .map_err(From::from)
+             })
+             .collect()
 }
 
 #[cfg(test)]

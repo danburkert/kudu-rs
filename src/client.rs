@@ -39,12 +39,12 @@ use pb::ExpectField;
 
 use Error;
 use IntoMasterAddrs;
-use Master;
+use MasterInfo;
 use Options;
 use Result;
 use Schema;
 use TableId;
-use TabletServer;
+use TabletServerInfo;
 use tserver;
 use backoff::Backoff;
 use master::MasterProxy;
@@ -272,25 +272,25 @@ impl Client {
         })
     }
 
-    pub fn list_masters(&mut self) -> impl Future<Item=Vec<Master>, Error=Error> {
+    pub fn list_masters(&mut self) -> impl Future<Item=Vec<MasterInfo>, Error=Error> {
         let call = MasterService::list_masters(Default::default(), self.deadline());
 
         self.master.send(call).and_then(|response: ListMastersResponsePb| {
             let mut servers = Vec::with_capacity(response.masters.len());
             for server in response.masters {
-                servers.push(Master::from_pb(server)?);
+                servers.push(MasterInfo::from_pb(server)?);
             }
             Ok(servers)
         })
     }
 
-    pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServer>, Error=Error> {
+    pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServerInfo>, Error=Error> {
         let call = MasterService::list_tablet_servers(Default::default(), self.deadline());
 
         self.master.send(call).and_then(|response: ListTabletServersResponsePb| {
             let mut servers = Vec::with_capacity(response.servers.len());
             for server in response.servers {
-                servers.push(TabletServer::from_pb(server)?);
+                servers.push(TabletServerInfo::from_pb(server)?);
             }
             Ok(servers)
         })

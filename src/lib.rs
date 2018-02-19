@@ -14,6 +14,7 @@ extern crate prost;
 extern crate prost_types;
 extern crate rand;
 extern crate tokio_timer as timer;
+extern crate url;
 extern crate uuid;
 extern crate vec_map;
 

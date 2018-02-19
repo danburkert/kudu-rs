@@ -5,6 +5,9 @@ use std::result;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
+use krpc;
+use url;
+
 use pb::master::MasterErrorPb;
 use pb::tserver::TabletServerErrorPb;
 use pb::{AppStatusPb as StatusPb};
@@ -13,7 +16,6 @@ pub use pb::master::master_error_pb::{Code as MasterErrorCode};
 pub use pb::tserver::tablet_server_error_pb::{Code as TabletServerErrorCode};
 pub use pb::app_status_pb::{ErrorCode as StatusCode};
 
-use krpc;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -156,6 +158,12 @@ impl From<Utf8Error> for Error {
 
 impl From<FromUtf8Error> for Error {
     fn from(error: FromUtf8Error) -> Error {
+        Error::Serialization(error.to_string())
+    }
+}
+
+impl From<url::ParseError> for Error {
+    fn from(error: url::ParseError) -> Error {
         Error::Serialization(error.to_string())
     }
 }

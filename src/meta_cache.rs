@@ -126,8 +126,6 @@ impl Entry {
 
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
-///     - Limit the number of concurrent lookups, if it's not already being done by the master
-///       proxy.
 #[derive(Clone)]
 pub(crate) struct MetaCache {
     inner: Arc<Inner>,
