@@ -3,11 +3,9 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use bitmap;
-use chrono;
 use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
-use DataType;
 use Error;
 use Result;
 use Schema;
@@ -44,7 +42,7 @@ impl <'data> Row<'data> {
         let data = vec![0; data_len].into_boxed_slice();
 
         Row {
-            data: vec![0; data_len].into_boxed_slice(),
+            data,
             owned_data: VecMap::new(),
             schema,
             _marker: Default::default(),
@@ -309,6 +307,7 @@ impl <'data> Row<'data> {
 
     #[cfg(any(feature="quickcheck", test))]
     pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static> where G: quickcheck::Gen {
+        use DataType;
         use quickcheck::Arbitrary;
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {
@@ -367,7 +366,7 @@ impl <'data> fmt::Debug for Row<'data> {
         struct CellWrapper<'a>(&'a Row<'a>, usize);
         impl <'a> fmt::Debug for CellWrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                util::fmt_cell(f, &self.0, self.1)
+                util::fmt_cell(f, self.0, self.1)
             }
         }
 
@@ -391,7 +390,7 @@ impl <'data> cmp::PartialEq for Row<'data> {
         let row_offset = if self.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len };
 
         // Check that all of the columns are set the same, and set null the same.
-        if &self.data[..row_offset] != &other.data[..row_offset] {
+        if self.data[..row_offset] != other.data[..row_offset] {
             return false;
         }
 
@@ -407,15 +406,14 @@ impl <'data> cmp::PartialEq for Row<'data> {
 
             if column.data_type().is_var_len() {
                 unsafe {
-                    if <&[u8]>::from_data(&self.data[start..end])
-                    != <&[u8]>::from_data(&other.data[start..end]) {
+                    let a: &[u8] = Value::from_data(&self.data[start..end]);
+                    let b: &[u8] = Value::from_data(&other.data[start..end]);
+                    if a != b {
                         return false;
                     }
                 }
-            } else {
-                if &self.data[start..end] != &other.data[start..end] {
-                    return false;
-                }
+            } else if self.data[start..end] != other.data[start..end] {
+                return false;
             }
         }
         true
@@ -427,7 +425,7 @@ impl <'data> cmp::Eq for Row<'data>  {}
 /// `Row`s can be compared based on primary key column values. If the schemas do not match or if
 /// some of the primary key columns are not set, the ordering is not defined.
 impl <'data> cmp::PartialOrd for Row<'data> {
-    fn partial_cmp(&self, other: &Row) -> Option<cmp::Ordering> {
+    fn partial_cmp(&self, _other: &Row) -> Option<cmp::Ordering> {
         unimplemented!()
         /*
         if self.schema != other.schema { return None; }

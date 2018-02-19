@@ -1,3 +1,5 @@
+#![allow(unknown_lints, doc_markdown)]
+
 use Error;
 use HostPort;
 use TableId;

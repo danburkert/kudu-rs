@@ -1,37 +1,28 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::Bound;
 use std::fmt;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 
 use futures::{
     Async,
     Future,
     Poll,
-    Sink,
     Stream,
 };
-use futures::future::{self, Either, Map};
+use futures::future;
 use futures::sync::{mpsc, oneshot};
 use parking_lot::Mutex;
 
 use Error;
 use HostPort;
-use MasterErrorCode;
 use PartitionSchema;
 use RaftRole;
 use Result;
 use Schema;
 use TableId;
 use TabletId;
-use TabletServerId;
 use master::{
     MasterProxy,
     MasterFuture,
@@ -133,11 +124,6 @@ impl Entry {
     }
 }
 
-/*
-type MetaCacheFuture<T, Extrator> = Either<FutureResult<T, Error>,
-                                           Map<T, Extractor>>;
-*/
-
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
 ///     - Limit the number of concurrent lookups, if it's not already being done by the master
@@ -163,15 +149,15 @@ impl MetaCache {
             entries: Mutex::new(BTreeMap::new()),
         });
 
+        let remote = master.options().remote.clone();
         let task = MetaCacheTask {
             inner: inner.clone(),
-            master: master.clone(),
+            master,
             receiver,
             requests: BTreeMap::new(),
             in_flight: None,
         };
-
-        master.options().remote.spawn(move |_| task);
+        remote.spawn(move |_| task);
         MetaCache { inner, sender, }
     }
 
@@ -211,14 +197,14 @@ impl MetaCache {
                   extractor: fn(&Entry) -> T)
                   -> impl Future<Item=T, Error=Error> {
         if let Some(value) = self.inner.extract(partition_key, &extractor) {
-            return Either::A(future::ok(value));
+            return future::Either::A(future::ok(value));
         };
 
         let partition_key = partition_key.into_partition_key();
         let (send, recv) = oneshot::channel();
 
         self.sender.unbounded_send((partition_key, send)).expect("MetaCacheTask finished");
-        Either::B(recv.then(move |result| match result {
+        future::Either::B(recv.then(move |result| match result {
             Ok(Ok(entry)) => Ok(extractor(&entry)),
             Ok(Err(error)) => Err(error),
             Err(_) => unreachable!("MetaCacheTask finished"),
@@ -291,7 +277,7 @@ impl Inner {
     where Extractor: Fn(&Entry) -> T {
         let entries = self.entries.lock();
         match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
-            Some(ref entry) if entry.1.contains_partition_key(partition_key) => Some(extractor(&entry.1)),
+            Some(ref entry) if entry.1.contains_partition_key(partition_key) => Some(extractor(entry.1)),
             _ => None,
         }
     }
@@ -491,7 +477,6 @@ mod tests {
     use env_logger;
     use tokio::reactor::Core;
 
-    use Client;
     use ClientBuilder;
     use RangePartitionBound;
     use TableBuilder;

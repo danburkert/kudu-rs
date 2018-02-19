@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use futures::{
     Async,
     Future,
@@ -99,12 +102,14 @@ impl Future for BatchFuture {
             },
         };
 
+        /*
         match leaders {
             Some(leaders) => {
             },
             None => {
             },
         }
+        */
 
         unimplemented!()
     }

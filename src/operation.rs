@@ -169,13 +169,13 @@ impl <'a> Iterator for Iter<'a> {
     type Item = Operation<'a>;
 
     fn next(&mut self) -> Option<Operation<'a>> {
-        let Iter { ref encoder, ref schema, ref mut offset } = *self;
+        let Iter { encoder, ref schema, ref mut offset } = *self;
 
         if *offset >= encoder.len() {
             return None;
         }
 
-        let op_type = encoder.data[*offset] as i32;
+        let op_type = i32::from(encoder.data[*offset]);
         *offset += 1;
 
         let mut row = schema.new_row();

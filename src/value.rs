@@ -52,7 +52,7 @@ impl <'data> Value<'data> for bool {
     fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Bool }
     fn size() -> usize { 1 }
     fn copy_data(&self, dest: &mut [u8]) { dest[0] = if *self { 1 } else { 0 } }
-    unsafe fn from_data(data: &[u8]) -> bool { if data[0] == 0 { false } else { true } }
+    unsafe fn from_data(data: &[u8]) -> bool { data[0] != 0 }
 }
 
 impl <'data> Value<'data> for i8 {
@@ -184,11 +184,8 @@ impl <'data, V> Value<'data> for Option<V> where V: Value<'data> {
     fn is_null(&self) -> bool { self.is_none() }
     fn owned_data(self) -> Option<Vec<u8>> { self.and_then(V::owned_data) }
     fn copy_data(&self, dest: &mut [u8]) {
-        match *self {
-            Some(ref value) => {
-                value.copy_data(dest);
-            },
-            None => (),
+        if let Some(ref value) = *self {
+            value.copy_data(dest);
         }
     }
     unsafe fn from_data(data: &'data [u8]) -> Option<V> { Some(V::from_data(data)) }
