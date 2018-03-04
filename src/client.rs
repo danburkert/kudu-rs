@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::str;
 use std::sync::Arc;
@@ -22,8 +21,8 @@ use pb::master::{
     CreateTableResponsePb,
     DeleteTableRequestPb,
     DeleteTableResponsePb,
-    GetTableSchemaRequestPb,
-    GetTableSchemaResponsePb,
+    //GetTableSchemaRequestPb,
+    //GetTableSchemaResponsePb,
     IsAlterTableDoneRequestPb,
     IsAlterTableDoneResponsePb,
     IsCreateTableDoneRequestPb,
@@ -42,14 +41,11 @@ use IntoMasterAddrs;
 use MasterInfo;
 use Options;
 use Result;
-use Schema;
 use TableId;
 use TabletServerInfo;
-use tserver;
 use backoff::Backoff;
 use master::MasterProxy;
-use meta_cache::{MetaCache, TableLocationsCache};
-use partition::PartitionSchema;
+use meta_cache::MetaCache;
 use table::AlterTableBuilder;
 use table::Table;
 use table::TableBuilder;

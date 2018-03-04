@@ -18,13 +18,11 @@ use futures::future;
 use futures::sync::{mpsc, oneshot};
 use parking_lot::{
     Mutex,
-    RwLock,
 };
+use krpc;
 
 use Error;
-use HostPort;
 use PartitionSchema;
-use RaftRole;
 use Result;
 use Schema;
 use TableId;
@@ -47,9 +45,7 @@ use pb::master::{
 use table::Table;
 use tablet::{
     Tablet,
-    TabletReplica,
 };
-use tserver::TabletServer;
 use partition::{
     IntoPartitionKey,
     PartitionKey,
@@ -64,7 +60,7 @@ const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
 #[derive(Clone)]
 pub(crate) enum Entry {
-    Tablet(Tablet),
+    Tablet(Arc<Tablet>),
     NonCoveredRange {
         lower_bound: PartitionKey,
         upper_bound: PartitionKey,
@@ -148,15 +144,25 @@ impl Entry {
     }
 }
 
-type TabletServerCache = Arc<RwLock<HashMap<TabletServerId, TabletServer>>>;
-
 #[derive(Clone)]
-pub(crate) struct MetaCache(Arc<Mutex<HashMap<TableId, TableLocationsCache>>>);
+pub(crate) struct MetaCache {
+    inner: Arc<MetaCacheInner>,
+}
+
+struct MetaCacheInner {
+    table_locations: Mutex<HashMap<TableId, TableLocationsCache>>,
+    tablet_servers: Mutex<HashMap<TabletServerId, krpc::Proxy>>,
+}
 
 impl MetaCache {
 
     pub(crate) fn new() -> MetaCache {
-        MetaCache(Arc::new(Mutex::new(HashMap::new())))
+        MetaCache{
+            inner: Arc::new(MetaCacheInner {
+                table_locations: Mutex::new(HashMap::new()),
+                tablet_servers: Mutex::new(HashMap::new()),
+            }),
+        }
     }
 
     pub(crate) fn open_table(&self,
@@ -181,7 +187,9 @@ impl MetaCache {
                 &schema);
             let schema = Schema::from_pb(schema)?;
 
-            let table_locations = meta_cache.0
+            let table_locations = meta_cache
+                .inner
+                .table_locations
                 .lock()
                 .entry(id)
                 .or_insert_with(|| TableLocationsCache::new(id,
@@ -254,6 +262,14 @@ impl TableLocationsCache {
         })
     }
 
+    pub(crate) fn tablet(&self, partition_key: &[u8]) -> impl Future<Item=Option<Arc<Tablet>>, Error=Error> {
+        self.extract(partition_key, |entry| match *entry {
+            Entry::Tablet(ref tablet) => Some(Arc::clone(tablet)),
+            Entry::NonCoveredRange { .. } => None,
+        })
+    }
+
+    /*
     pub(crate) fn tablet_leader(&self, partition_key: &[u8]) -> impl Future<Item=Option<Box<[HostPort]>>, Error=Error> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
@@ -266,6 +282,7 @@ impl TableLocationsCache {
             }
         })
     }
+    */
 
     fn extract<T>(&self,
                   partition_key: &[u8],
@@ -390,17 +407,20 @@ impl TableLocationsInner {
         }
 
         for tablet in tablets {
+            /*
             let tablet = Tablet::from_pb(&self.primary_key_schema,
                                          self.partition_schema.clone(),
                                          tablet,
                                          deadline)?;
+                                         */
+            let tablet =  (|| -> Tablet { unimplemented!() })();
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
                                                       tablet.partition().lower_bound_key().into_partition_key(),
                                                       deadline));
             }
             last_upper_bound = tablet.partition().upper_bound_key().into_partition_key();
-            entries.push(Entry::Tablet(tablet));
+            entries.push(Entry::Tablet(Arc::new(tablet)));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {

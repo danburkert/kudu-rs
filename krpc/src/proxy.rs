@@ -28,7 +28,7 @@ use RpcFuture;
 use connection::Connection;
 use connector::Connector;
 
-/// `Proxy` is a handle to a remote server which allows clients to send and recieve RPCs.
+/// `Proxy` is a handle to a remote server which allows clients to send and receive RPCs.
 #[derive(Clone)]
 pub struct Proxy {
     sender: mpsc::Sender<Rpc>,

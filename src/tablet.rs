@@ -1,64 +1,67 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use pb::master::TabletLocationsPb;
-use pb::master::tablet_locations_pb::ReplicaPb;
-use pb::ExpectField;
+use krpc;
 
-use HostPort;
 use Partition;
-use PartitionSchema;
 use RaftRole;
-use Result;
-use Schema;
 use TabletId;
 use TabletServerId;
-use tserver::TabletServer;
 
-#[derive(Clone)]
-pub struct Tablet(Arc<(
-        // The tablet ID.
-        TabletId,
+/// Metadata pertaining to a Kudu tablet.
+pub(crate) struct Tablet {
+    /// The tablet ID.
+    id: TabletId,
 
-        // The tablet partition.
-        Partition,
+    /// The tablet partition.
+    partition: Partition,
 
-        // The tablet replicas.
-        Vec<TabletReplica>,
+    /// The tablet replicas.
+    replicas: Vec<TabletReplica>,
 
-        // The deadline when the replica metadata expires.
-        Instant,
-)>);
+    /// The deadline when the tablet metadata expires.
+    ttl: Instant,
+    is_stale: AtomicBool,
+}
 
 impl Tablet {
 
     /// Returns the unique tablet ID.
     pub fn id(&self) -> TabletId {
-        (self.0).0
+        self.id
     }
 
     /// Returns the tablet partition.
     pub fn partition(&self) -> &Partition {
-        &(self.0).1
+        &self.partition
     }
 
     /// Returns the tablet replicas.
     pub fn replicas(&self) -> &[TabletReplica] {
-        &(self.0).2
+        &self.replicas
     }
 
-    pub(crate) fn is_stale(&self) -> bool {
-        // TODO
-        false
+    /// Returns true if the tablet metadata is known to be stale.
+    ///
+    /// The metadata may be stale because the leader changed, the set of replicas changed, or it
+    /// has expired.
+    pub fn is_stale(&self) -> bool {
+        self.is_stale.load(Ordering::Relaxed) || Instant::now() > self.ttl
     }
 
+    /// Marks the tablet metadata as stale.
+    pub fn set_stale(&self) {
+        self.is_stale.store(true, Ordering::Relaxed)
+    }
+
+    /*
     /// Creates a new `Tablet` from a tablet locations protobuf message.
     pub(crate) fn from_pb(primary_key_schema: &Schema,
                           partition_schema: PartitionSchema,
                           pb: TabletLocationsPb,
                           deadline: Instant)
                           -> Result<Tablet> {
+        /*
 
 
         let id = TabletId::parse_bytes(&pb.tablet_id)?;
@@ -69,12 +72,16 @@ impl Tablet {
         let replicas = pb.replicas.into_iter().map(TabletReplica::from_pb).collect::<Result<Vec<_>>>()?;
 
         Ok(Tablet(Arc::new((id, partition, replicas, deadline))))
+        */
+        Ok(unimplemented!())
     }
+        */
 }
 
 /// Tablet replica belonging to a tablet server.
-pub struct TabletReplica {
-    tserver: TabletServer,
+pub(crate) struct TabletReplica {
+    id: TabletServerId,
+    proxy: krpc::Proxy,
     role: RaftRole,
     is_stale: AtomicBool,
 }
@@ -83,25 +90,16 @@ impl TabletReplica {
 
     /// Returns the ID of the tablet server which owns this replica.
     pub fn id(&self) -> TabletServerId {
-        self.tserver.id()
+        self.id
     }
 
-    /// Returns the RPC addresses of the tablet server which owns this replica.
-    pub fn rpc_addrs(&self) -> Box<[HostPort]> {
-        self.tserver.rpc_addrs()
+    /// Returns a KRPC proxy to the tablet server hosting the replica.
+    pub fn proxy(&self) -> krpc::Proxy {
+        self.proxy.clone()
     }
 
     /// Returns the Raft role of this replica.
     pub fn role(&self) -> RaftRole {
         self.role
-    }
-
-    /// Creates a new `Replica` from a replica protobuf message.
-    pub(crate) fn from_pb(pb: ReplicaPb) -> Result<TabletReplica> {
-        let role = pb.role();
-        let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-        let rpc_addrs = pb.ts_info.rpc_addresses.into_iter().map(HostPort::from).collect::<Vec<_>>().into_boxed_slice();
-        let tserver: TabletServer = unimplemented!();
-        Ok(TabletReplica { tserver, role, is_stale: AtomicBool::new(false) })
     }
 }

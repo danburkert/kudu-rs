@@ -35,7 +35,7 @@ pub mod pb;
 
 //mod writer;
 mod backoff;
-mod batch;
+// mod batch;
 mod bitmap;
 mod client;
 mod error;
@@ -48,7 +48,6 @@ mod schema;
 mod server;
 mod table;
 mod tablet;
-mod tserver;
 mod util;
 mod value;
 //mod writer2;
@@ -66,7 +65,6 @@ pub use row::Row;
 pub use schema::*;
 pub use server::*;
 pub use table::*;
-pub use tablet::*;
 pub use value::Value;
 //pub use writer::*;
 

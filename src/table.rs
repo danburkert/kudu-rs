@@ -18,7 +18,6 @@ use pb::partition_schema_pb::{
     RangeSchemaPb,
 };
 
-use Client;
 use Column;
 use Error;
 use meta_cache::TableLocationsCache;
@@ -28,9 +27,6 @@ use OperationEncoder;
 use Row;
 use Schema;
 use TableId;
-//use Tablet;
-//use Writer;
-//use WriterConfig;
 
 #[derive(Clone)]
 pub struct Table {

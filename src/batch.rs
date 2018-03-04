@@ -18,7 +18,6 @@ use pb::tserver::{
     WriteResponsePb,
 };
 use retry::RetryFuture;
-use tserver;
 
 /// `Batcher` accumulates write operations for a tablet into batches, and keeps stats on buffered
 /// and in-flight batches to to the tablet.
