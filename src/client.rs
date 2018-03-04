@@ -294,14 +294,14 @@ impl Client {
     /// Returns an open table.
     pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error>
     where S: Into<String> {
-        self.meta_cache.open_table(TableIdentifierPb::from(table.into()),
-                                   self.master_proxy.clone(),
-                                   &self.options)
+        self.meta_cache.clone().open_table(TableIdentifierPb::from(table.into()),
+                                           self.master_proxy.clone(),
+                                           &self.options)
     }
 
     /// Returns an open table.
     pub fn open_table_by_id(&mut self, id: TableId) -> impl Future<Item=Table, Error=Error> {
-        self.meta_cache.open_table(id.into(), self.master_proxy.clone(), &self.options)
+        self.meta_cache.clone().open_table(id.into(), self.master_proxy.clone(), &self.options)
     }
 
     pub fn latest_observed_timestamp(&self) -> u64 {
