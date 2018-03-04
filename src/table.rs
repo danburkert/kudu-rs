@@ -21,7 +21,7 @@ use pb::partition_schema_pb::{
 use Client;
 use Column;
 use Error;
-use meta_cache::MetaCache;
+use meta_cache::TableLocationsCache;
 use partition::PartitionSchema;
 use Result;
 use OperationEncoder;
@@ -39,8 +39,7 @@ pub struct Table {
     schema: Schema,
     partition_schema: PartitionSchema,
     num_replicas: u32,
-    meta_cache: MetaCache,
-    client: Client,
+    meta_cache: TableLocationsCache,
 }
 
 impl Table {
@@ -50,8 +49,7 @@ impl Table {
                       schema: Schema,
                       partition_schema: PartitionSchema,
                       num_replicas: u32,
-                      meta_cache: MetaCache,
-                      client: Client) -> Table {
+                      meta_cache: TableLocationsCache) -> Table {
         Table {
             name: name,
             id: id,
@@ -59,7 +57,6 @@ impl Table {
             partition_schema: partition_schema,
             num_replicas: num_replicas,
             meta_cache: meta_cache,
-            client: client,
         }
     }
 
@@ -117,12 +114,8 @@ impl Table {
     }
     */
 
-    pub(crate) fn meta_cache(&self) -> &MetaCache {
+    pub(crate) fn meta_cache(&self) -> &TableLocationsCache {
         &self.meta_cache
-    }
-
-    pub(crate) fn client(&self) -> &Client {
-        &self.client
     }
 }
 

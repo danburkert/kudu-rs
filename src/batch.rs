@@ -12,7 +12,7 @@ use Error;
 use HostPort;
 use OperationEncoder;
 use TabletId;
-use meta_cache::MetaCache;
+use meta_cache::TableLocationsCache;
 use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
@@ -63,7 +63,7 @@ impl Buffer {
 }
 
 struct BatchFuture {
-    meta_cache: MetaCache,
+    meta_cache: TableLocationsCache,
     tserver_proxies: tserver::ProxyCache,
     partition_key: Vec<u8>,
     operations: usize,

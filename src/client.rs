@@ -48,7 +48,7 @@ use TabletServerInfo;
 use tserver;
 use backoff::Backoff;
 use master::MasterProxy;
-use meta_cache::MetaCache;
+use meta_cache::{MetaCache, TableLocationsCache};
 use partition::PartitionSchema;
 use table::AlterTableBuilder;
 use table::Table;
@@ -60,10 +60,9 @@ use table::TableBuilder;
 /// application per cluster.
 #[derive(Clone)]
 pub struct Client {
-    master: MasterProxy,
-    tserver_proxies: tserver::ProxyCache,
+    master_proxy: MasterProxy,
     options: Options,
-    meta_caches: Arc<Mutex<HashMap<TableId, MetaCache>>>,
+    meta_cache: MetaCache,
     latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
 }
 
@@ -71,13 +70,12 @@ impl Client {
 
     /// Creates a new client with the provided configuration.
     fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
-        let master = MasterProxy::new(master_addresses, options.clone());
-        let tserver_proxies = tserver::ProxyCache::new(options.clone());
+        let master_proxy = MasterProxy::new(master_addresses, options.clone());
+        let meta_cache = MetaCache::new();
         Client {
-            master,
-            tserver_proxies,
+            master_proxy,
             options,
-            meta_caches: Arc::new(Mutex::new(HashMap::new())),
+            meta_cache,
             latest_observed_timestamp: Arc::new(Mutex::new(0)),
         }
     }
@@ -93,7 +91,7 @@ impl Client {
         let call = MasterService::create_table(pb, deadline);
 
         let mut client = self.clone();
-        let response = self.master
+        let response = self.master_proxy()
                            .send(call)
                            .and_then(|response: CreateTableResponsePb| -> Result<TableId> {
                                TableId::parse_bytes(&response.table_id.expect_field("CreateTableResponsePb",
@@ -136,7 +134,7 @@ impl Client {
                         state.client.deadline());
 
                     state.client
-                         .master
+                         .master_proxy()
                          .send(call)
                          .map(move |response: IsCreateTableDoneResponsePb| {
                              if response.done() {
@@ -164,7 +162,7 @@ impl Client {
         let call = MasterService::delete_table(Arc::new(DeleteTableRequestPb { table }),
                                                self.deadline());
 
-        self.master.send(call).map(|_: DeleteTableResponsePb| ())
+        self.master_proxy().send(call).map(|_: DeleteTableResponsePb| ())
     }
 
     pub fn alter_table<S>(&mut self, table: S, alter: AlterTableBuilder) -> impl Future<Item=TableId, Error=Error>
@@ -176,7 +174,10 @@ impl Client {
         self.do_alter_table(id.into(), alter).map(|_| ())
     }
 
-    pub fn do_alter_table(&mut self, identifier: TableIdentifierPb, alter: AlterTableBuilder) -> impl Future<Item=TableId, Error=Error> {
+    pub fn do_alter_table(&mut self,
+                          identifier: TableIdentifierPb,
+                          alter: AlterTableBuilder)
+                          -> impl Future<Item=TableId, Error=Error> {
         let AlterTableBuilder { result, mut pb, schema } = alter;
         if let Err(error) = result {
             return Either::B(future::err(error));
@@ -185,18 +186,16 @@ impl Client {
         pb.table = identifier;
         let call = MasterService::alter_table(Arc::new(pb), self.deadline());
         let client: Client = self.clone();
-        let result = self.master.send(call).and_then(move |resp: AlterTableResponsePb| {
+        let result = self.master_proxy().send(call).and_then(move |resp: AlterTableResponsePb| {
             let table_id = str::from_utf8(resp.table_id())
                                .map_err(|error| Error::Serialization(format!("{}", error)))
                                .and_then(TableId::parse)?;
 
-            // If the table partitioning was altered and there is an existing meta cache for the table,
-            // clear it.
+            // If the table partitioning was altered and there is an existing meta cache for the
+            // table, clear it.
             if schema.is_some() {
-                let meta_cache = client.meta_caches.lock().get(&table_id).cloned();
-                if let Some(meta_cache) = meta_cache {
-                    meta_cache.clear();
-                }
+                // TODO
+                // client.meta_cache.clear_table_locations(table_id);
             }
 
             Ok((table_id, client))
@@ -236,7 +235,7 @@ impl Client {
                         state.client.deadline());
 
                     state.client
-                         .master
+                         .master_proxy()
                          .send(call)
                          .map(move |response: IsAlterTableDoneResponsePb| {
                              if response.done() {
@@ -263,7 +262,7 @@ impl Client {
     fn do_list_tables(&mut self, request: Arc<ListTablesRequestPb>) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
         let call = MasterService::list_tables(request, self.deadline());
 
-        self.master.send(call).and_then(|response: ListTablesResponsePb| {
+        self.master_proxy().send(call).and_then(|response: ListTablesResponsePb| {
             let mut tables = Vec::with_capacity(response.tables.len());
             for table in response.tables {
                 tables.push((table.name, TableId::parse_bytes(&table.id)?));
@@ -275,7 +274,7 @@ impl Client {
     pub fn list_masters(&mut self) -> impl Future<Item=Vec<MasterInfo>, Error=Error> {
         let call = MasterService::list_masters(Default::default(), self.deadline());
 
-        self.master.send(call).and_then(|response: ListMastersResponsePb| {
+        self.master_proxy().send(call).and_then(|response: ListMastersResponsePb| {
             let mut servers = Vec::with_capacity(response.masters.len());
             for server in response.masters {
                 servers.push(MasterInfo::from_pb(server)?);
@@ -287,7 +286,7 @@ impl Client {
     pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServerInfo>, Error=Error> {
         let call = MasterService::list_tablet_servers(Default::default(), self.deadline());
 
-        self.master.send(call).and_then(|response: ListTabletServersResponsePb| {
+        self.master_proxy().send(call).and_then(|response: ListTabletServersResponsePb| {
             let mut servers = Vec::with_capacity(response.servers.len());
             for server in response.servers {
                 servers.push(TabletServerInfo::from_pb(server)?);
@@ -299,49 +298,14 @@ impl Client {
     /// Returns an open table.
     pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error>
     where S: Into<String> {
-        self.do_open_table(table.into().into())
+        self.meta_cache.open_table(TableIdentifierPb::from(table.into()),
+                                   self.master_proxy.clone(),
+                                   &self.options)
     }
 
     /// Returns an open table.
     pub fn open_table_by_id(&mut self, id: TableId) -> impl Future<Item=Table, Error=Error> {
-        self.do_open_table(id.into())
-    }
-
-    fn do_open_table(&mut self, table: TableIdentifierPb) -> impl Future<Item=Table, Error=Error> {
-        let call = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }),
-                                                   self.deadline());
-
-        let client = self.clone();
-        self.master.send(call).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
-            static MESSAGE: &'static str = "GetTableSchemaResponsePb";
-
-            let num_replicas = resp.num_replicas() as u32;
-            let name = resp.table_name.expect_field(MESSAGE, "table_name")?;
-
-            let id = TableId::parse_bytes(&resp.table_id.expect_field(MESSAGE, "table_id")?)?;
-
-            let schema = resp.schema.expect_field(MESSAGE, "schema")?;
-            let partition_schema = PartitionSchema::from_pb(&resp.partition_schema.expect_field(MESSAGE, "partition_schema")?,
-                                                            &schema);
-            let schema = Schema::from_pb(schema)?;
-
-            let meta_cache = client.meta_caches
-                                   .lock()
-                                   .entry(id)
-                                   .or_insert_with(|| MetaCache::new(id,
-                                                                     schema.primary_key_projection(),
-                                                                     partition_schema.clone(),
-                                                                     client.master.clone()))
-                                   .clone();
-
-            Ok(Table::new(name,
-                          id,
-                          schema,
-                          partition_schema,
-                          num_replicas,
-                          meta_cache,
-                          client))
-        })
+        self.meta_cache.open_table(id.into(), self.master_proxy.clone(), &self.options)
     }
 
     pub fn latest_observed_timestamp(&self) -> u64 {
@@ -359,14 +323,16 @@ impl Client {
         Instant::now() + self.options.admin_timeout
     }
 
-    pub(crate) fn master_proxy(&self) -> &MasterProxy {
-        &self.master
+    pub(crate) fn master_proxy(&self) -> MasterProxy {
+        self.master_proxy.clone()
     }
 
+    /*
     /// This should only be called when the table has been guaranteed to have been opened.
-    pub(crate) fn meta_cache(&self, table: &TableId) -> MetaCache {
+    pub(crate) fn meta_cache(&self, table: &TableId) -> TableLocationsCache {
         self.meta_caches.lock()[table].clone()
     }
+    */
 }
 
 impl fmt::Debug for Client {
