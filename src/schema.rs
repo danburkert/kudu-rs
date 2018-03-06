@@ -165,7 +165,6 @@ impl fmt::Debug for Column {
     }
 }
 
-#[derive(Clone, Debug)]
 struct Inner {
     // TODO: switch columns and column_offsets to be a Box<[]>.
     columns: Vec<Column>,

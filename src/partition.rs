@@ -23,12 +23,12 @@ use util;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RangePartitionSchema {
-    columns: Vec<usize>,
+    columns: Box<[usize]>,
 }
 
 impl RangePartitionSchema {
     fn new(columns: Vec<usize>) -> RangePartitionSchema {
-        RangePartitionSchema { columns: columns }
+        RangePartitionSchema { columns: columns.into_boxed_slice() }
     }
 
     pub fn columns(&self) -> &[usize] {
@@ -38,7 +38,7 @@ impl RangePartitionSchema {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashPartitionSchema {
-    columns: Vec<usize>,
+    columns: Box<[usize]>,
     buckets: u32,
     seed: u32,
 }
@@ -46,7 +46,7 @@ pub struct HashPartitionSchema {
 impl HashPartitionSchema {
     fn new(columns: Vec<usize>, buckets: u32, seed: u32) -> HashPartitionSchema {
         HashPartitionSchema {
-            columns: columns,
+            columns: columns.into_boxed_slice(),
             buckets: buckets,
             seed: seed,
         }
@@ -65,10 +65,10 @@ impl HashPartitionSchema {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct Inner {
     range_partition: RangePartitionSchema,
-    hash_partitions: Vec<HashPartitionSchema>,
+    hash_partitions: Box<[HashPartitionSchema]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,7 +123,7 @@ impl PartitionSchema {
         PartitionSchema {
             inner: Arc::new(Inner {
                 range_partition: RangePartitionSchema::new(range_columns),
-                hash_partitions: hash_partitions,
+                hash_partitions: hash_partitions.into_boxed_slice(),
             })
         }
     }
@@ -222,8 +222,8 @@ impl IntoPartitionKey for [u8] {
 #[derive(Clone)]
 pub struct Partition {
     partition_schema: PartitionSchema,
-    lower_bound_key: Vec<u8>,
-    upper_bound_key: Vec<u8>,
+    lower_bound_key: PartitionKey,
+    upper_bound_key: PartitionKey,
     hash_partitions: Vec<u32>,
     range_lower_bound: Row<'static>,
     range_upper_bound: Row<'static>,
@@ -305,8 +305,8 @@ impl Partition {
                           partition_schema: PartitionSchema,
                           mut partition: PartitionPb)
                           -> Result<Partition> {
-        let lower_bound_key = partition.partition_key_start.take().unwrap();
-        let upper_bound_key = partition.partition_key_end.take().unwrap();
+        let lower_bound_key = partition.partition_key_start.take().unwrap().into_partition_key();
+        let upper_bound_key = partition.partition_key_end.take().unwrap().into_partition_key();
 
         let hash_partition_levels = partition_schema.hash_partition_schemas().len();
         let mut hash_partitions = Vec::with_capacity(hash_partition_levels);
@@ -341,12 +341,12 @@ impl Partition {
         };
 
         Ok(Partition {
-            partition_schema: partition_schema,
-            lower_bound_key: lower_bound_key,
-            upper_bound_key: upper_bound_key,
-            hash_partitions: hash_partitions,
-            range_lower_bound: range_lower_bound,
-            range_upper_bound: range_upper_bound,
+            partition_schema,
+            lower_bound_key,
+            upper_bound_key,
+            hash_partitions,
+            range_lower_bound,
+            range_upper_bound,
         })
     }
 }

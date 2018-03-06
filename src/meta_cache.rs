@@ -23,7 +23,6 @@ use krpc;
 
 use Error;
 use HostPort;
-use Partition;
 use PartitionSchema;
 use RaftRole;
 use Result;
@@ -85,14 +84,14 @@ impl Entry {
 
     fn lower_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition().lower_bound_key(),
+            Entry::Tablet(ref tablet) => tablet.lower_bound(),
             Entry::NonCoveredRange { ref lower_bound, .. } => lower_bound,
         }
     }
 
     fn upper_bound(&self) -> &[u8] {
         match *self {
-            Entry::Tablet(ref tablet) => tablet.partition().upper_bound_key(),
+            Entry::Tablet(ref tablet) => tablet.upper_bound(),
             Entry::NonCoveredRange { ref upper_bound, .. } => upper_bound,
         }
     }
@@ -125,8 +124,8 @@ impl Entry {
                 // Sanity check that if the tablet IDs match, the ranges also match. If this fails,
                 // something is very wrong (possibly in the server).
                 debug_assert!(a.id() != b.id() ||
-                              (a.partition().lower_bound_key() == b.partition().lower_bound_key() &&
-                               a.partition().upper_bound_key() == b.partition().upper_bound_key()));
+                              (a.lower_bound() == b.lower_bound() &&
+                               a.upper_bound() == b.upper_bound()));
                 a.id() == b.id()
             },
             (&Entry::NonCoveredRange { lower_bound: ref a_lower,
@@ -379,10 +378,10 @@ impl TableLocationsTask {
 
         for pb in tablets {
             let id = TabletId::parse_bytes(&pb.tablet_id)?;
-            let partition = Partition::from_pb(&self.primary_key_schema,
-                                               // TODO(dan): see if this clone can be removed (Arc?).
-                                               self.partition_schema.clone(),
-                                               pb.partition.expect_field("TabletLocationsPB", "partition")?)?;
+
+            let partition = pb.partition.expect_field("TabletLocationsPB", "partition")?;
+            let lower_bound = partition.partition_key_start.expect_field("PartitionPb", "partition_key_start")?.into_partition_key();
+            let upper_bound = partition.partition_key_end.expect_field("PartitionPb", "partition_key_end")?.into_partition_key();
 
             let replicas = pb.replicas.into_iter().map(move |pb| {
                 let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
@@ -412,18 +411,19 @@ impl TableLocationsTask {
 
             let tablet = Arc::new(Tablet {
                 id,
-                partition,
+                lower_bound,
+                upper_bound,
                 replicas,
-                ttl: deadline,
+                deadline,
                 is_stale: AtomicBool::new(false),
             });
 
-            if tablet.partition().lower_bound_key() > &*last_upper_bound {
+            if tablet.lower_bound() > &last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
-                                                      tablet.partition().lower_bound_key().into_partition_key(),
+                                                      tablet.lower_bound().into_partition_key(),
                                                       deadline));
             }
-            last_upper_bound = tablet.partition().upper_bound_key().into_partition_key();
+            last_upper_bound = tablet.upper_bound().into_partition_key();
             entries.push(Entry::Tablet(tablet));
         }
 
@@ -537,14 +537,17 @@ pub(crate) struct Tablet {
     /// The tablet ID.
     id: TabletId,
 
-    /// The tablet partition.
-    partition: Partition,
+    /// The tablet lower-bound partition key.
+    lower_bound: PartitionKey,
+
+    /// The tablet upper-bound partition key.
+    upper_bound: PartitionKey,
 
     /// The tablet replicas.
     replicas: Vec<TabletReplica>,
 
     /// The deadline when the tablet metadata expires.
-    ttl: Instant,
+    deadline: Instant,
 
     is_stale: AtomicBool,
 }
@@ -557,8 +560,12 @@ impl Tablet {
     }
 
     /// Returns the tablet partition.
-    pub fn partition(&self) -> &Partition {
-        &self.partition
+    pub fn lower_bound(&self) -> &PartitionKey {
+        &self.lower_bound
+    }
+
+    pub fn upper_bound(&self) -> &PartitionKey {
+        &self.upper_bound
     }
 
     /// Returns the tablet replicas.
@@ -571,7 +578,7 @@ impl Tablet {
     /// The metadata may be stale because the leader changed, the set of replicas changed, or it
     /// has expired.
     pub fn is_stale(&self) -> bool {
-        self.is_stale.load(Relaxed) || Instant::now() > self.ttl
+        self.is_stale.load(Relaxed) || Instant::now() > self.deadline
     }
 
     /// Marks the tablet metadata as stale.
