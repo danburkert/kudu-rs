@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::collections::{
     BTreeMap,
     Bound,
@@ -21,7 +22,10 @@ use parking_lot::{
 use krpc;
 
 use Error;
+use HostPort;
+use Partition;
 use PartitionSchema;
+use RaftRole;
 use Result;
 use Schema;
 use TableId;
@@ -42,9 +46,6 @@ use pb::master::{
     TabletLocationsPb,
 };
 use table::Table;
-use tablet::{
-    Tablet,
-};
 use partition::{
     IntoPartitionKey,
     PartitionKey,
@@ -219,7 +220,7 @@ impl TableLocations {
         let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
         let remote = master.options().remote.clone();
-        let task = MetaCacheTask {
+        let task = TableLocationsTask {
             entries: entries.clone(),
             tablet_servers,
             table_id,
@@ -260,18 +261,18 @@ impl TableLocations {
                   extractor: fn(&Entry) -> T)
                   -> impl Future<Item=T, Error=Error> {
 
-        if let Some(value) = extract(&self.entries.lock(), partition_key, &extractor) {
-            return future::Either::A(future::ok(value));
+        if let Some(entry) = get_entry(&self.entries.lock(), partition_key) {
+            return future::Either::A(future::ok(extractor(entry)));
         }
 
         let partition_key = partition_key.into_partition_key();
         let (send, recv) = oneshot::channel();
 
-        self.sender.unbounded_send((partition_key, send)).expect("MetaCacheTask finished");
+        self.sender.unbounded_send((partition_key, send)).expect("TableLocationsTask finished");
         future::Either::B(recv.then(move |result| match result {
             Ok(Ok(entry)) => Ok(extractor(&entry)),
             Ok(Err(error)) => Err(error),
-            Err(_) => unreachable!("MetaCacheTask finished"),
+            Err(_) => unreachable!("TableLocationsTask finished"),
         }))
     }
 
@@ -280,23 +281,11 @@ impl TableLocations {
     }
 }
 
-/*
-impl fmt::Debug for TableLocations {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("TableLocations")
-         .field("table", &self.table())
-         .finish()
-    }
-}
-*/
-
-fn extract<Extractor, T>(entries: &BTreeMap<PartitionKey, Entry>,
-                         partition_key: &[u8],
-                         extractor: &Extractor) -> Option<T>
-where Extractor: Fn(&Entry) -> T {
+fn get_entry<'a, 'b>(entries: &'a BTreeMap<PartitionKey, Entry>,
+                     partition_key: &'b [u8]) -> Option<&'a Entry> {
     // TODO: filter stale entries.
     match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
-        Some((_, ref entry)) if entry.contains_partition_key(partition_key) => Some(extractor(entry)),
+        Some((_, ref entry)) if entry.contains_partition_key(partition_key) => Some(entry),
         _ => None,
     }
 }
@@ -305,7 +294,7 @@ where Extractor: Fn(&Entry) -> T {
 ///
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
-struct MetaCacheTask {
+struct TableLocationsTask {
     /// Cache of tablet entries.
     entries: Arc<Mutex<BTreeMap<PartitionKey, Entry>>>,
 
@@ -326,7 +315,7 @@ struct MetaCacheTask {
     in_flight: Option<(PartitionKey, MasterFuture<GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
 }
 
-impl MetaCacheTask {
+impl TableLocationsTask {
 
     fn splice_entries(&self, entries: Vec<Entry>) {
         let mut left = self.entries.lock();
@@ -373,7 +362,7 @@ impl MetaCacheTask {
         }
 
         let tablet_count = tablets.len();
-        let mut entries = Vec::with_capacity(tablets.len());
+        let mut entries = Vec::with_capacity(tablet_count);
         let mut last_upper_bound = tablets[0].partition
                                              .as_ref()
                                              .expect_field("TabletLocationsPb", "partition")?
@@ -388,21 +377,54 @@ impl MetaCacheTask {
                                                   deadline));
         }
 
-        for tablet in tablets {
-            /*
-            let tablet = Tablet::from_pb(&self.primary_key_schema,
-                                         self.partition_schema.clone(),
-                                         tablet,
-                                         deadline)?;
-                                         */
-            let tablet =  (|| -> Tablet { unimplemented!() })();
+        for pb in tablets {
+            let id = TabletId::parse_bytes(&pb.tablet_id)?;
+            let partition = Partition::from_pb(&self.primary_key_schema,
+                                               // TODO(dan): see if this clone can be removed (Arc?).
+                                               self.partition_schema.clone(),
+                                               pb.partition.expect_field("TabletLocationsPB", "partition")?)?;
+
+            let replicas = pb.replicas.into_iter().map(move |pb| {
+                let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
+                // TODO: error handling
+                let role = RaftRole::from_i32(pb.role).unwrap();
+                let proxy = self.tablet_servers
+                                .lock()
+                                .entry(id)
+                                .or_insert_with(move || {
+                                    let hostports = pb.ts_info
+                                                      .rpc_addresses
+                                                      .into_iter()
+                                                      .map(HostPort::from)
+                                                      .collect::<Vec<_>>()
+                                                      .into_boxed_slice();
+                                    let options = self.master.options();
+                                    krpc::Proxy::spawn(
+                                        hostports,
+                                        options.rpc.clone(),
+                                        options.threadpool.clone(),
+                                        &options.remote)
+                                })
+                                .clone();
+
+                Ok(TabletReplica { id, proxy, role })
+            }).collect::<Result<Vec<TabletReplica>>>()?;
+
+            let tablet = Arc::new(Tablet {
+                id,
+                partition,
+                replicas,
+                ttl: deadline,
+                is_stale: AtomicBool::new(false),
+            });
+
             if tablet.partition().lower_bound_key() > &*last_upper_bound {
                 entries.push(Entry::non_covered_range(last_upper_bound,
                                                       tablet.partition().lower_bound_key().into_partition_key(),
                                                       deadline));
             }
             last_upper_bound = tablet.partition().upper_bound_key().into_partition_key();
-            entries.push(Entry::Tablet(Arc::new(tablet)));
+            entries.push(Entry::Tablet(tablet));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
@@ -411,12 +433,11 @@ impl MetaCacheTask {
                                                   deadline));
         }
 
-        //trace!("{:?}: discovered entries: {:?}", self, entries);
         Ok(entries)
     }
 }
 
-impl Future for MetaCacheTask {
+impl Future for TableLocationsTask {
     type Item = ();
     type Error = ();
 
@@ -432,8 +453,8 @@ impl Future for MetaCacheTask {
                             continue;
                         }
 
-                        if let Some(entry) = extract(&self.entries.lock(), &*partition_key, &Entry::clone) {
-                            let _ = sender.send(Ok(entry));
+                        if let Some(entry) = get_entry(&self.entries.lock(), &*partition_key) {
+                            let _ = sender.send(Ok(entry.clone()));
                         } else {
                             self.requests
                                 .entry(partition_key)
@@ -508,6 +529,78 @@ impl Future for MetaCacheTask {
                 None => return Ok(Async::NotReady),
             }
         }
+    }
+}
+
+/// Metadata pertaining to a Kudu tablet.
+pub(crate) struct Tablet {
+    /// The tablet ID.
+    id: TabletId,
+
+    /// The tablet partition.
+    partition: Partition,
+
+    /// The tablet replicas.
+    replicas: Vec<TabletReplica>,
+
+    /// The deadline when the tablet metadata expires.
+    ttl: Instant,
+    is_stale: AtomicBool,
+}
+
+impl Tablet {
+
+    /// Returns the unique tablet ID.
+    pub fn id(&self) -> TabletId {
+        self.id
+    }
+
+    /// Returns the tablet partition.
+    pub fn partition(&self) -> &Partition {
+        &self.partition
+    }
+
+    /// Returns the tablet replicas.
+    pub fn replicas(&self) -> &[TabletReplica] {
+        &self.replicas
+    }
+
+    /// Returns true if the tablet metadata is known to be stale.
+    ///
+    /// The metadata may be stale because the leader changed, the set of replicas changed, or it
+    /// has expired.
+    pub fn is_stale(&self) -> bool {
+        self.is_stale.load(Relaxed) || Instant::now() > self.ttl
+    }
+
+    /// Marks the tablet metadata as stale.
+    pub fn set_stale(&self) {
+        self.is_stale.store(true, Relaxed)
+    }
+}
+
+/// Tablet replica belonging to a tablet server.
+pub(crate) struct TabletReplica {
+    id: TabletServerId,
+    proxy: krpc::Proxy,
+    role: RaftRole,
+}
+
+impl TabletReplica {
+
+    /// Returns the ID of the tablet server which owns this replica.
+    pub fn id(&self) -> TabletServerId {
+        self.id
+    }
+
+    /// Returns a KRPC proxy to the tablet server hosting the replica.
+    pub fn proxy(&self) -> krpc::Proxy {
+        self.proxy.clone()
+    }
+
+    /// Returns the Raft role of this replica.
+    pub fn role(&self) -> RaftRole {
+        self.role
     }
 }
 

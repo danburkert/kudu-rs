@@ -47,7 +47,6 @@ mod row;
 mod schema;
 mod server;
 mod table;
-mod tablet;
 mod util;
 mod value;
 //mod writer2;
