@@ -545,6 +545,7 @@ pub(crate) struct Tablet {
 
     /// The deadline when the tablet metadata expires.
     ttl: Instant,
+
     is_stale: AtomicBool,
 }
 

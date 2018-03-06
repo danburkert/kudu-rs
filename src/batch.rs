@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
+use std::sync::Arc;
+
 use futures::{
     Async,
     Future,
@@ -12,7 +14,7 @@ use Error;
 use HostPort;
 use OperationEncoder;
 use TabletId;
-use meta_cache::TableLocationsCache;
+use meta_cache::Tablet;
 use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
@@ -22,11 +24,14 @@ use retry::RetryFuture;
 /// `Batcher` accumulates write operations for a tablet into batches, and keeps stats on buffered
 /// and in-flight batches to to the tablet.
 pub(crate) struct Batcher {
+    /// The inclusive lower bound partition key of the tablet.
+    pub lower_bound: PartitionKey,
+
+    /// The exclusive upper bound partition key of the tablet.
+    pub upper_bound: PartitionKey,
+
     /// The batch being accumulated. Buffers operations until it is flushed.
     pub buffer: Buffer,
-
-    /// A partition key belonging to the tablet. Used for metacache lookups.
-    pub partition_key: Vec<u8>,
 
     /// The amount of data currently in-flight to the tablet.
     pub data_in_flight: usize,
@@ -36,7 +41,8 @@ pub(crate) struct Batcher {
 }
 
 impl Batcher {
-    fn new(partition_key: Vec<u8>) -> Batcher {
+    fn new(lower_bound: PartitionKey,
+           upper_bound: PartitionKey) -> Batcher {
         Batcher {
             buffer: Buffer::new(),
             partition_key,
@@ -62,8 +68,7 @@ impl Buffer {
 }
 
 struct BatchFuture {
-    meta_cache: TableLocationsCache,
-    tserver_proxies: tserver::ProxyCache,
+    tablet: Arc<Tablet>,
     partition_key: Vec<u8>,
     operations: usize,
     state: State,
