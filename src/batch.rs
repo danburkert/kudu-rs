@@ -14,41 +14,63 @@ use Error;
 use HostPort;
 use OperationEncoder;
 use TabletId;
-use meta_cache::Tablet;
+use meta_cache::{
+    TableLocations,
+    Tablet,
+};
 use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
 };
 use retry::RetryFuture;
+use PartitionKey;
 
 /// `Batcher` accumulates write operations for a tablet into batches, and keeps stats on buffered
 /// and in-flight batches to to the tablet.
 pub(crate) struct Batcher {
-    /// The inclusive lower bound partition key of the tablet.
-    pub lower_bound: PartitionKey,
 
-    /// The exclusive upper bound partition key of the tablet.
-    pub upper_bound: PartitionKey,
+    table_locations: TableLocations,
+
+    tablet: Arc<Tablet>,
+
+    tablet_future: Option<Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>>,
 
     /// The batch being accumulated. Buffers operations until it is flushed.
-    pub buffer: Buffer,
-
-    /// The amount of data currently in-flight to the tablet.
-    pub data_in_flight: usize,
-
-    /// The number of batches currently in-flight to the tablet.
-    pub batches_in_flight: u8,
+    buffer: Buffer,
 }
 
 impl Batcher {
-    fn new(lower_bound: PartitionKey,
-           upper_bound: PartitionKey) -> Batcher {
+    fn new(table_locations: TableLocations, tablet: Arc<Tablet>) -> Batcher {
         Batcher {
+            table_locations,
+            tablet,
+            tablet_future: None,
             buffer: Buffer::new(),
-            partition_key,
-            data_in_flight: 0,
-            batches_in_flight: 0,
         }
+    }
+
+    fn poll_ready(&mut self) -> Poll<(), Error> {
+        while self.tablet.is_stale() {
+            // TODO: do some kind of backoff here so we aren't spamming the metastore.
+
+            // NLL hack
+            let Batcher { ref table_locations, ref mut tablet, ref mut tablet_future, .. } = *self;
+            let tablet_future = tablet_future.get_or_insert_with(|| {
+                Box::new(table_locations.tablet(tablet.lower_bound()))
+            });
+
+            if let Some(new_tablet) = try_ready!(tablet_future.poll()) {
+                if tablet.id() != new_tablet.id() {
+                    // TODO
+                    unimplemented!("partitioning has changed");
+                }
+                *tablet = new_tablet;
+            } else {
+                unimplemented!("partitioning has changed to non-covered range");
+            }
+        }
+
+        Ok(Async::Ready(()))
     }
 }
 
@@ -67,9 +89,16 @@ impl Buffer {
     }
 }
 
+/*
+struct BatchError {
+    tablet: Tablet,
+    buffer: Buffer,
+    error: Error,
+}
+
 struct BatchFuture {
-    tablet: Arc<Tablet>,
-    partition_key: Vec<u8>,
+    tablet: Box<Future<Item=BatchResult, Error=BatchError>>,
+    lower_bound: PartitionKey,
     operations: usize,
     state: State,
     call: Call<WriteRequestPb, WriteResponsePb>,
@@ -123,3 +152,4 @@ pub(crate) struct BatchResult {
     call: Call<WriteRequestPb, WriteResponsePb>,
     response: Result<WriteResponsePb, Error>,
 }
+*/
