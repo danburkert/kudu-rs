@@ -1,17 +1,25 @@
 use std::cmp::Ordering;
+use std::mem;
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
-use std::time::{UNIX_EPOCH, SystemTime};
+use std::time::{
+    Duration,
+    Instant,
+    SystemTime,
+    UNIX_EPOCH,
+};
 
 use chrono;
+use futures::{Async, Future, Poll, Stream};
 use ifaces;
+use timer;
 use url::Url;
 
 use DataType;
-use Result;
+use Error;
 use Row;
+use backoff::Backoff;
 use pb::HostPortPb;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
@@ -88,6 +96,127 @@ pub fn dummy_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
 }
 
+/// Returns a stream which yields elements according to the backoff policy.
+pub fn backoff_stream(mut backoff: Backoff, timer: timer::Timer) -> BackoffStream {
+    let sleep = timer.sleep(backoff.next_backoff());
+    BackoffStream {
+        backoff: backoff,
+        timer: timer,
+        sleep: sleep,
+    }
+}
+/// Stream which yields elements according to a backoff policy.
+#[must_use = "streams do nothing unless polled"]
+pub struct BackoffStream {
+    backoff: Backoff,
+    timer: timer::Timer,
+    sleep: timer::Sleep
+}
+impl Stream for BackoffStream {
+    type Item = ();
+    type Error = ();
+    fn poll(&mut self) -> Poll<Option<()>, ()> {
+        try_ready!(self.sleep.poll());
+        let backoff = self.backoff.next_backoff();
+        self.sleep = self.timer.sleep(backoff);
+        Ok(Async::Ready(Some(())))
+    }
+}
+
+pub fn retry_with_backoff<R, F>(timer: timer::Timer,
+                                mut backoff: Backoff,
+                                mut retry: R)
+                                -> RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
+{
+    let duration = backoff.next_backoff();
+    let future = retry(Instant::now() + duration, RetryCause::Initial);
+    let sleep = timer.sleep(duration);
+    RetryWithBackoff {
+        backoff: backoff,
+        timer: timer,
+        sleep: sleep,
+        retry: retry,
+        try: Try::Future(future),
+    }
+}
+
+pub enum RetryCause<E> {
+    Initial,
+    TimedOut,
+    Err(E),
+}
+
+enum Try<F> where F: Future {
+    Future(F),
+    Err(F::Error),
+    None,
+}
+impl <F> Try<F> where F: Future {
+    fn take(&mut self) -> Result<F, F::Error> {
+        match mem::replace(self, Try::None) {
+            Try::Future(f) => Ok(f),
+            Try::Err(error) => Err(error),
+            Try::None => unreachable!(),
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
+{
+    backoff: Backoff,
+    timer: timer::Timer,
+    sleep: timer::Sleep,
+    retry: R,
+    try: Try<F>,
+}
+
+impl <R, F> Future for RetryWithBackoff<R, F>
+where R: FnMut(Instant, RetryCause<F::Error>) -> F,
+      F: Future,
+{
+    type Item = F::Item;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<F::Item, ()> {
+        loop {
+            {
+                let poll = if let Try::Future(ref mut f) = self.try {
+                    f.poll()
+                } else {
+                    Ok(Async::NotReady)
+                };
+                match poll {
+                    Ok(Async::Ready(item)) => return Ok(Async::Ready(item)),
+                    Ok(Async::NotReady) => (),
+                    Err(error) => self.try = Try::Err(error),
+                }
+            }
+
+            // Unwrap here is unfortunate, but we really have no way to handle
+            // the timer being out of capacity.
+            match self.sleep.poll().expect("timer sleep failed") {
+                Async::Ready(_) => {
+                    let duration = self.backoff.next_backoff();
+
+                    let cause = match self.try.take() {
+                        Ok(_) => RetryCause::TimedOut,
+                        Err(error) => RetryCause::Err(error),
+                    };
+
+                    self.try = Try::Future((self.retry)(Instant::now() + duration, cause));
+                    self.sleep = self.timer.sleep(duration);
+                },
+                Async::NotReady => return Ok(Async::NotReady),
+            }
+        }
+    }
+}
+
 lazy_static! {
     static ref LOCAL_ADDRS: HashSet<IpAddr> = {
         let mut addrs = HashSet::new();
@@ -119,7 +248,7 @@ pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
     }
 }
 
-pub(crate) fn urls_from_pb(hostports: &[HostPortPb], https_enabled: bool) -> Result<Vec<Url>> {
+pub(crate) fn urls_from_pb(hostports: &[HostPortPb], https_enabled: bool) -> Result<Vec<Url>, Error> {
     hostports.iter()
              .map(|hostport| {
                 Url::parse(&format!("{}://{}:{}",

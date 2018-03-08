@@ -25,9 +25,7 @@ use pb::tserver::{
 use retry::RetryFuture;
 use PartitionKey;
 
-/// `Batcher` accumulates write operations for a tablet into batches, and keeps stats on buffered
-/// and in-flight batches to to the tablet.
-pub(crate) struct Batcher {
+pub(crate) struct Batch {
 
     table_locations: TableLocations,
 
@@ -39,9 +37,9 @@ pub(crate) struct Batcher {
     buffer: Buffer,
 }
 
-impl Batcher {
-    fn new(table_locations: TableLocations, tablet: Arc<Tablet>) -> Batcher {
-        Batcher {
+impl Batch {
+    fn new(table_locations: TableLocations, tablet: Arc<Tablet>) -> Batch {
+        Batch {
             table_locations,
             tablet,
             tablet_future: None,
@@ -50,27 +48,40 @@ impl Batcher {
     }
 
     fn poll_ready(&mut self) -> Poll<(), Error> {
-        while self.tablet.is_stale() {
-            // TODO: do some kind of backoff here so we aren't spamming the metastore.
+        loop {
+            while self.tablet.is_stale() {
+                // TODO: do some kind of backoff here so we aren't spamming the metastore.
 
-            // NLL hack
-            let Batcher { ref table_locations, ref mut tablet, ref mut tablet_future, .. } = *self;
-            let tablet_future = tablet_future.get_or_insert_with(|| {
-                Box::new(table_locations.tablet(tablet.lower_bound()))
-            });
+                // NLL hack
+                let Batch { ref table_locations, ref mut tablet, ref mut tablet_future, .. } = *self;
+                let tablet_future = tablet_future.get_or_insert_with(|| {
+                    Box::new(table_locations.tablet(tablet.lower_bound()))
+                });
 
-            if let Some(new_tablet) = try_ready!(tablet_future.poll()) {
-                if tablet.id() != new_tablet.id() {
-                    // TODO
-                    unimplemented!("partitioning has changed");
+                if let Some(new_tablet) = try_ready!(tablet_future.poll()) {
+                    if tablet.id() != new_tablet.id() {
+                        // TODO
+                        unimplemented!("partitioning has changed");
+                    }
+                    *tablet = new_tablet;
+                } else {
+                    unimplemented!("partitioning has changed to non-covered range");
                 }
-                *tablet = new_tablet;
-            } else {
-                unimplemented!("partitioning has changed to non-covered range");
             }
-        }
 
-        Ok(Async::Ready(()))
+            let leader = match self.tablet.leader_replica() {
+                Some(leader) => leader.proxy(),
+                None => {
+                    self.tablet.mark_stale();
+                    continue;
+                },
+            };
+
+            let mut message = WriteRequestPb::default();
+            //message.row_operations = Some(self.buffer.buffer.into_pb());
+
+            return Ok(Async::Ready(()))
+        }
     }
 }
 

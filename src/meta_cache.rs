@@ -573,6 +573,11 @@ impl Tablet {
         &self.replicas
     }
 
+    /// Returns the leader replica.
+    pub fn leader_replica(&self) -> Option<&TabletReplica> {
+        self.replicas.iter().find(|replica| replica.role == RaftRole::Leader)
+    }
+
     /// Returns true if the tablet metadata is known to be stale.
     ///
     /// The metadata may be stale because the leader changed, the set of replicas changed, or it
@@ -582,7 +587,7 @@ impl Tablet {
     }
 
     /// Marks the tablet metadata as stale.
-    pub fn set_stale(&self) {
+    pub fn mark_stale(&self) {
         self.is_stale.store(true, Relaxed)
     }
 }
