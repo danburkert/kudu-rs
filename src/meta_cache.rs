@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
 use std::collections::{
     BTreeMap,
     Bound,
@@ -16,10 +16,12 @@ use futures::{
 };
 use futures::future;
 use futures::sync::{mpsc, oneshot};
+use futures::task::{self, Task};
 use parking_lot::{
     Mutex,
 };
 use krpc;
+use slab::Slab;
 
 use Error;
 use HostPort;
@@ -406,7 +408,7 @@ impl TableLocationsTask {
                                 })
                                 .clone();
 
-                Ok(TabletReplica { id, proxy, role })
+                Ok(TabletReplica { id, proxy, role, is_stale: AtomicBool::new(false), })
             }).collect::<Result<Vec<TabletReplica>>>()?;
 
             let tablet = Arc::new(Tablet {
@@ -415,7 +417,8 @@ impl TableLocationsTask {
                 upper_bound,
                 replicas,
                 deadline,
-                is_stale: AtomicBool::new(false),
+                refresh: AtomicUsize::new(FRESH),
+                refresh_waiters: Mutex::new(Slab::new()),
             });
 
             if tablet.lower_bound() > &last_upper_bound {
@@ -533,7 +536,12 @@ impl Future for TableLocationsTask {
 }
 
 /// Metadata pertaining to a Kudu tablet.
+///
+/// The metadata may become stale, at which point a new version of the metadata is requested from
+/// the master. When the new version of the metadata becomes available, it's linked to from the old
+/// version as an intrusive singly linked list.
 pub(crate) struct Tablet {
+
     /// The tablet ID.
     id: TabletId,
 
@@ -549,8 +557,18 @@ pub(crate) struct Tablet {
     /// The deadline when the tablet metadata expires.
     deadline: Instant,
 
-    is_stale: AtomicBool,
+    /// The next version of the tablet.
+    refresh: AtomicUsize,
+
+    /// The set of tasks waiting for the refreshed version to become available.
+    refresh_waiters: Mutex<Slab<Task>>,
 }
+
+const FRESH: usize = 0;
+const FAILED: usize = 1;
+const REFRESHED: usize = 2;
+const STATE_MASK: usize = FRESH | FAILED | REFRESHED;
+const PTR_MASK: usize = !STATE_MASK;
 
 impl Tablet {
 
@@ -583,12 +601,91 @@ impl Tablet {
     /// The metadata may be stale because the leader changed, the set of replicas changed, or it
     /// has expired.
     pub fn is_stale(&self) -> bool {
-        self.is_stale.load(Relaxed) || Instant::now() > self.deadline
+        Instant::now() > self.deadline ||
+            self.replicas.iter().any(|replica| replica.is_stale.load(Relaxed))
     }
 
-    /// Marks the tablet metadata as stale.
-    pub fn mark_stale(&self) {
-        self.is_stale.store(true, Relaxed)
+    pub fn try_refresh(&self) -> Result<Option<Arc<Tablet>>> {
+        let refresh = self.refresh.load(SeqCst);
+        let ptr = refresh & PTR_MASK;
+        let state = refresh & STATE_MASK;
+        match state {
+            FRESH => {
+                debug_assert_eq!(0, ptr);
+                Ok(None)
+            },
+            FAILED => {
+                debug_assert_ne!(0, ptr);
+                let error: &Error =  unsafe {
+                    &*(ptr as *const Error)
+                };
+                Err(Error::clone(error))
+            },
+            REFRESHED => {
+                debug_assert_ne!(0, ptr);
+                let tablet: &Arc<Tablet> = unsafe {
+                    &*(ptr as *const Arc<Tablet>)
+                };
+                // Recurse!
+                Ok(Some(tablet.try_refresh()?
+                              .unwrap_or_else(|| Arc::clone(tablet))))
+            },
+            _ => panic!("invalid state: {}", state),
+        }
+    }
+}
+
+impl Drop for Tablet {
+    fn drop(&mut self) {
+        let refresh = self.refresh.load(SeqCst);
+        let state = refresh & STATE_MASK;
+        let ptr = refresh & PTR_MASK;
+        unsafe {
+            match state {
+                FRESH => debug_assert_eq!(0, ptr),
+                FAILED => {
+                    debug_assert_ne!(0, ptr);
+                    let _ = Box::from_raw(ptr as *mut Error);
+                },
+                REFRESHED => {
+                    debug_assert_ne!(0, ptr);
+                    let _ = Arc::from_raw(ptr as *const Arc<Tablet>);
+                },
+                _ => panic!("invalid state: {}", state),
+            }
+        }
+    }
+}
+
+pub(crate) struct RefreshFuture {
+    tablet: Arc<Tablet>,
+    token: usize,
+}
+
+impl RefreshFuture {
+    fn new(tablet: Arc<Tablet>) -> RefreshFuture {
+        let token = tablet.refresh_waiters.lock().insert(task::current());
+        RefreshFuture {
+            tablet,
+            token,
+        }
+    }
+}
+
+impl Future for RefreshFuture {
+    type Item = Arc<Tablet>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Result<Async<Arc<Tablet>>> {
+        // Refresh our task in the slab.
+        if let Some(task) = self.tablet.refresh_waiters.lock().get_mut(self.token) {
+            *task = task::current();
+        }
+
+        match self.tablet.try_refresh()? {
+            Some(tablet) => Ok(Async::Ready(tablet)),
+            None => Ok(Async::NotReady),
+        }
     }
 }
 
@@ -597,6 +694,7 @@ pub(crate) struct TabletReplica {
     id: TabletServerId,
     proxy: krpc::Proxy,
     role: RaftRole,
+    is_stale: AtomicBool,
 }
 
 impl TabletReplica {
@@ -614,6 +712,11 @@ impl TabletReplica {
     /// Returns the Raft role of this replica.
     pub fn role(&self) -> RaftRole {
         self.role
+    }
+
+    /// Marks the tablet metadata as stale.
+    pub fn mark_stale(&self) {
+        self.is_stale.store(true, Relaxed)
     }
 }
 

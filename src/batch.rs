@@ -2,6 +2,7 @@
 #![allow(unused_variables)]
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::{
     Async,
@@ -24,11 +25,14 @@ use pb::tserver::{
 };
 use retry::RetryFuture;
 use PartitionKey;
+use util::{
+    RetryWithBackoff,
+    RetryCause,
+};
 
 pub(crate) struct Batch {
 
     table_locations: TableLocations,
-
     tablet: Arc<Tablet>,
 
     tablet_future: Option<Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>>,
@@ -72,13 +76,15 @@ impl Batch {
             let leader = match self.tablet.leader_replica() {
                 Some(leader) => leader.proxy(),
                 None => {
-                    self.tablet.mark_stale();
+                    // Refresh the tablet.
+                    //self.tablet.mark_stale();
                     continue;
                 },
             };
 
-            let mut message = WriteRequestPb::default();
-            //message.row_operations = Some(self.buffer.buffer.into_pb());
+            //let mut message = WriteRequestPb::default();
+            //let ops = self.buffer.buffer.into_pb();
+            //message.row_operations = Some(ops);
 
             return Ok(Async::Ready(()))
         }
