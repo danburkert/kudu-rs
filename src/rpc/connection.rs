@@ -12,7 +12,10 @@ use Error;
 use Result;
 use backoff::Backoff;
 use error::RpcError;
-use kudu_pb::rpc_header::{SaslMessagePB_SaslState as SaslState};
+use kudu_pb::rpc_header::{
+    NegotiatePB_NegotiateStep as NegotiateStep,
+    NegotiatePB_SaslMechanism as SaslMechanism,
+};
 use kudu_pb::rpc_header;
 use queue_map::QueueMap;
 use rpc::Rpc;
@@ -356,7 +359,7 @@ impl Connection {
 
             // Write the connection header and SASL negotiation messages to the send buffer.
             try!(cxn.buffer_connection_header());
-            try!(cxn.buffer_sasl_negotiation());
+            try!(cxn.buffer_negotiate());
             // Optimistically flush the connection header and SASL negotiation to the TCP socket.
             // Even though the socket has not yet been registered, this will usually succeed
             // because the socket will have sufficient internal buffer space. This sometimes fails
@@ -450,17 +453,21 @@ impl Connection {
         self.send_buf.write(b"hrpc\x09\0\0").map(|_| ()).map_err(From::from)
     }
 
-    /// Writes a SASL negotiate message to the send buffer.
+    /// Writes a negotiate message to the send buffer.
     ///
     /// Does not flush the buffer.
     ///
     /// If an error is returned, the connection should be torn down.
-    fn buffer_sasl_negotiation(&mut self) -> Result<()> {
-        trace!("{:?}: sending SASL NEGOTIATE request to server", self);
+    fn buffer_negotiate(&mut self) -> Result<()> {
+        trace!("{:?}: sending NEGOTIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
-        let mut msg = rpc_header::SaslMessagePB::new();
-        msg.set_state(SaslState::NEGOTIATE);
+        let mut msg = rpc_header::NegotiatePB::new();
+        msg.set_step(NegotiateStep::NEGOTIATE);
+
+        let mut plain = SaslMechanism::new();
+        plain.mut_mechanism().push_str("PLAIN");
+        msg.mut_sasl_mechanisms().push(plain);
         self.buffer_message(&msg)
     }
 
@@ -473,12 +480,13 @@ impl Connection {
         trace!("{:?}: sending SASL INITIATE request to server", self);
         self.request_header.clear();
         self.request_header.set_call_id(-33);
-        let mut msg = rpc_header::SaslMessagePB::new();
-        msg.set_state(SaslState::INITIATE);
+        let mut msg = rpc_header::NegotiatePB::new();
+        msg.set_step(NegotiateStep::SASL_INITIATE);
         msg.mut_token().extend_from_slice(b"\0user\0");
-        let mut auth = rpc_header::SaslMessagePB_SaslAuth::new();
-        auth.mut_mechanism().push_str("PLAIN");
-        msg.mut_auths().push(auth);
+
+        let mut plain = SaslMechanism::new();
+        plain.mut_mechanism().push_str("PLAIN");
+        msg.mut_sasl_mechanisms().push(plain);
         self.buffer_message(&msg)
     }
 
@@ -498,12 +506,12 @@ impl Connection {
     /// Handles a SASL handshake response message.
     fn handle_sasl_message(&mut self,
                            event_loop: &mut Loop,
-                           msg: rpc_header::SaslMessagePB)
+                           msg: rpc_header::NegotiatePB)
                            -> Result<()> {
-        trace!("{:?}: received SASL {:?} response from server", self, msg.get_state());
-        match msg.get_state() {
-            SaslState::NEGOTIATE => {
-                if msg.get_auths().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
+        trace!("{:?}: received step {:?} response from server", self, msg.get_step());
+        match msg.get_step() {
+            NegotiateStep::NEGOTIATE => {
+                if msg.get_sasl_mechanisms().iter().any(|auth| auth.get_mechanism() == "PLAIN") {
                     try!(self.buffer_sasl_initiate());
                     try!(self.flush());
                     Ok(())
@@ -511,7 +519,7 @@ impl Connection {
                     Err(Error::NegotiationError("SASL PLAIN authentication not available"))
                 }
             },
-            SaslState::SUCCESS => {
+            NegotiateStep::SASL_SUCCESS => {
                 try!(self.buffer_connection_context());
                 self.state = ConnectionState::Connected;
                 self.reset_backoff.reset();

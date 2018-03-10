@@ -453,17 +453,10 @@ impl_master_response!(GetTableSchemaResponsePB);
 impl_master_response!(GetTabletLocationsResponsePB);
 impl_master_response!(IsAlterTableDoneResponsePB);
 impl_master_response!(IsCreateTableDoneResponsePB);
+impl_master_response!(ListMastersResponsePB, no_error);
 impl_master_response!(ListTablesResponsePB);
 impl_master_response!(ListTabletServersResponsePB);
 impl_master_response!(PingResponsePB, no_error);
-
-impl MasterResponse for ListMastersResponsePB {
-    fn error(&mut self) -> Option<MasterError> {
-        if self.has_error() {
-            Some(MasterError::new(MasterErrorCode::UnknownError, Status::from(self.take_error())))
-        } else { None }
-    }
-}
 
 struct CB<Resp, F>(MasterProxy, F, PhantomData<Resp>)
 where Resp: MasterResponse, F: FnOnce(Result<Resp>) + Send + 'static;

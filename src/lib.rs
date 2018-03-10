@@ -239,23 +239,23 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    fn to_pb(self) -> kudu_pb::common::CompressionType {
+    fn to_pb(self) -> kudu_pb::compression::CompressionType {
         match self {
-            CompressionType::Default => kudu_pb::common::CompressionType::DEFAULT_COMPRESSION,
-            CompressionType::None => kudu_pb::common::CompressionType::NO_COMPRESSION,
-            CompressionType::Snappy => kudu_pb::common::CompressionType::SNAPPY,
-            CompressionType::Lz4 => kudu_pb::common::CompressionType::LZ4,
-            CompressionType::Zlib => kudu_pb::common::CompressionType::ZLIB,
+            CompressionType::Default => kudu_pb::compression::CompressionType::DEFAULT_COMPRESSION,
+            CompressionType::None => kudu_pb::compression::CompressionType::NO_COMPRESSION,
+            CompressionType::Snappy => kudu_pb::compression::CompressionType::SNAPPY,
+            CompressionType::Lz4 => kudu_pb::compression::CompressionType::LZ4,
+            CompressionType::Zlib => kudu_pb::compression::CompressionType::ZLIB,
         }
     }
 
-    fn from_pb(pb: kudu_pb::common::CompressionType) -> Result<CompressionType> {
+    fn from_pb(pb: kudu_pb::compression::CompressionType) -> Result<CompressionType> {
         match pb {
-            kudu_pb::common::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
-            kudu_pb::common::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
-            kudu_pb::common::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
-            kudu_pb::common::CompressionType::LZ4 => Ok(CompressionType::Lz4),
-            kudu_pb::common::CompressionType::ZLIB => Ok(CompressionType::Zlib),
+            kudu_pb::compression::CompressionType::DEFAULT_COMPRESSION => Ok(CompressionType::Default),
+            kudu_pb::compression::CompressionType::NO_COMPRESSION => Ok(CompressionType::None),
+            kudu_pb::compression::CompressionType::SNAPPY => Ok(CompressionType::Snappy),
+            kudu_pb::compression::CompressionType::LZ4 => Ok(CompressionType::Lz4),
+            kudu_pb::compression::CompressionType::ZLIB => Ok(CompressionType::Zlib),
             _ => Err(Error::VersionMismatch("unknown compression type".to_string())),
         }
     }

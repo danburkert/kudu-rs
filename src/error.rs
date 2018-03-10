@@ -234,6 +234,9 @@ pub enum RpcErrorCode {
     /// cached. It's unknown whether the request was executed or not.
     StaleRequest,
 
+    /// TODO
+    Unavailable,
+
     // Fatal errors indicate that the client should shut down the connection.
 
     FatalUnknown,
@@ -247,6 +250,9 @@ pub enum RpcErrorCode {
     FatalVersionMismatch,
     /// Auth failed.
     FatalUnauthorized,
+
+    /// TODO
+    FatalInvalidAuthenticationToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -271,7 +277,8 @@ impl RpcError {
             RpcErrorCode::FatalInvalidRpcHeader |
             RpcErrorCode::FatalDeserializingRequest |
             RpcErrorCode::FatalVersionMismatch |
-            RpcErrorCode::FatalUnauthorized => true,
+            RpcErrorCode::FatalUnauthorized |
+            RpcErrorCode::FatalInvalidAuthenticationToken => true,
             _ => false,
         }
     }
@@ -287,11 +294,13 @@ impl error::Error for RpcError {
             RpcErrorCode::InvalidRequest => "invalid request",
             RpcErrorCode::FatalUnknown => "unknown error",
             RpcErrorCode::StaleRequest => "stale request",
+            RpcErrorCode::Unavailable => "unavailable",
             RpcErrorCode::FatalServerShuttingDown => "server shutting down",
             RpcErrorCode::FatalInvalidRpcHeader => "invalid RPC header",
             RpcErrorCode::FatalDeserializingRequest => "error deserializing request",
             RpcErrorCode::FatalVersionMismatch => "version mismatch",
             RpcErrorCode::FatalUnauthorized => "unauthorized",
+            RpcErrorCode::FatalInvalidAuthenticationToken => "invalid authentication token",
         }
     }
 
@@ -303,18 +312,20 @@ impl error::Error for RpcError {
 impl From<RpcErrorPB> for RpcError {
     fn from(mut error: RpcErrorPB) -> RpcError {
         let code = match error.get_code() {
-            RpcErrorCodePB::FATAL_UNKNOWN => RpcErrorCode::FatalUnknown,
             RpcErrorCodePB::ERROR_APPLICATION => RpcErrorCode::ApplicationError,
+            RpcErrorCodePB::ERROR_INVALID_REQUEST => RpcErrorCode::InvalidRequest,
             RpcErrorCodePB::ERROR_NO_SUCH_METHOD => RpcErrorCode::NoSuchMethod,
             RpcErrorCodePB::ERROR_NO_SUCH_SERVICE => RpcErrorCode::NoSuchService,
-            RpcErrorCodePB::ERROR_SERVER_TOO_BUSY => RpcErrorCode::ServerTooBusy,
-            RpcErrorCodePB::ERROR_INVALID_REQUEST => RpcErrorCode::InvalidRequest,
             RpcErrorCodePB::ERROR_REQUEST_STALE => RpcErrorCode::StaleRequest,
-            RpcErrorCodePB::FATAL_SERVER_SHUTTING_DOWN => RpcErrorCode::FatalServerShuttingDown,
-            RpcErrorCodePB::FATAL_INVALID_RPC_HEADER => RpcErrorCode::FatalInvalidRpcHeader,
+            RpcErrorCodePB::ERROR_SERVER_TOO_BUSY => RpcErrorCode::ServerTooBusy,
+            RpcErrorCodePB::ERROR_UNAVAILABLE => RpcErrorCode::Unavailable,
             RpcErrorCodePB::FATAL_DESERIALIZING_REQUEST => RpcErrorCode::FatalDeserializingRequest,
-            RpcErrorCodePB::FATAL_VERSION_MISMATCH => RpcErrorCode::FatalVersionMismatch,
+            RpcErrorCodePB::FATAL_INVALID_AUTHENTICATION_TOKEN => RpcErrorCode::FatalInvalidAuthenticationToken,
+            RpcErrorCodePB::FATAL_INVALID_RPC_HEADER => RpcErrorCode::FatalInvalidRpcHeader,
+            RpcErrorCodePB::FATAL_SERVER_SHUTTING_DOWN => RpcErrorCode::FatalServerShuttingDown,
             RpcErrorCodePB::FATAL_UNAUTHORIZED => RpcErrorCode::FatalUnauthorized,
+            RpcErrorCodePB::FATAL_UNKNOWN => RpcErrorCode::FatalUnknown,
+            RpcErrorCodePB::FATAL_VERSION_MISMATCH => RpcErrorCode::FatalVersionMismatch,
         };
 
         let message = mem::replace(error.mut_message(), String::new());
@@ -355,6 +366,10 @@ pub enum StatusCode {
     ConfigurationError,
     Incomplete,
     EndOfFile,
+    Cancelled,
+    TabletFailed,
+    Incompatibility,
+    HiveMetastoreError,
 }
 
 impl From<StatusCodePB> for StatusCode {
@@ -380,6 +395,7 @@ impl From<StatusCodePB> for StatusCode {
             StatusCodePB::CONFIGURATION_ERROR => StatusCode::ConfigurationError,
             StatusCodePB::INCOMPLETE => StatusCode::Incomplete,
             StatusCodePB::END_OF_FILE => StatusCode::EndOfFile,
+            StatusCodePB::CANCELLED => StatusCode::EndOfFile,
         }
     }
 }
@@ -471,6 +487,8 @@ pub enum TabletServerErrorCode {
     AlreadyInProgress,
     /// The request is throttled.
     Throttled,
+
+    TabletFailed,
 }
 
 impl From<TabletServerErrorCodePB> for TabletServerErrorCode {
@@ -495,6 +513,7 @@ impl From<TabletServerErrorCodePB> for TabletServerErrorCode {
             TabletServerErrorCodePB::CAS_FAILED => TabletServerErrorCode::CasFailed,
             TabletServerErrorCodePB::ALREADY_INPROGRESS => TabletServerErrorCode::AlreadyInProgress,
             TabletServerErrorCodePB::THROTTLED => TabletServerErrorCode::Throttled,
+            TabletServerErrorCodePB::TABLET_FAILED => TabletServerErrorCode::TabletFailed,
         }
     }
 }
@@ -527,6 +546,7 @@ impl error::Error for TabletServerError {
             TabletServerErrorCode::CasFailed => "CAS failed",
             TabletServerErrorCode::AlreadyInProgress => "already in progress",
             TabletServerErrorCode::Throttled => "throttled",
+            TabletServerErrorCode::TabletFailed => "tablet failed",
         }
     }
 
@@ -582,6 +602,8 @@ pub enum MasterErrorCode {
     InvalidReplicationFactor,
     /// A tablet involved in the operation is not running.
     TabletNotRunning,
+    Incompatibility,
+    HiveMetastoreError,
 }
 
 impl From<MasterErrorCodePB> for MasterErrorCode {
@@ -598,6 +620,8 @@ impl From<MasterErrorCodePB> for MasterErrorCode {
             MasterErrorCodePB::TABLET_NOT_RUNNING => MasterErrorCode::TabletNotRunning,
             MasterErrorCodePB::EVEN_REPLICATION_FACTOR => MasterErrorCode::InvalidReplicationFactor,
             MasterErrorCodePB::ILLEGAL_REPLICATION_FACTOR => MasterErrorCode::InvalidReplicationFactor,
+            MasterErrorCodePB::INCOMPATIBILITY => MasterErrorCode::Incompatibility,
+            MasterErrorCodePB::HIVE_METASTORE_ERROR => MasterErrorCode::HiveMetastoreError,
         }
     }
 }
@@ -635,6 +659,8 @@ impl error::Error for MasterError {
             MasterErrorCode::NotTheLeader => "not the leader",
             MasterErrorCode::InvalidReplicationFactor => "invalid replication factor",
             MasterErrorCode::TabletNotRunning => "tablet not running",
+            MasterErrorCode::Incompatibility => "incompatibility",
+            MasterErrorCode::HiveMetastoreError => "Hive MetaStore error",
         }
     }
 

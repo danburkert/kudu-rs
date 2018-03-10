@@ -11,10 +11,13 @@ PROTOS="
 client/client.proto
 common/common.proto
 common/wire_protocol.proto
+util/compression/compression.proto
 consensus/opid.proto
+consensus/replica_management.proto
 fs/fs.proto
 master/master.proto
 rpc/rpc_header.proto
+security/token.proto
 tablet/tablet.proto
 tserver/tserver.proto
 tserver/tserver_service.proto
