@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
+use std::collections::HashSet;
+use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,15 +17,19 @@ use Error;
 use HostPort;
 use OperationEncoder;
 use TabletId;
+use TabletServerId;
+use backoff::Backoff;
 use meta_cache::{
     TableLocations,
     Tablet,
+    TabletReplica,
 };
 use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
 };
 use retry::RetryFuture;
+use timer;
 use PartitionKey;
 use util::{
     RetryWithBackoff,
@@ -51,6 +57,7 @@ impl Batch {
         }
     }
 
+    /*
     fn poll_ready(&mut self) -> Poll<(), Error> {
         loop {
             while self.tablet.is_stale() {
@@ -89,6 +96,7 @@ impl Batch {
             return Ok(Async::Ready(()))
         }
     }
+    */
 }
 
 /// Holds buffered operations for a tablet until they are flushed.
@@ -103,6 +111,84 @@ impl Buffer {
             operations: 0,
             buffer: OperationEncoder::new(),
         }
+    }
+}
+
+enum BatchState {
+
+    Initial,
+
+    /// The tablet metadata is being refreshed.
+    TabletRefresh {
+        tablet: Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>,
+    },
+
+    /// The request is in-flight.
+    InFlight {
+        tserver: TabletServerId,
+    },
+
+    /// The batch failed to write due to a retriable error, another attempt will be made after a
+    /// waiting period.
+    Waiting {
+        sleep: timer::Sleep,
+        request: Box<WriteRequestPb>,
+    },
+}
+
+struct BatchFuture {
+    table_locations: TableLocations,
+    tablet: Arc<Tablet>,
+    timer: timer::Timer,
+    blacklist: HashSet<TabletServerId>,
+    backoff: Backoff,
+    state: BatchState,
+    request: Arc<WriteRequestPb>,
+}
+
+impl BatchFuture {
+    fn new(table_locations: TableLocations,
+           tablet: Arc<Tablet>,
+           timer: timer::Timer,
+           buffer: Buffer) {
+    }
+
+    fn select_replica(&self) -> Option<&TabletReplica> {
+        let mut follower = None;
+        for replica in self.tablet.replicas() {
+            if self.blacklist.contains(&replica.id()) {
+                continue;
+            } else if replica.is_leader() {
+                return Some(replica);
+            } else {
+                follower.get_or_insert(replica);
+            }
+        }
+
+        follower
+    }
+}
+
+impl Future for BatchFuture {
+
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        let state = mem::replace(&mut self.state, BatchState::Initial);
+        match state {
+            BatchState::Initial => {
+
+            },
+            BatchState::InFlight { ..  } => {
+            },
+            BatchState::TabletRefresh { ..  } => {
+            },
+            BatchState::Waiting { ..  } => {
+            },
+        }
+
+        unimplemented!()
     }
 }
 

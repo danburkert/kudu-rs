@@ -5,11 +5,9 @@ use std::collections::{
     Bound,
     HashMap,
 };
-use std::result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use timer;
 use futures::{
     Async,
     Future,
@@ -18,7 +16,6 @@ use futures::{
 };
 use futures::future;
 use futures::sync::{mpsc, oneshot};
-use futures::task::{self, Task};
 use parking_lot::{
     Mutex,
 };
@@ -33,7 +30,6 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
-use backoff::Backoff;
 use master::{
     MasterProxy,
     MasterFuture,
@@ -259,9 +255,6 @@ impl TableLocations {
         })
     }
 
-    fn leader_refresh(self, tablet: Arc<Tablet>) -> LeaderRefreshFuture {
-    }
-
     fn extract<T>(&self,
                   partition_key: &[u8],
                   extractor: fn(&Entry) -> T)
@@ -392,8 +385,7 @@ impl TableLocationsTask {
 
             let replicas = pb.replicas.into_iter().map(move |pb| {
                 let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-                // TODO: error handling
-                let role = RaftRole::from_i32(pb.role).unwrap();
+                let is_leader = pb.role() == RaftRole::Leader;
                 let proxy = self.tablet_servers
                                 .lock()
                                 .entry(id)
@@ -413,7 +405,12 @@ impl TableLocationsTask {
                                 })
                                 .clone();
 
-                Ok(TabletReplica { id, proxy, role, is_stale: AtomicBool::new(false), })
+                Ok(TabletReplica {
+                    id,
+                    proxy,
+                    is_stale: AtomicBool::new(false),
+                    is_leader: AtomicBool::new(is_leader)
+                })
             }).collect::<Result<Vec<TabletReplica>>>()?;
 
             let tablet = Arc::new(Tablet {
@@ -421,8 +418,6 @@ impl TableLocationsTask {
                 lower_bound,
                 upper_bound,
                 replicas,
-                deadline,
-                refresh: Mutex::new(Some(Vec::new())),
             });
 
             if tablet.lower_bound() > &last_upper_bound {
@@ -557,13 +552,6 @@ pub(crate) struct Tablet {
 
     /// The tablet replicas.
     replicas: Vec<TabletReplica>,
-
-    /// The deadline when the tablet metadata expires.
-    deadline: Instant,
-
-    /// The set of tasks waiting for the tablet to be refreshed. If `None`, then the tablet has
-    /// already been refreshed.
-    refresh: Mutex<Option<Vec<Task>>>,
 }
 
 impl Tablet {
@@ -587,89 +575,20 @@ impl Tablet {
         &self.replicas
     }
 
-    /// Returns the leader replica.
-    pub fn leader_replica(&self) -> Option<&TabletReplica> {
-        self.replicas.iter().find(|replica| replica.role == RaftRole::Leader)
-    }
-
     /// Returns true if the tablet metadata is known to be stale.
     ///
     /// The metadata may be stale because the leader changed, the set of replicas changed, or it
     /// has expired.
     pub fn is_stale(&self) -> bool {
-        Instant::now() > self.deadline ||
-            self.replicas.iter().any(|replica| replica.is_stale.load(Relaxed))
-    }
-
-    /*
-    pub fn passive_refresh(&self) -> PassiveRefreshFuture {
-        let offset = tablet.refresh.lock().as_mut().map_or(0, |vec| {
-            let offset = vec.len();
-            vec.push(task::current());
-            offset
-        });
-        PassiveRefreshFuture {
-            tablet,
-            offset,
-        }
-    }
-    */
-}
-
-enum LeaderRefreshState {
-    Initial,
-    Waiting {
-        timeout: timer::Sleep,
-        refresh_offset: usize,
-    }
-    Refreshing {
-        tablet_future: Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>,
+        self.replicas.iter().any(|replica| replica.is_stale.load(Relaxed))
     }
 }
-
-pub(crate) struct LeaderRefreshFuture {
-    table_locations: TableLocations,
-    tablet: Arc<Tablet>,
-    timer: timer::Timer,
-    backoff: Backoff,
-    state: LeaderRefreshState,
-}
-
-impl LeaderRefreshFuture {
-    fn new(table_locations: TableLocations,
-           tablet: Arc<Tablet>,
-           timer: timer::Timer) -> LeaderRefreshFuture {
-        let mut backoff = Backoff::with_duration_range(100, 5000);
-        let state = LeaderRefreshState::Initial;
-        LeaderRefreshFuture {
-
-        }
-    }
-}
-
-impl Future for LeaderRefreshFuture {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> result::Result<Async<()>, ()> {
-        // Refresh our task in the slab.
-        let mut waiters = self.tablet.refresh.lock();
-        if let Some(ref mut vec) = *waiters {
-            vec.insert(self.offset, task::current());
-            Ok(Async::NotReady)
-        } else {
-            Ok(Async::Ready(()))
-        }
-    }
-}
-
-pub (crate) struct 
 
 /// Tablet replica belonging to a tablet server.
 pub(crate) struct TabletReplica {
     id: TabletServerId,
     proxy: krpc::Proxy,
-    role: RaftRole,
+    is_leader: AtomicBool,
     is_stale: AtomicBool,
 }
 
@@ -685,9 +604,16 @@ impl TabletReplica {
         self.proxy.clone()
     }
 
-    /// Returns the Raft role of this replica.
-    pub fn role(&self) -> RaftRole {
-        self.role
+    pub fn is_leader(&self) -> bool {
+        self.is_leader.load(Relaxed)
+    }
+
+    pub fn mark_leader(&self) {
+        self.is_leader.store(true, Relaxed)
+    }
+
+    pub fn mark_follower(&self) {
+        self.is_leader.store(false, Relaxed)
     }
 
     /// Marks the tablet metadata as stale.
