@@ -1,13 +1,15 @@
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::collections::{
     BTreeMap,
     Bound,
     HashMap,
 };
+use std::result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use timer;
 use futures::{
     Async,
     Future,
@@ -21,7 +23,6 @@ use parking_lot::{
     Mutex,
 };
 use krpc;
-use slab::Slab;
 
 use Error;
 use HostPort;
@@ -32,6 +33,7 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
+use backoff::Backoff;
 use master::{
     MasterProxy,
     MasterFuture,
@@ -257,6 +259,9 @@ impl TableLocations {
         })
     }
 
+    fn leader_refresh(self, tablet: Arc<Tablet>) -> LeaderRefreshFuture {
+    }
+
     fn extract<T>(&self,
                   partition_key: &[u8],
                   extractor: fn(&Entry) -> T)
@@ -417,8 +422,7 @@ impl TableLocationsTask {
                 upper_bound,
                 replicas,
                 deadline,
-                refresh: AtomicUsize::new(FRESH),
-                refresh_waiters: Mutex::new(Slab::new()),
+                refresh: Mutex::new(Some(Vec::new())),
             });
 
             if tablet.lower_bound() > &last_upper_bound {
@@ -557,18 +561,10 @@ pub(crate) struct Tablet {
     /// The deadline when the tablet metadata expires.
     deadline: Instant,
 
-    /// The next version of the tablet.
-    refresh: AtomicUsize,
-
-    /// The set of tasks waiting for the refreshed version to become available.
-    refresh_waiters: Mutex<Slab<Task>>,
+    /// The set of tasks waiting for the tablet to be refreshed. If `None`, then the tablet has
+    /// already been refreshed.
+    refresh: Mutex<Option<Vec<Task>>>,
 }
-
-const FRESH: usize = 0;
-const FAILED: usize = 1;
-const REFRESHED: usize = 2;
-const STATE_MASK: usize = FRESH | FAILED | REFRESHED;
-const PTR_MASK: usize = !STATE_MASK;
 
 impl Tablet {
 
@@ -605,89 +601,69 @@ impl Tablet {
             self.replicas.iter().any(|replica| replica.is_stale.load(Relaxed))
     }
 
-    pub fn try_refresh(&self) -> Result<Option<Arc<Tablet>>> {
-        let refresh = self.refresh.load(SeqCst);
-        let ptr = refresh & PTR_MASK;
-        let state = refresh & STATE_MASK;
-        match state {
-            FRESH => {
-                debug_assert_eq!(0, ptr);
-                Ok(None)
-            },
-            FAILED => {
-                debug_assert_ne!(0, ptr);
-                let error: &Error =  unsafe {
-                    &*(ptr as *const Error)
-                };
-                Err(Error::clone(error))
-            },
-            REFRESHED => {
-                debug_assert_ne!(0, ptr);
-                let tablet: &Arc<Tablet> = unsafe {
-                    &*(ptr as *const Arc<Tablet>)
-                };
-                // Recurse!
-                Ok(Some(tablet.try_refresh()?
-                              .unwrap_or_else(|| Arc::clone(tablet))))
-            },
-            _ => panic!("invalid state: {}", state),
-        }
-    }
-}
-
-impl Drop for Tablet {
-    fn drop(&mut self) {
-        let refresh = self.refresh.load(SeqCst);
-        let state = refresh & STATE_MASK;
-        let ptr = refresh & PTR_MASK;
-        unsafe {
-            match state {
-                FRESH => debug_assert_eq!(0, ptr),
-                FAILED => {
-                    debug_assert_ne!(0, ptr);
-                    let _ = Box::from_raw(ptr as *mut Error);
-                },
-                REFRESHED => {
-                    debug_assert_ne!(0, ptr);
-                    let _ = Arc::from_raw(ptr as *const Arc<Tablet>);
-                },
-                _ => panic!("invalid state: {}", state),
-            }
-        }
-    }
-}
-
-pub(crate) struct RefreshFuture {
-    tablet: Arc<Tablet>,
-    token: usize,
-}
-
-impl RefreshFuture {
-    fn new(tablet: Arc<Tablet>) -> RefreshFuture {
-        let token = tablet.refresh_waiters.lock().insert(task::current());
-        RefreshFuture {
+    /*
+    pub fn passive_refresh(&self) -> PassiveRefreshFuture {
+        let offset = tablet.refresh.lock().as_mut().map_or(0, |vec| {
+            let offset = vec.len();
+            vec.push(task::current());
+            offset
+        });
+        PassiveRefreshFuture {
             tablet,
-            token,
+            offset,
+        }
+    }
+    */
+}
+
+enum LeaderRefreshState {
+    Initial,
+    Waiting {
+        timeout: timer::Sleep,
+        refresh_offset: usize,
+    }
+    Refreshing {
+        tablet_future: Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>,
+    }
+}
+
+pub(crate) struct LeaderRefreshFuture {
+    table_locations: TableLocations,
+    tablet: Arc<Tablet>,
+    timer: timer::Timer,
+    backoff: Backoff,
+    state: LeaderRefreshState,
+}
+
+impl LeaderRefreshFuture {
+    fn new(table_locations: TableLocations,
+           tablet: Arc<Tablet>,
+           timer: timer::Timer) -> LeaderRefreshFuture {
+        let mut backoff = Backoff::with_duration_range(100, 5000);
+        let state = LeaderRefreshState::Initial;
+        LeaderRefreshFuture {
+
         }
     }
 }
 
-impl Future for RefreshFuture {
-    type Item = Arc<Tablet>;
-    type Error = Error;
+impl Future for LeaderRefreshFuture {
+    type Item = ();
+    type Error = ();
 
-    fn poll(&mut self) -> Result<Async<Arc<Tablet>>> {
+    fn poll(&mut self) -> result::Result<Async<()>, ()> {
         // Refresh our task in the slab.
-        if let Some(task) = self.tablet.refresh_waiters.lock().get_mut(self.token) {
-            *task = task::current();
-        }
-
-        match self.tablet.try_refresh()? {
-            Some(tablet) => Ok(Async::Ready(tablet)),
-            None => Ok(Async::NotReady),
+        let mut waiters = self.tablet.refresh.lock();
+        if let Some(ref mut vec) = *waiters {
+            vec.insert(self.offset, task::current());
+            Ok(Async::NotReady)
+        } else {
+            Ok(Async::Ready(()))
         }
     }
 }
+
+pub (crate) struct 
 
 /// Tablet replica belonging to a tablet server.
 pub(crate) struct TabletReplica {
