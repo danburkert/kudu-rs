@@ -231,7 +231,6 @@ impl Future for ConnectToCluster {
     }
 }
 
-
 /*
 #[cfg(test)]
 mod tests {

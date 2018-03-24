@@ -34,6 +34,7 @@ extern crate tokio_core as tokio;
 
 pub mod pb;
 
+//mod writer2;
 //mod writer;
 mod backoff;
 mod batch;
@@ -48,10 +49,10 @@ mod retry;
 mod row;
 mod schema;
 mod server;
+mod server_picker;
 mod table;
 mod util;
 mod value;
-//mod writer2;
 pub mod master;
 pub mod meta_cache;
 

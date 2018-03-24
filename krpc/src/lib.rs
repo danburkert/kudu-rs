@@ -83,6 +83,9 @@ impl <Resp> Future for RpcFuture<Resp> where Resp: Message + Default {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let (bytes, sidecars) = try_ready!(self.receiver.poll().map_err(|_| -> Error { unreachable!("RPC dropped"); }))?;
         let body = Resp::decode_length_delimited(&bytes)?;
+
+        trace!("RpcFuture Complete: {:?}", body);
+
         Ok(Async::Ready((body, sidecars)))
     }
 }

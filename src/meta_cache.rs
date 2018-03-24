@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::collections::{
     BTreeMap,
@@ -23,6 +24,7 @@ use krpc;
 
 use Error;
 use HostPort;
+use MasterId;
 use PartitionSchema;
 use RaftRole;
 use Result;
@@ -143,15 +145,48 @@ impl Entry {
 pub(crate) struct MetaCache {
     tables: Arc<Mutex<HashMap<TableId, TableLocations>>>,
     tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
+    masters: Arc<MasterLocations>,
+}
+
+pub(crate) struct MasterLocations {
+    replicas: Mutex<Vec<MasterReplica>>,
+    sender: mpsc::UnboundedSender<oneshot::Sender<Result<Arc<MasterReplica>>>>,
+}
+
+pub(crate) struct MasterReplica {
+    hostport: HostPort,
+    proxy: krpc::Proxy,
+    is_leader: AtomicBool,
+}
+
+impl fmt::Debug for MasterReplica {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MasterReplica")
+            .field("addr", &self.hostport)
+            .field("is_leader", &self.is_leader)
+            .finish()
+    }
+}
+
+struct MasterTask {
 }
 
 impl MetaCache {
 
+    /*
+    pub(crate) fn spawn() -> impl Future<Item=MetaCache, Error=Error> {
+    }
+*/
+
     pub(crate) fn new() -> MetaCache {
-        MetaCache{
+        /*
+        MetaCache {
             tables: Arc::new(Mutex::new(HashMap::new())),
             tablet_servers: Arc::new(Mutex::new(HashMap::new())),
+            masters: Arc::new(),
         }
+        */
+        unimplemented!()
     }
 
     pub(crate) fn open_table(self,
@@ -175,7 +210,7 @@ impl MetaCache {
                 &schema);
             let schema = Schema::from_pb(schema)?;
 
-            let MetaCache { tables, tablet_servers } = self;
+            let MetaCache { tables, tablet_servers, .. } = self;
 
             let table_locations = tables
                 .lock()
@@ -622,6 +657,7 @@ impl TabletReplica {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
 
@@ -850,3 +886,4 @@ mod tests {
         }
     }
 }
+*/
