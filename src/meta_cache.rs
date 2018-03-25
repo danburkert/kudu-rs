@@ -24,7 +24,6 @@ use krpc;
 
 use Error;
 use HostPort;
-use MasterId;
 use PartitionSchema;
 use RaftRole;
 use Result;
@@ -154,9 +153,16 @@ pub(crate) struct MasterLocations {
 }
 
 pub(crate) struct MasterReplica {
-    hostport: HostPort,
-    proxy: krpc::Proxy,
-    is_leader: AtomicBool,
+    pub(crate) hostport: HostPort,
+    pub(crate) proxy: krpc::Proxy,
+    pub(crate) is_leader: AtomicBool,
+}
+
+
+impl MasterReplica {
+    pub fn is_leader(&self) -> bool {
+        self.is_leader.load(Relaxed)
+    }
 }
 
 impl fmt::Debug for MasterReplica {

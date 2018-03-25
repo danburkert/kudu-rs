@@ -289,7 +289,8 @@ impl MasterError {
     pub fn is_retriable(&self) -> bool {
         match self.code {
               MasterErrorCode::CatalogManagerNotInitialized
-            | MasterErrorCode::TabletNotRunning => true,
+            | MasterErrorCode::TabletNotRunning
+            | MasterErrorCode::NotTheLeader => true,
             _ => false,
         }
     }

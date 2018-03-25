@@ -2,11 +2,7 @@ use std::collections::{
     VecDeque,
     HashMap,
 };
-use std::mem;
-use std::time::{
-    Duration,
-    Instant,
-};
+use std::sync::atomic::AtomicBool;
 
 use bytes::Bytes;
 use futures::{
@@ -36,13 +32,9 @@ use HostPort;
 use MasterError;
 use MasterErrorCode;
 use Options;
-use TabletServerError;
 use backoff::Backoff;
-use meta_cache::{
-    MasterLocations,
-    MasterReplica,
-};
-use pb::{AppStatusPb, master, tserver};
+use meta_cache::MasterReplica;
+use pb::AppStatusPb;
 use pb::master::ConnectToMasterResponsePb;
 
 // TODO: rename something more generic like RpcHandler or RpcController.
@@ -56,15 +48,15 @@ pub(crate) trait ServerPicker {
 
     fn poll_next(&mut self) -> Poll<(Self::ServerId, Proxy), Error>;
 
-    /// 
-    fn poll_result(&mut self,
-                   server: Self::ServerId,
-                   result: Result<(Self::Response, Vec<Bytes>), krpc::Error>)
-                   -> Poll<Self::Item, Error>;
+    fn handle_result(&mut self,
+                     server: Self::ServerId,
+                     result: Result<(Self::Response, Vec<Bytes>), krpc::Error>)
+                     -> Result<Option<Self::Item>, Error>;
 }
 
 /// A `ServerPicker` which handles connecting to a set of masters.
 pub(crate) struct ConnectToClusterPicker {
+    timer: Timer,
     masters: HashMap<HostPort, (Proxy, Backoff, Option<Error>)>,
     queue: VecDeque<HostPort>,
     waiting: FuturesUnordered<ContextFuture<Sleep, HostPort>>,
@@ -87,6 +79,7 @@ impl ConnectToClusterPicker {
         }).collect::<HashMap<_, _>>();
 
         ConnectToClusterPicker {
+            timer: options.timer.clone(),
             masters,
             queue,
             waiting: FuturesUnordered::new(),
@@ -104,8 +97,14 @@ impl ServerPicker for ConnectToClusterPicker {
     fn poll_next(&mut self) -> Poll<(HostPort, Proxy), Error> {
         if let Async::Ready(()) = self.deadline.poll().expect("timer failed") {
             // TODO: this error should include the failed errors contexts.
-            Err(Error::TimedOut)
-        } else if let Some(hostport) = self.queue.pop_front() {
+            return Err(Error::TimedOut)
+        }
+
+        while let Ok(Async::Ready(Some((_, server)))) = self.waiting.poll() {
+            self.queue.push_back(server);
+        }
+
+        if let Some(hostport) = self.queue.pop_front() {
             let proxy = self.masters[&hostport].0.clone();
             Ok(Async::Ready((hostport, proxy)))
         } else {
@@ -113,17 +112,17 @@ impl ServerPicker for ConnectToClusterPicker {
         }
     }
 
-    fn poll_result(&mut self,
-                   server: HostPort,
-                   result: Result<(ConnectToMasterResponsePb, Vec<Bytes>), krpc::Error>)
-                   -> Poll<Vec<MasterReplica>, Error> {
+    fn handle_result(&mut self,
+                     server: HostPort,
+                     result: Result<(ConnectToMasterResponsePb, Vec<Bytes>), krpc::Error>)
+                     -> Result<Option<Vec<MasterReplica>>, Error> {
 
         let result: Result<ConnectToMasterResponsePb, Error> = match result {
 
             // Check if the response contains an application-level error.
             Ok((ConnectToMasterResponsePb { error: Some(error), .. }, _)) => {
                 let error = MasterError::from(error);
-                trace!("Failed to connect to master {}: {}", server, error);
+                debug!("Failed to connect to master {}: {}", server, error);
                 Err(error.into())
             },
 
@@ -148,9 +147,6 @@ impl ServerPicker for ConnectToClusterPicker {
             Ok((ref response, _)) if response.role() != RaftRole::Leader => {
                 // Create a synthetic error indicating that we could successfully connect to the
                 // master, but it is currently not the leader.
-
-                trace!("Connected to {:?} Master {}", response.role(), server);
-
                 let mut status = AppStatusPb::default();
                 status.set_code(StatusCode::NotFound);
 
@@ -159,41 +155,37 @@ impl ServerPicker for ConnectToClusterPicker {
                     status: Status::from(status),
                 }.into())
             },
-            Ok((response, _)) => {
-                trace!("Connected to Leader Master {}", server);
-                Ok(response)
-            },
-            Err(error) => {
-                trace!("Failed to connect to master {}: {}", server, error);
-                Err(error.into())
-            },
+            Ok((response, _)) => Ok(response),
+            Err(error) => Err(error.into()),
         };
 
         match result {
-            Ok(response) => {
-                let master_addrs = response.master_addrs.into_iter().map(HostPort::from).collect::<Vec<_>>();
-
-                unimplemented!()
+            Ok(_) => {
+                let masters = self.masters
+                    .drain()
+                    .map(|(hostport, (proxy, _, _))| {
+                        let is_leader = AtomicBool::new(hostport == server);
+                        MasterReplica { hostport, proxy, is_leader }
+                    })
+                    .collect::<Vec<_>>();
+                debug!("Connected to Leader Master {}", server);
+                Ok(Some(masters))
             }
             Err(error) => {
-                let (_, ref mut backoff, ref mut error_slot) = *self.masters.get_mut(&server).unwrap();
+                if !error.is_retriable() {
+                    debug!("Failed to connect to master {} (non-retriable): {}", server, error);
+                    return Err(error);
+                }
 
+                let (_, ref mut backoff, ref mut error_slot) = *self.masters.get_mut(&server).unwrap();
+                let sleep = self.timer.sleep(backoff.next_backoff());
+                debug!("Failed to connect to master {} (retriable in {:?}): {}", server, sleep.remaining(), error);
+                *error_slot = Some(error);
+                self.waiting.push(ContextFuture::new(sleep, server));
+                Ok(None)
             },
         }
-
-        Ok(Async::NotReady)
     }
-
-    /*
-    fn register_success(&mut self, server: Self::ServerId) -> Result<Option<Item>, Error> {
-        self.leader = Some(server);
-    }
-
-
-    fn register_error(&mut self, server: Self::ServerId, error: Error) {
-        self.masters.get_mut(&server).unwrap().2 = Some(error);
-    }
-    */
 }
 
 /// A future which wraps an in-flight Kudu RPC, and retries it after a backoff period if it fails
@@ -227,9 +219,8 @@ where Sp: ServerPicker,
                 Ok(Async::Ready(Some((result, server_id)))) => (server_id, Ok(result)),
                 Err((error, server_id)) => (server_id, Err(error)),
             };
-            match self.server_picker.poll_result(server_id, result) {
-                Ok(Async::NotReady) => (),
-                other => return other,
+            if let Some(item) = self.server_picker.handle_result(server_id, result)? {
+                return Ok(Async::Ready(item));
             }
         }
     }
@@ -342,21 +333,16 @@ impl <F, C> Future for ContextFuture<F, C> where F: Future {
 #[cfg(test)]
 mod tests {
 
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
     use cpupool::CpuPool;
     use env_logger;
     use krpc;
     use tokio::reactor::Core;
 
-    use AlterTableBuilder;
-    use Column;
-    use DataType;
-    use RaftRole;
-    use RangePartitionBound;
-    use SchemaBuilder;
-    use TableBuilder;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use pb::master::*;
-    use schema::tests::simple_schema;
     use super::*;
 
     // TODO(tests):
@@ -391,17 +377,8 @@ mod tests {
 
         let masters = reactor.run(future).unwrap();
 
-        panic!("masters: {:?}", masters);
-        /*
-        assert!(sidecars.is_empty());
-        assert!(response.error.is_none());
-        assert!(!response.ca_cert_der.is_empty());
-        assert!(response.authn_token.is_some());
-        assert_eq!(response.role(), RaftRole::Leader);
-        assert_eq!(cluster.master_addrs(),
-                   response.master_addrs.into_iter().map(HostPort::from).collect::<Vec<_>>());
-        */
-
+        assert_eq!(masters.len(), cluster.master_addrs().len());
+        assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
     }
 
     #[test]
@@ -424,8 +401,41 @@ mod tests {
         call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
         let sp = ConnectToClusterPicker::new(cluster.master_addrs(), &options);
         let future = RetryFuture::new(call.clone(), sp);
-        let response = reactor.run(future).unwrap();
 
-        panic!("response: {:?}", response);
+        let masters = reactor.run(future).unwrap();
+
+        assert_eq!(masters.len(), cluster.master_addrs().len());
+        assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
+    }
+
+    #[test]
+    fn test_connect_to_unavailable() {
+        let _ = env_logger::init();
+
+        let mut reactor = Core::new().unwrap();
+        let options = Options {
+            rpc: krpc::Options::default(),
+            remote: reactor.remote(),
+            threadpool: CpuPool::new_num_cpus(),
+            timer: Timer::default(),
+            admin_timeout: Duration::from_secs(10),
+        };
+
+        // TODO: is it possible to set it to disable port reuse?
+        let hostport = TcpListener::bind("127.0.0.1:0").unwrap()
+                                   .local_addr()
+                                   .unwrap()
+                                   .into();
+
+        let mut call = MasterService::connect_to_master(Default::default(),
+                                                        Instant::now() + options.admin_timeout);
+        call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
+        let sp = ConnectToClusterPicker::new(vec![hostport], &options);
+        let future = RetryFuture::new(call.clone(), sp);
+
+        match reactor.run(future).unwrap_err() {
+            Error::Io(_) => (),
+            error => panic!("unexpected error: {}", error),
+        }
     }
 }
