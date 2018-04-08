@@ -50,6 +50,8 @@ pub enum Error {
     NoRangePartition,
 
     /// A compound error.
+    ///
+    /// TODO: change TimedOut to include this info.
     Compound(String, Vec<Error>),
 }
 

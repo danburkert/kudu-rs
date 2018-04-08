@@ -67,7 +67,7 @@ impl Client {
     /// Creates a new client with the provided configuration.
     fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
         let master_proxy = MasterProxy::new(master_addresses, options.clone());
-        let meta_cache = MetaCache::new();
+        let meta_cache = /*MetaCache::new(); */ unimplemented!();
         Client {
             master_proxy,
             options,

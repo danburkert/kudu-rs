@@ -6,7 +6,6 @@ use std::io::{
     BufRead,
     BufReader,
 };
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::thread;
@@ -24,10 +23,14 @@ use pb::tools::{
     ControlShellRequestPb,
     ControlShellResponsePb,
     CreateClusterRequestPb,
+    DaemonIdentifierPb,
+    DaemonType,
     GetMastersRequestPb,
     GetMastersResponsePb,
     StartClusterRequestPb,
+    StartDaemonRequestPb,
     StopClusterRequestPb,
+    StopDaemonRequestPb,
 };
 use pb::tools::control_shell_request_pb::Request;
 use pb::tools::control_shell_response_pb::Response;
@@ -91,14 +94,22 @@ impl MiniCluster {
         }
     }
 
-    pub fn stop_node(&mut self, _addr: SocketAddr) {
-        //self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).stop();
-        unimplemented!()
+    pub fn stop_master(&mut self, index: u32) {
+        let mut id = DaemonIdentifierPb::default();
+        id.set_type_(DaemonType::Master);
+        id.index = Some(index);
+        self.send_request(Request::StopDaemon(StopDaemonRequestPb {
+            id: Some(id),
+        }));
     }
 
-    pub fn start_node(&mut self, _addr: SocketAddr) {
-        //self.nodes.get_mut(&addr).expect(&format!("no node with address {}", addr)).start();
-        unimplemented!()
+    pub fn start_master(&mut self, index: u32) {
+        let mut id = DaemonIdentifierPb::default();
+        id.set_type_(DaemonType::Master);
+        id.index = Some(index);
+        self.send_request(Request::StartDaemon(StartDaemonRequestPb {
+            id: Some(id),
+        }));
     }
 
     fn send_request(&mut self, request: Request) -> Option<Response> {

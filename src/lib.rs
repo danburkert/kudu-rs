@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![feature(conservative_impl_trait)]
 
 extern crate byteorder;
 extern crate bytes;

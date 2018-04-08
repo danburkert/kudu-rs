@@ -22,6 +22,7 @@ use parking_lot::{
 };
 use krpc;
 
+use server_picker::connect_to_cluster;
 use Error;
 use HostPort;
 use PartitionSchema;
@@ -144,13 +145,16 @@ impl Entry {
 pub(crate) struct MetaCache {
     tables: Arc<Mutex<HashMap<TableId, TableLocations>>>,
     tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
-    masters: Arc<MasterLocations>,
+    masters: Arc<Box<[MasterReplica]>>,
 }
 
+// TODO: what was this for?
+/*
 pub(crate) struct MasterLocations {
     replicas: Mutex<Vec<MasterReplica>>,
     sender: mpsc::UnboundedSender<oneshot::Sender<Result<Arc<MasterReplica>>>>,
 }
+*/
 
 pub(crate) struct MasterReplica {
     pub(crate) hostport: HostPort,
@@ -179,20 +183,15 @@ struct MasterTask {
 
 impl MetaCache {
 
-    /*
-    pub(crate) fn spawn() -> impl Future<Item=MetaCache, Error=Error> {
-    }
-*/
-
-    pub(crate) fn new() -> MetaCache {
-        /*
-        MetaCache {
-            tables: Arc::new(Mutex::new(HashMap::new())),
-            tablet_servers: Arc::new(Mutex::new(HashMap::new())),
-            masters: Arc::new(),
-        }
-        */
-        unimplemented!()
+    pub(crate) fn new(master_addrs: Vec<HostPort>,
+                      options: Options) -> impl Future<Item=MetaCache, Error=Error> {
+        connect_to_cluster(master_addrs, &options).map(|master_replicas| {
+            MetaCache {
+                tables: Arc::new(Mutex::new(HashMap::new())),
+                tablet_servers: Arc::new(Mutex::new(HashMap::new())),
+                masters: Arc::new(master_replicas.into_boxed_slice()),
+            }
+        })
     }
 
     pub(crate) fn open_table(self,
