@@ -2,8 +2,11 @@ use std::collections::{
     VecDeque,
     HashMap,
 };
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
+use std::cmp::Ordering;
 
 use bytes::Bytes;
 use futures::{
@@ -41,6 +44,7 @@ use pb::master::{
     MasterFeatures,
     MasterService,
 };
+use retry::Retriable;
 
 // TODO: rename something more generic like RpcHandler or RpcController.
 pub(crate) trait ServerPicker {
@@ -220,6 +224,84 @@ impl ServerPicker for ConnectToClusterPicker {
     }
 }
 
+struct LeaderMasterPicker<Resp> where Resp: Retriable {
+    master_replicas: Arc<Box<[MasterReplica]>>,
+    failures: Box<[Option<(Instant, Error)>]>,
+    _marker: PhantomData<Resp>,
+}
+
+impl <Resp> LeaderMasterPicker<Resp> where Resp: Retriable {
+
+    fn new(master_replicas: Arc<Box<[MasterReplica]>>) -> LeaderMasterPicker<Resp> {
+
+        let mut failures = Vec::with_capacity(master_replicas.len());
+        for _ in 0..master_replicas.len() {
+            failures.push(None);
+        }
+        let failures = failures.into_boxed_slice();
+
+        LeaderMasterPicker {
+            master_replicas,
+            failures,
+            _marker: Default::default(),
+        }
+    }
+}
+
+impl <Resp> ServerPicker for LeaderMasterPicker<Resp> where Resp: Retriable {
+    type Response = Resp;
+    type ServerId = usize;
+    type Item = Resp;
+
+    fn poll_next(&mut self) -> Poll<(usize, Proxy), Error> {
+        let next_idx = (0..self.master_replicas.len())
+            .max_by(|&a, &b| {
+
+                match (self.failures[a], self.failures[b]) {
+                    (None, _) => {
+                    },
+                    (_, None) => {
+                    },
+                    (Some((_, ref error)), _) if !error.is_retriable() => {
+                    },
+
+
+                }
+
+                match (self.master_replicas[a].is_leader(), self.master_replicas[b].is_leader()) {
+                    (true, false) => return Ordering::Greater,
+                    (false, true) => return Ordering::Less,
+                    _ => (),
+                }
+
+
+
+
+
+                Ordering::Less
+            })
+            .unwrap();
+
+        Ok(Async::Ready((next_idx, self.master_replicas[next_idx].proxy.clone())))
+    }
+
+    fn handle_result(&mut self, server: usize, result: Result<(Resp, Vec<Bytes>), krpc::Error>) -> Result<Option<Resp>, Error> {
+        match result.map_err(Error::from).and_then(|(resp, _)| resp.into_result()) {
+            Ok(resp) => {
+                self.master_replicas[server].mark_leader();
+                Ok(Some(resp))
+            },
+            Err(error@Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. }))
+                | Err(error@Error::Master(MasterError { code: MasterErrorCode::CatalogManagerNotInitialized, .. })) => {
+                self.master_replicas[server].mark_follower();
+                self.failures[server] = Some((Instant::now(), error));
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
 /// A future which wraps an in-flight Kudu RPC, and retries it after a backoff period if it fails
 /// with a retriable error.
 #[must_use = "futures do nothing unless polled"]
@@ -244,7 +326,6 @@ where Sp: ServerPicker,
     }
 
     fn poll_in_flight(&mut self) -> Poll<Sp::Item, Error> {
-        // TODO: this should return a ! error type.
         loop {
             let (server_id, result) = match self.in_flight.poll() {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => return Ok(Async::NotReady),

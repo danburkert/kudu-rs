@@ -148,14 +148,6 @@ pub(crate) struct MetaCache {
     masters: Arc<Box<[MasterReplica]>>,
 }
 
-// TODO: what was this for?
-/*
-pub(crate) struct MasterLocations {
-    replicas: Mutex<Vec<MasterReplica>>,
-    sender: mpsc::UnboundedSender<oneshot::Sender<Result<Arc<MasterReplica>>>>,
-}
-*/
-
 pub(crate) struct MasterReplica {
     pub(crate) hostport: HostPort,
     pub(crate) proxy: krpc::Proxy,
@@ -166,6 +158,14 @@ pub(crate) struct MasterReplica {
 impl MasterReplica {
     pub fn is_leader(&self) -> bool {
         self.is_leader.load(Relaxed)
+    }
+
+    pub fn mark_leader(&self) {
+        self.is_leader.store(true, Relaxed)
+    }
+
+    pub fn mark_follower(&self) {
+        self.is_leader.store(false, Relaxed)
     }
 }
 
