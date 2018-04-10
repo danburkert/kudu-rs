@@ -12,7 +12,7 @@ use curl::easy::Easy;
 use flate2::bufread::GzDecoder;
 use tar::Archive;
 
-const VERSION: &'static str = "1.6.0";
+const VERSION: &'static str = "1.7.0";
 
 fn main() {
     env_logger::init().unwrap();

@@ -2,11 +2,10 @@ use std::collections::{
     VecDeque,
     HashMap,
 };
-use std::marker::PhantomData;
+//use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+//use std::sync::Arc;
 use std::time::Instant;
-use std::cmp::Ordering;
 
 use bytes::Bytes;
 use futures::{
@@ -44,7 +43,7 @@ use pb::master::{
     MasterFeatures,
     MasterService,
 };
-use retry::Retriable;
+//use retry::Retriable;
 
 // TODO: rename something more generic like RpcHandler or RpcController.
 pub(crate) trait ServerPicker {
@@ -224,6 +223,7 @@ impl ServerPicker for ConnectToClusterPicker {
     }
 }
 
+/*
 struct LeaderMasterPicker<Resp> where Resp: Retriable {
     master_replicas: Arc<Box<[MasterReplica]>>,
     failures: Box<[Option<(Instant, Error)>]>,
@@ -254,34 +254,6 @@ impl <Resp> ServerPicker for LeaderMasterPicker<Resp> where Resp: Retriable {
     type Item = Resp;
 
     fn poll_next(&mut self) -> Poll<(usize, Proxy), Error> {
-        let next_idx = (0..self.master_replicas.len())
-            .max_by(|&a, &b| {
-
-                match (self.failures[a], self.failures[b]) {
-                    (None, _) => {
-                    },
-                    (_, None) => {
-                    },
-                    (Some((_, ref error)), _) if !error.is_retriable() => {
-                    },
-
-
-                }
-
-                match (self.master_replicas[a].is_leader(), self.master_replicas[b].is_leader()) {
-                    (true, false) => return Ordering::Greater,
-                    (false, true) => return Ordering::Less,
-                    _ => (),
-                }
-
-
-
-
-
-                Ordering::Less
-            })
-            .unwrap();
-
         Ok(Async::Ready((next_idx, self.master_replicas[next_idx].proxy.clone())))
     }
 
@@ -301,6 +273,7 @@ impl <Resp> ServerPicker for LeaderMasterPicker<Resp> where Resp: Retriable {
         }
     }
 }
+*/
 
 /// A future which wraps an in-flight Kudu RPC, and retries it after a backoff period if it fails
 /// with a retriable error.
@@ -360,13 +333,13 @@ where Sp: ServerPicker,
     }
 }
 
-struct ContextFuture<F, C> {
+pub struct ContextFuture<F, C> {
     future: F,
     context: Option<C>,
 }
 
 impl <F, C> ContextFuture<F, C> {
-    fn new(future: F, context: C) -> ContextFuture<F, C> {
+    pub fn new(future: F, context: C) -> ContextFuture<F, C> {
         ContextFuture {
             future,
             context: Some(context),
@@ -399,6 +372,7 @@ mod tests {
     use tokio::reactor::Core;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use replica::Replica;
     use super::*;
 
     // TODO(tests):

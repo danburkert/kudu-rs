@@ -24,6 +24,7 @@ use TabletServerError;
 use backoff::Backoff;
 use pb::{master, tserver};
 
+/// TODO: rename to KuduResponse.
 pub(crate) trait Retriable : Message + Default {
     fn into_result(self) -> Result<Self, Error> where Self: Sized;
 }

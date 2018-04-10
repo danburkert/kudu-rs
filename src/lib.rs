@@ -54,6 +54,7 @@ mod util;
 mod value;
 pub mod master;
 pub mod meta_cache;
+mod replica;
 
 #[cfg(test)]
 mod mini_cluster;

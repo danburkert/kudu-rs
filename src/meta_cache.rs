@@ -22,7 +22,7 @@ use parking_lot::{
 };
 use krpc;
 
-use server_picker::connect_to_cluster;
+use backoff::Backoff;
 use Error;
 use HostPort;
 use PartitionSchema;
@@ -42,6 +42,7 @@ use pb::master::{
     GetTableLocationsResponsePb,
     GetTableSchemaRequestPb,
     GetTableSchemaResponsePb,
+    MasterFeatures,
     MasterService,
     TableIdentifierPb,
     TabletLocationsPb,
@@ -52,6 +53,13 @@ use partition::{
     PartitionKey,
 };
 use Options;
+use replica::{
+    Replica,
+    ReplicaRpc,
+    ReplicaSet,
+    Selection,
+    Speculation,
+};
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
@@ -148,24 +156,52 @@ pub(crate) struct MetaCache {
     masters: Arc<Box<[MasterReplica]>>,
 }
 
+// TODO: make fields private
 pub(crate) struct MasterReplica {
     pub(crate) hostport: HostPort,
     pub(crate) proxy: krpc::Proxy,
     pub(crate) is_leader: AtomicBool,
 }
 
-
 impl MasterReplica {
-    pub fn is_leader(&self) -> bool {
+
+    pub(crate) fn new(hostport: HostPort, options: &Options) -> MasterReplica {
+        let proxy = krpc::Proxy::spawn(vec![hostport.clone()].into_boxed_slice(),
+                                       options.rpc.clone(),
+                                       options.threadpool.clone(),
+                                       &options.remote);
+        MasterReplica {
+            hostport,
+            proxy,
+            is_leader: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Replica for MasterReplica {
+
+    fn proxy(&self) -> krpc::Proxy {
+        self.proxy.clone()
+    }
+
+    fn is_leader(&self) -> bool {
         self.is_leader.load(Relaxed)
     }
 
-    pub fn mark_leader(&self) {
+    fn mark_leader(&self) {
         self.is_leader.store(true, Relaxed)
     }
 
-    pub fn mark_follower(&self) {
+    fn mark_follower(&self) {
         self.is_leader.store(false, Relaxed)
+    }
+
+    fn is_stale(&self) -> bool {
+        false
+    }
+
+    fn mark_stale(&self) {
+        panic!("Master replicas may not be stale")
     }
 }
 
@@ -178,7 +214,11 @@ impl fmt::Debug for MasterReplica {
     }
 }
 
-struct MasterTask {
+impl ReplicaSet for Arc<Box<[MasterReplica]>> {
+    type Replica = MasterReplica;
+    fn replicas(&self) -> &[MasterReplica] {
+        &*self
+    }
 }
 
 impl MetaCache {
@@ -189,7 +229,7 @@ impl MetaCache {
             MetaCache {
                 tables: Arc::new(Mutex::new(HashMap::new())),
                 tablet_servers: Arc::new(Mutex::new(HashMap::new())),
-                masters: Arc::new(master_replicas.into_boxed_slice()),
+                masters: master_replicas,
             }
         })
     }
@@ -609,18 +649,13 @@ impl Tablet {
     pub fn upper_bound(&self) -> &PartitionKey {
         &self.upper_bound
     }
+}
 
-    /// Returns the tablet replicas.
-    pub fn replicas(&self) -> &[TabletReplica] {
+impl ReplicaSet for Arc<Tablet> {
+    type Replica = TabletReplica;
+
+    fn replicas(&self) -> &[TabletReplica] {
         &self.replicas
-    }
-
-    /// Returns true if the tablet metadata is known to be stale.
-    ///
-    /// The metadata may be stale because the leader changed, the set of replicas changed, or it
-    /// has expired.
-    pub fn is_stale(&self) -> bool {
-        self.replicas.iter().any(|replica| replica.is_stale.load(Relaxed))
     }
 }
 
@@ -632,53 +667,123 @@ pub(crate) struct TabletReplica {
     is_stale: AtomicBool,
 }
 
+impl Replica for TabletReplica {
+
+    fn proxy(&self) -> krpc::Proxy {
+        self.proxy.clone()
+    }
+
+    fn is_leader(&self) -> bool {
+        self.is_leader.load(Relaxed)
+    }
+
+    fn mark_leader(&self) {
+        self.is_leader.store(true, Relaxed)
+    }
+
+    fn mark_follower(&self) {
+        self.is_leader.store(false, Relaxed)
+    }
+
+    fn is_stale(&self) -> bool {
+        self.is_stale.load(Relaxed)
+    }
+
+    fn mark_stale(&self) {
+        self.is_stale.store(true, Relaxed)
+    }
+}
+
 impl TabletReplica {
 
     /// Returns the ID of the tablet server which owns this replica.
     pub fn id(&self) -> TabletServerId {
         self.id
     }
-
-    /// Returns a KRPC proxy to the tablet server hosting the replica.
-    pub fn proxy(&self) -> krpc::Proxy {
-        self.proxy.clone()
-    }
-
-    pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Relaxed)
-    }
-
-    pub fn mark_leader(&self) {
-        self.is_leader.store(true, Relaxed)
-    }
-
-    pub fn mark_follower(&self) {
-        self.is_leader.store(false, Relaxed)
-    }
-
-    /// Marks the tablet metadata as stale.
-    pub fn mark_stale(&self) {
-        self.is_stale.store(true, Relaxed)
-    }
 }
 
-/*
+pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
+                                 options: &Options)
+                                 -> impl Future<Item=Arc<Box<[MasterReplica]>>, Error=Error> {
+
+    let replicas = master_addrs.into_iter()
+                               .map(|hostport| MasterReplica::new(hostport, options))
+                               .collect::<Vec<_>>();
+    let replica_set = Arc::new(replicas.into_boxed_slice());
+
+    let mut call = MasterService::connect_to_master(Default::default(),
+                                                    Instant::now() + options.admin_timeout);
+    call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
+
+    let rpc = ReplicaRpc::new(options.timer.clone(),
+                              replica_set.clone(),
+                              call,
+                              Speculation::Full,
+                              Selection::Leader,
+                              Backoff::with_duration_range(250, u32::max_value()));
+    rpc.map(|_| replica_set)
+}
+
 #[cfg(test)]
 mod tests {
 
-    use std::time::{Duration, Instant};
+    use std::net::TcpListener;
+    use std::time::Duration;
 
+    use cpupool::CpuPool;
     use env_logger;
+    use krpc;
     use tokio::reactor::Core;
+    use timer::Timer;
 
-    use ClientBuilder;
-    use RangePartitionBound;
-    use TableBuilder;
-    use mini_cluster::MiniCluster;
-    use schema::tests::simple_schema;
-
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
+    use replica::Replica;
     use super::*;
 
+    // TODO(tests):
+    //  - Shutdown single master and ensure ConnectToCluster immediately fails.
+    //  - Shutdown one master replica and ensure ConnectToCluster succeeds.
+    //  - Shutdown all master replicas and ensure ConnectToCluster immediately fails.
+    //  - Manipulate master election to make sure there's no leader, ensure ConnectToCluster waits,
+    //    then elect a leader and ensure it completes.
+    //  - Connect to cluster stress test: have a thread spawning a bunch of concurrent connect to
+    //    cluster calls, and have the cluster undergo constant elections and failures.
+
+    fn setup(cluster_config: &MiniClusterConfig) -> (MiniCluster, Core, Options) {
+        let _ = env_logger::init();
+        let cluster = MiniCluster::new(cluster_config);
+        let reactor = Core::new().unwrap();
+
+        let options = Options {
+            rpc: krpc::Options::default(),
+            remote: reactor.remote(),
+            threadpool: CpuPool::new_num_cpus(),
+            timer: Timer::default(),
+            admin_timeout: Duration::from_secs(10),
+        };
+
+        (cluster, reactor, options)
+    }
+
+    #[test]
+    fn test_connect_to_cluster() {
+        let _ = env_logger::init();
+
+        let run = |num_masters: u32| {
+            let (mut cluster, mut reactor, options) =
+                setup(MiniClusterConfig::default().num_masters(num_masters).num_tservers(0));
+            let masters = reactor.run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
+
+            assert_eq!(masters.len(), cluster.master_addrs().len());
+            assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
+        };
+
+        run(1);
+        run(3);
+    }
+
+
+/*
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
     }
@@ -890,5 +995,5 @@ mod tests {
                        key, expected_entries, &new_entries[..]);
         }
     }
-}
 */
+}

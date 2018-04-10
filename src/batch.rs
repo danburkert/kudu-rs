@@ -35,6 +35,7 @@ use util::{
     RetryWithBackoff,
     RetryCause,
 };
+use replica::ReplicaSet;
 
 pub(crate) struct Batch {
 
@@ -156,6 +157,7 @@ impl BatchFuture {
     fn select_replica(&self) -> Option<&TabletReplica> {
         let mut follower = None;
         for replica in self.tablet.replicas() {
+            /*
             if self.blacklist.contains(&replica.id()) {
                 continue;
             } else if replica.is_leader() {
@@ -163,6 +165,8 @@ impl BatchFuture {
             } else {
                 follower.get_or_insert(replica);
             }
+            */
+            unimplemented!()
         }
 
         follower
