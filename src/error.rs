@@ -312,6 +312,7 @@ impl error::Error for MasterError {
             MasterErrorCode::TabletNotRunning => "tablet not running",
             MasterErrorCode::EvenReplicationFactor => "even replication factor",
             MasterErrorCode::IllegalReplicationFactor => "illegal replication factor",
+            MasterErrorCode::IncompatibleReplicaManagement => "incompatible replica management",
         }
     }
 

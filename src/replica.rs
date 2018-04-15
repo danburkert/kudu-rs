@@ -5,6 +5,7 @@ use std::collections::{
     VecDeque,
     HashMap,
 };
+use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -44,7 +45,6 @@ use server_picker::ContextFuture;
 pub(crate) enum Speculation {
     Full,
     Staggered(Duration),
-    None,
 }
 
 /// The policy for replica selection.
@@ -123,6 +123,16 @@ impl ReplicaState {
     }
 }
 
+impl fmt::Debug for ReplicaState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ReplicaState")
+            .field("index", &self.index)
+            .field("backoff", &self.backoff)
+            .field("failure", &self.failure)
+            .finish()
+    }
+}
+
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct ReplicaRpc<Set, Req, Resp>
 where Set: ReplicaSet,
@@ -177,39 +187,50 @@ where Set: ReplicaSet,
         }
     }
 
+    fn speculation_timer_is_ready(&mut self) -> bool {
+        self.speculative_timer.as_mut().map_or(true, |sleep| {
+            sleep.poll().expect("timer failed").is_ready()
+        })
+    }
+
+    fn reset_speculation_timer(&mut self, duration: Duration) {
+        let mut sleep = self.timer.sleep(duration);
+        // Poll the timer in order to schedule this task for wakeup on expiry.
+        // TODO: can the timer be initially complete?
+        assert!(sleep.poll().expect("timer failed").is_not_ready());
+        self.speculative_timer = Some(sleep);
+    }
+
     /// Dispatches queued RPCs according to the speculative execution policy.
-    fn dispatch_rpcs(&mut self) {
-        assert!(!self.queue.is_empty());
-        match self.speculation {
-            Speculation::Full => for mut replica in self.queue.drain(..) {
-                // Completely drain the queue and issue RPCs against all replicas.
-                let rpc = replica.proxy.send(self.call.clone());
-                let context = ContextFuture::new(rpc, replica);
-                self.in_flight.push(context);
-            },
-            Speculation::Staggered(duration) => {
-                if self.in_flight.is_empty() || self.speculative_timer.as_mut().map_or(true, |sleep| {
-                        sleep.poll().expect("timer failed").is_ready()
-                }) {
-                    let mut replica = self.queue.pop_front().unwrap();
+    /// Returns true if RPCs have been dispatched.
+    fn dispatch_rpcs(&mut self) -> bool {
+        let in_flight_count = self.in_flight.len();
+        if !self.queue.is_empty() {
+            match self.speculation {
+                Speculation::Full => for mut replica in self.queue.drain(..) {
+                    // Completely drain the queue and issue RPCs against all replicas.
                     let rpc = replica.proxy.send(self.call.clone());
                     let context = ContextFuture::new(rpc, replica);
                     self.in_flight.push(context);
-
-                    let mut timer = self.timer.sleep(duration);
-                    // Poll the timer in order to schedule this task for wakeup on expiry.
-                    // TODO: can the timer be initially complete?
-                    let _ = timer.poll().expect("timer failed");
-                    self.speculative_timer = Some(timer);
-                }
-            },
-            Speculation::None => if self.in_flight.is_empty() {
-                let mut replica = self.queue.pop_front().unwrap();
-                let rpc = replica.proxy.send(self.call.clone());
-                let context = ContextFuture::new(rpc, replica);
-                self.in_flight.push(context);
-            },
+                },
+                Speculation::Staggered(duration) => {
+                    if self.speculation_timer_is_ready() {
+                        let mut replica = self.queue.pop_front().unwrap();
+                        let rpc = replica.proxy.send(self.call.clone());
+                        let context = ContextFuture::new(rpc, replica);
+                        self.in_flight.push(context);
+                        self.reset_speculation_timer(duration);
+                    }
+                },
+            }
         }
+
+        while let Async::Ready(Some((_, mut replica))) = self.backoff.poll().unwrap() {
+            let rpc = replica.proxy.send(self.call.clone());
+            let context = ContextFuture::new(rpc, replica);
+            self.in_flight.push(context);
+        }
+        in_flight_count != self.in_flight.len()
     }
 
     fn poll_in_flight(&mut self) -> Poll<(Proxy, Resp, Vec<Bytes>), Error> {
@@ -262,18 +283,15 @@ where Set: ReplicaSet,
                     self.replica_set.replicas()[replica.index].mark_follower();
                     // Retry the RPC after a backoff period.
                     replica.failure = Some(error);
-                    let backoff = self.timer.sleep(replica.backoff.next_backoff());
+                    let mut backoff = self.timer.sleep(replica.backoff.next_backoff());
                     let context = ContextFuture::new(backoff, replica);
                     self.backoff.push(context);
                 }
 
-                // TODO: can this case be rolled into the NotTheLeader case?
                 | Err(error@Error::Io(..)) => {
-                    // Retry the RPC after a backoff period.
+                    // IO errors are non-retriable, however they are not fatal.
                     replica.failure = Some(error);
-                    let backoff = self.timer.sleep(replica.backoff.next_backoff());
-                    let context = ContextFuture::new(backoff, replica);
-                    self.backoff.push(context);
+                    self.failures.push(replica);
                 },
 
                 // TODO: handle timed out error.  Probably by gathering up all of the errors that
@@ -295,18 +313,35 @@ where Set: ReplicaSet,
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Error> {
+        loop {
+            // Poll in-flight RPCs for completion.
+            if let Async::Ready(item) = self.poll_in_flight()? {
+                return Ok(Async::Ready(item));
+            }
 
-        // Step 1: Poll in-flight RPCs for completion.
-        if let Async::Ready(item) = self.poll_in_flight()? {
-            return Ok(Async::Ready(item));
+            // Dispatch RPCs if possible. If any RPCs are dispatched, go back to step 1 in order to
+            // poll them.
+            if self.dispatch_rpcs() {
+                continue;
+            }
+
+            // Check if all RPCs are failed.
+
+            if self.queue.is_empty() && self.in_flight.is_empty() && self.backoff.is_empty() {
+                debug_assert!(self.failures.len() > 0);
+                if self.failures.len() == 1 {
+                    return Err(self.failures.pop().unwrap().failure.unwrap());
+                }
+
+                let errors = self.failures
+                                 .iter_mut()
+                                 .map(|failure| failure.failure.take().unwrap())
+                                 .collect::<Vec<_>>();
+
+                return Err(Error::Compound("failed replicated RPC".to_string(), errors));
+            }
+
+            return Ok(Async::NotReady);
         }
-
-        // Step 2: Dispatch RPCs if possible.
-        if !self.queue.is_empty() {
-            self.dispatch_rpcs();
-        }
-
-        // Step 3: Poll in flight RPCs again 
-        self.poll_in_flight()
     }
 }

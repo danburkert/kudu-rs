@@ -782,6 +782,57 @@ mod tests {
         run(3);
     }
 
+    #[test]
+    fn test_connect_to_cluster_unavailable() {
+        let _ = env_logger::init();
+
+        let run = |num_masters: u32| -> Error {
+            let mut reactor = Core::new().unwrap();
+
+            let options = Options {
+                rpc: krpc::Options::default(),
+                remote: reactor.remote(),
+                threadpool: CpuPool::new_num_cpus(),
+                timer: Timer::default(),
+                admin_timeout: Duration::from_secs(10),
+            };
+
+            let hostports = {
+                let listeners = (0..num_masters).map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+                                                .collect::<Vec<_>>();
+                listeners.iter().flat_map(TcpListener::local_addr).map(HostPort::from).collect::<Vec<HostPort>>()
+            };
+
+            reactor.run(connect_to_cluster(hostports, &options)).unwrap_err()
+        };
+
+        match run(1) {
+            Error::Io(..) => (),
+            other => panic!("unexpected error: {}", other),
+        }
+
+        // TODO: Compound is a terrible error here.  The errors really need to be overhauled.
+        match run(3) {
+            Error::Compound(..) => (),
+            other => panic!("unexpected error: {}", other),
+        }
+    }
+
+    // Test cluster connection when one of the replicas is down.
+    #[test]
+    fn test_connect_to_cluster_failover() {
+        let _ = env_logger::init();
+
+        let (mut cluster, mut reactor, options) =
+            setup(MiniClusterConfig::default().num_masters(3).num_tservers(0));
+
+        cluster.stop_master(0);
+
+        let masters = reactor.run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
+
+        assert_eq!(masters.len(), cluster.master_addrs().len());
+        assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
+    }
 
 /*
     fn deadline() -> Instant {

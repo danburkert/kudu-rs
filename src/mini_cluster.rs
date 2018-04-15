@@ -69,7 +69,7 @@ impl MiniCluster {
         };
 
         let mut pb = conf.pb.clone();
-        pb.data_root = Some(mini_cluster.data_root.path().to_str().unwrap().to_string());
+        pb.cluster_root = Some(mini_cluster.data_root.path().to_str().unwrap().to_string());
         mini_cluster.send_request(Request::CreateCluster(pb));
         mini_cluster.start_cluster();
 
