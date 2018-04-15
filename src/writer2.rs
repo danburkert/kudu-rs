@@ -18,6 +18,10 @@ use futures::stream::{
     FuturesOrdered,
     FuturesUnordered,
 };
+use futures::sync::mpsc::{
+    UnboundedReceiver,
+    UnboundedSender,
+};
 
 use Client;
 use Error;
@@ -26,7 +30,6 @@ use Schema;
 use Table;
 use TabletId;
 use key;
-use meta_cache::MetaCache;
 use pb::tserver::{
     TabletServerService,
     WriteRequestPb,
@@ -34,7 +37,16 @@ use pb::tserver::{
 };
 use OperationEncoder;
 use Operation;
-use tserver;
+use replica::{
+    ReplicaSet,
+    ReplicaRpc,
+    Speculation,
+    Selection,
+};
+use backoff::Backoff;
+use timer::Timer;
+use Row;
+use batch::BatchStats;
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
@@ -95,9 +107,8 @@ impl Default for WriterConfig {
 
 struct Writer {
     config: WriterConfig,
-    meta_cache: MetaCache,
-    tserver_proxies: tserver::ProxyCache,
     table: Table,
+    timer: Timer,
 
     operations_in_lookup: OperationsInLookup,
     batches_in_flight: FuturesUnordered<Box<Future<Item=BatchStats, Error=(Error, WriteRequestPb)>>>,
@@ -105,7 +116,8 @@ struct Writer {
     /// Batchers; one per tablet server.
     batchers: HashMap<TabletId, Batcher>,
 
-    errors: ErrorCollector,
+    error_sender: UnboundedSender<RowError>,
+    error_receiver: UnboundedReceiver<RowError>,
 }
 
 impl Writer {
@@ -125,7 +137,7 @@ impl Writer {
             },
         };
 
-        let mut tablet_id = self.meta_cache.tablet_id(&*partition_key);
+        let mut tablet_id = self.table.table_locations().tablet_id(&*partition_key);
         if !self.operations_in_lookup.is_empty() {
             self.operations_in_lookup.push(op, Box::new(tablet_id));
             self.poll_operations_in_lookup();
@@ -191,12 +203,22 @@ impl Writer {
         let mut request = WriteRequestPb::default();
         request.tablet_id = tablet_id.to_string().into_bytes();
         request.schema = Some(self.schema().as_pb());
-        request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
+        //request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
         request.row_operations = Some(operations.into_pb());
         let call = TabletServerService::write(Arc::new(request),
                                               Instant::now() + self.config.flush_timeout);
 
-        let tserver_proxies = self.tserver_proxies.clone();
+        // self.table.table_locations().
+
+            /*
+        let rpc = ReplicaRpc::new(self.timer,
+                                  tablet,
+                                  call.clone(),
+                                  Speculation::Staggered(Duration::from_millis(100)),
+                                  Selection::Leader,
+                                  Backoff::default());
+                                  */
+
         /*
         let fut = self.meta_cache
                       .tablet_leader(partition_key)
@@ -228,10 +250,6 @@ impl Writer {
         self.table.schema()
     }
 
-    fn client(&self) -> &Client {
-        self.table.client()
-    }
-
     fn partition_schema(&self) -> &PartitionSchema {
         self.table.partition_schema()
     }
@@ -250,7 +268,16 @@ struct Flush {
     errors: ErrorCollector,
 }
 
+pub struct RowError {
+    row: Row<'static>,
+    error: Error,
+}
+
+
 pub(crate) struct ErrorCollector {
+    error_sender: UnboundedSender<RowError>,
+    error_receiver: UnboundedReceiver<RowError>,
+
 }
 
 struct Batcher {
@@ -274,12 +301,6 @@ impl Batcher {
         self.batches_in_flight -= 1;
         self.data_in_flight -= data;
     }
-}
-
-struct BatchStats {
-    successful_operations: usize,
-    failed_operations: usize,
-    data: usize,
 }
 
 struct OperationsInLookup {

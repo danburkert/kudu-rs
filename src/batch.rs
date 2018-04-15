@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::{
     Async,
@@ -12,6 +12,7 @@ use futures::{
     Poll,
 };
 use krpc::Call;
+use timer::Timer;
 
 use Error;
 use HostPort;
@@ -25,9 +26,11 @@ use meta_cache::{
     TabletReplica,
 };
 use pb::tserver::{
+    TabletServerService,
     WriteRequestPb,
     WriteResponsePb,
 };
+use pb::SchemaPb;
 use retry::RetryFuture;
 use timer;
 use PartitionKey;
@@ -35,228 +38,115 @@ use util::{
     RetryWithBackoff,
     RetryCause,
 };
-use replica::ReplicaSet;
+use replica::{
+    ReplicaSet,
+    ReplicaRpc,
+    Speculation,
+    Selection,
+};
+use row::Row;
+use Schema;
 
-pub(crate) struct Batch {
-
-    table_locations: TableLocations,
-    tablet: Arc<Tablet>,
-
-    tablet_future: Option<Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>>,
-
-    /// The batch being accumulated. Buffers operations until it is flushed.
-    buffer: Buffer,
-}
-
-impl Batch {
-    fn new(table_locations: TableLocations, tablet: Arc<Tablet>) -> Batch {
-        Batch {
-            table_locations,
-            tablet,
-            tablet_future: None,
-            buffer: Buffer::new(),
-        }
-    }
-
-    /*
-    fn poll_ready(&mut self) -> Poll<(), Error> {
-        loop {
-            while self.tablet.is_stale() {
-                // TODO: do some kind of backoff here so we aren't spamming the metastore.
-
-                // NLL hack
-                let Batch { ref table_locations, ref mut tablet, ref mut tablet_future, .. } = *self;
-                let tablet_future = tablet_future.get_or_insert_with(|| {
-                    Box::new(table_locations.tablet(tablet.lower_bound()))
-                });
-
-                if let Some(new_tablet) = try_ready!(tablet_future.poll()) {
-                    if tablet.id() != new_tablet.id() {
-                        // TODO
-                        unimplemented!("partitioning has changed");
-                    }
-                    *tablet = new_tablet;
-                } else {
-                    unimplemented!("partitioning has changed to non-covered range");
-                }
-            }
-
-            let leader = match self.tablet.leader_replica() {
-                Some(leader) => leader.proxy(),
-                None => {
-                    // Refresh the tablet.
-                    //self.tablet.mark_stale();
-                    continue;
-                },
-            };
-
-            //let mut message = WriteRequestPb::default();
-            //let ops = self.buffer.buffer.into_pb();
-            //message.row_operations = Some(ops);
-
-            return Ok(Async::Ready(()))
-        }
-    }
-    */
-}
-
-/// Holds buffered operations for a tablet until they are flushed.
 pub(crate) struct Buffer {
-    operations: usize,
-    buffer: OperationEncoder,
-}
-
-impl Buffer {
-    fn new() -> Buffer {
-        Buffer {
-            operations: 0,
-            buffer: OperationEncoder::new(),
-        }
-    }
-}
-
-enum BatchState {
-
-    Initial,
-
-    /// The tablet metadata is being refreshed.
-    TabletRefresh {
-        tablet: Box<Future<Item=Option<Arc<Tablet>>, Error=Error>>,
-    },
-
-    /// The request is in-flight.
-    InFlight {
-        tserver: TabletServerId,
-    },
-
-    /// The batch failed to write due to a retriable error, another attempt will be made after a
-    /// waiting period.
-    Waiting {
-        sleep: timer::Sleep,
-        request: Box<WriteRequestPb>,
-    },
+    pub(crate) encoder: OperationEncoder,
+    pub(crate) operations: usize,
 }
 
 struct BatchFuture {
-    table_locations: TableLocations,
-    tablet: Arc<Tablet>,
-    timer: timer::Timer,
-    blacklist: HashSet<TabletServerId>,
-    backoff: Backoff,
-    state: BatchState,
-    request: Arc<WriteRequestPb>,
+    tablet_id: TabletId,
+    call: Call<WriteRequestPb, WriteResponsePb>,
+    rpc: ReplicaRpc<Arc<Tablet>, WriteRequestPb, WriteResponsePb>,
+    schema: Schema,
+    num_operations: usize,
+    data: usize,
 }
+
+
+// TODO:
+//
+// 1) Add initial step to BatchFuture that locates the tablet.
+// 2) Add API to Call to get mutable request.
 
 impl BatchFuture {
-    fn new(table_locations: TableLocations,
+
+    fn new(timer: Timer,
+           schema: Schema,
            tablet: Arc<Tablet>,
-           timer: timer::Timer,
-           buffer: Buffer) {
+           operations: OperationEncoder,
+           num_operations: usize,
+           deadline: Instant) -> BatchFuture {
+        let data = operations.len();
+        let tablet_id = tablet.id();
+        let mut request = WriteRequestPb::default();
+        request.tablet_id = tablet.id().to_string().into_bytes();
+        request.schema = Some(schema.as_pb());
+        //request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
+        request.row_operations = Some(operations.into_pb());
+        let call = TabletServerService::write(Arc::new(request), deadline);
+        let rpc = ReplicaRpc::new(timer,
+                                  tablet,
+                                  call.clone(),
+                                  Speculation::Staggered(Duration::from_millis(100)),
+                                  Selection::Leader,
+                                  Backoff::default());
+
+        BatchFuture {
+            tablet_id,
+            call,
+            rpc,
+            schema,
+            num_operations,
+            data,
+        }
     }
 
-    fn select_replica(&self) -> Option<&TabletReplica> {
-        let mut follower = None;
-        for replica in self.tablet.replicas() {
-            /*
-            if self.blacklist.contains(&replica.id()) {
-                continue;
-            } else if replica.is_leader() {
-                return Some(replica);
-            } else {
-                follower.get_or_insert(replica);
-            }
-            */
-            unimplemented!()
-        }
-
-        follower
+    fn unwrap_operation_encoder(&mut self) -> OperationEncoder {
+        OperationEncoder::from_pb(Arc::get_mut(&mut self.call.request)
+                                      .unwrap()
+                                      .row_operations
+                                      .take()
+                                      .unwrap())
     }
 }
 
 impl Future for BatchFuture {
+    type Item = BatchStats;
+    type Error = BatchError;
+    fn poll(&mut self) -> Poll<BatchStats, BatchError> {
+        match self.rpc.poll() {
 
-    type Item = ();
-    type Error = ();
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Ok(Async::Ready((_, mut response, _))) => {
+                assert!(response.error.is_none());
 
-    fn poll(&mut self) -> Poll<(), ()> {
-        let state = mem::replace(&mut self.state, BatchState::Initial);
-        match state {
-            BatchState::Initial => {
+                let failed_operations = response.per_row_errors.len();
+                if failed_operations != 0 {
+                    let operation_encoder = self.unwrap_operation_encoder();
+                    let mut rows = operation_encoder.iter(self.schema.clone());
+                    response.per_row_errors.sort_by_key(|error| error.row_index as usize);
+                }
 
-            },
-            BatchState::InFlight { ..  } => {
-            },
-            BatchState::TabletRefresh { ..  } => {
-            },
-            BatchState::Waiting { ..  } => {
-            },
-        }
-
-        unimplemented!()
-    }
-}
-
-/*
-struct BatchError {
-    tablet: Tablet,
-    buffer: Buffer,
-    error: Error,
-}
-
-struct BatchFuture {
-    tablet: Box<Future<Item=BatchResult, Error=BatchError>>,
-    lower_bound: PartitionKey,
-    operations: usize,
-    state: State,
-    call: Call<WriteRequestPb, WriteResponsePb>,
-}
-
-enum State {
-    LeaderLookup(Box<Future<Item=Option<Box<[HostPort]>>, Error=Error>>),
-    InFlight(RetryFuture<WriteRequestPb, WriteResponsePb>),
-}
-
-impl Future for BatchFuture {
-    type Item=BatchResult;
-    type Error=BatchResult;
-    fn poll(&mut self) -> Result<Async<BatchResult>, BatchResult> {
-
-        let BatchFuture { ref meta_cache,
-                          ref tserver_proxies,
-                          ref partition_key,
-                          operations,
-                          ref mut state,
-                          ref call } = *self;
-
-        let leaders = match *state {
-            State::LeaderLookup(ref mut leader_lookup) => {
-                try_ready!(leader_lookup.poll().map_err(|err| {
-                    BatchResult {
-                        call: call.clone(),
-                        response: Err(err),
-                    }
+                Ok(Async::Ready(BatchStats {
+                    tablet: self.tablet_id,
+                    successful_operations: self.num_operations - failed_operations,
+                    failed_operations,
+                    data: self.data,
                 }))
             },
-            State::InFlight(ref mut in_flight) => {
-                unimplemented!()
-            },
-        };
-
-        /*
-        match leaders {
-            Some(leaders) => {
-            },
-            None => {
-            },
+            Err(error) => Err(unimplemented!()),
         }
-        */
-
-        unimplemented!()
     }
 }
 
-pub(crate) struct BatchResult {
-    call: Call<WriteRequestPb, WriteResponsePb>,
-    response: Result<WriteResponsePb, Error>,
+pub(crate) struct BatchStats {
+    tablet: TabletId,
+    successful_operations: usize,
+    failed_operations: usize,
+    data: usize,
 }
-*/
+
+pub(crate) struct BatchError {
+    operations: OperationEncoder,
+    num_operations: usize,
+    error: Error,
+}

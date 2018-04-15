@@ -260,6 +260,34 @@ pub(crate) fn urls_from_pb(hostports: &[HostPortPb], https_enabled: bool) -> Res
              .collect()
 }
 
+pub struct ContextFuture<F, C> {
+    future: F,
+    context: Option<C>,
+}
+
+impl <F, C> ContextFuture<F, C> {
+    pub fn new(future: F, context: C) -> ContextFuture<F, C> {
+        ContextFuture {
+            future,
+            context: Some(context),
+        }
+    }
+}
+
+impl <F, C> Future for ContextFuture<F, C> where F: Future {
+    type Item = (F::Item, C);
+    type Error = (F::Error, C);
+
+    fn poll(&mut self) -> Poll<(F::Item, C), (F::Error, C)> {
+        match self.future.poll() {
+            Ok(Async::Ready(item)) => Ok(Async::Ready((item, self.context.take().expect("future already complete")))),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(error) => Err((error, self.context.take().expect("future already complete"))),
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
 

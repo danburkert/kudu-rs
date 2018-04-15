@@ -287,7 +287,6 @@ pub(crate) struct TableLocations {
 }
 
 impl TableLocations {
-
     pub(crate) fn new(table_id: TableId,
                       primary_key_schema: Schema,
                       partition_schema: PartitionSchema,
@@ -615,10 +614,6 @@ impl Future for TableLocationsTask {
 }
 
 /// Metadata pertaining to a Kudu tablet.
-///
-/// The metadata may become stale, at which point a new version of the metadata is requested from
-/// the master. When the new version of the metadata becomes available, it's linked to from the old
-/// version as an intrusive singly linked list.
 pub(crate) struct Tablet {
 
     /// The tablet ID.

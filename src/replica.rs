@@ -39,7 +39,7 @@ use TabletServerError;
 use TabletServerErrorCode;
 use backoff::Backoff;
 use retry::Retriable;
-use server_picker::ContextFuture;
+use util::ContextFuture;
 
 /// The policy for speculative execution.
 pub(crate) enum Speculation {
@@ -166,11 +166,11 @@ where Set: ReplicaSet,
       Resp: Retriable {
 
     pub(crate) fn new(timer: Timer,
-           replica_set: Set,
-           call: Call<Req, Resp>,
-           speculation: Speculation,
-           selection: Selection,
-           backoff: Backoff) -> ReplicaRpc<Set, Req, Resp> {
+                      replica_set: Set,
+                      call: Call<Req, Resp>,
+                      speculation: Speculation,
+                      selection: Selection,
+                      backoff: Backoff) -> ReplicaRpc<Set, Req, Resp> {
 
         let queue = selection.prioritize(replica_set.replicas(), backoff);
         ReplicaRpc {

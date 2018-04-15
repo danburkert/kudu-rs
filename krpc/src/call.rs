@@ -15,7 +15,7 @@ pub struct Call<Req, Resp> where Req: Message + 'static, Resp: Message + Default
     pub(crate) method: &'static str,
     pub(crate) required_feature_flags: &'static [u32],
     pub(crate) deadline: Instant,
-    pub(crate) request: Arc<Req>,
+    pub request: Arc<Req>,
     _marker: PhantomData<Resp>,
 }
 

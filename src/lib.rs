@@ -33,7 +33,7 @@ extern crate tokio_core as tokio;
 
 pub mod pb;
 
-//mod writer2;
+mod writer2;
 //mod writer;
 mod backoff;
 mod batch;

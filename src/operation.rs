@@ -157,6 +157,13 @@ impl OperationEncoder {
             indirect_data: Some(self.indirect_data),
         }
     }
+
+    pub fn from_pb(pb: RowOperationsPb) -> OperationEncoder {
+        OperationEncoder {
+            data: pb.rows.unwrap(),
+            indirect_data: pb.indirect_data.unwrap(),
+        }
+    }
 }
 
 pub(crate) struct Iter<'a> {
