@@ -3,6 +3,7 @@ use std::fmt;
 use std::io;
 
 use prost;
+use threadpool;
 
 use pb::rpc::ErrorStatusPb;
 
@@ -92,6 +93,11 @@ impl From<io::Error> for Error {
 impl From<prost::DecodeError> for Error {
     fn from(error: prost::DecodeError) -> Error {
         Error::Serialization(error.to_string())
+    }
+}
+impl From<threadpool::BlockingError> for Error {
+    fn from(_: threadpool::BlockingError) -> Error {
+        Error::Io(io::Error::new(io::ErrorKind::Other, "no tokio threadpool context"))
     }
 }
 

@@ -27,10 +27,9 @@ use futures::{
 use prost::Message;
 use prost::encoding::encoded_len_varint;
 use tokio::net::{
+    ConnectFuture,
     TcpStream,
-    TcpStreamNew,
 };
-use tokio::reactor::Handle;
 
 use Options;
 use Error;
@@ -70,14 +69,12 @@ pub(crate) struct Transport {
 impl Transport {
 
     /// Returns a future which will yield a new transport.
-    pub fn connect(addr: SocketAddr,
-                   options: Options,
-                   handle: &Handle) -> TransportNew {
-        let stream = TcpStream::connect(&addr, handle);
+    pub fn connect(addr: SocketAddr, options: Options) -> TransportNew {
+        let connect = TcpStream::connect(&addr);
         TransportNew {
             addr,
             options,
-            stream,
+            connect,
         }
     }
 
@@ -303,7 +300,7 @@ impl Transport {
 pub(crate) struct TransportNew {
     addr: SocketAddr,
     options: Options,
-    stream: TcpStreamNew,
+    connect: ConnectFuture,
 }
 
 impl Future for TransportNew {
@@ -311,7 +308,7 @@ impl Future for TransportNew {
     type Error = io::Error;
 
     fn poll(&mut self) -> Result<Async<Transport>, io::Error> {
-        let stream = try_ready!(self.stream.poll());
+        let stream = try_ready!(self.connect.poll());
         stream.set_nodelay(self.options.nodelay)?;
 
         // Write the connection header to the send buffer.

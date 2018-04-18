@@ -3,7 +3,6 @@
 extern crate byteorder;
 extern crate bytes;
 extern crate chrono;
-extern crate futures_cpupool as cpupool;
 extern crate ieee754;
 extern crate ifaces;
 extern crate itertools;
@@ -13,7 +12,8 @@ extern crate prost;
 extern crate prost_types;
 extern crate rand;
 extern crate slab;
-extern crate tokio_timer as timer;
+extern crate tokio;
+extern crate tokio_timer;
 extern crate url;
 extern crate uuid;
 extern crate vec_map;
@@ -29,7 +29,6 @@ extern crate vec_map;
 #[macro_use] extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
-extern crate tokio_core as tokio;
 
 pub mod pb;
 
@@ -336,9 +335,6 @@ id!(TabletServerId);
 #[derive(Clone)]
 pub struct Options {
     rpc: krpc::Options,
-    remote: tokio::reactor::Remote,
-    threadpool: cpupool::CpuPool,
-    timer: timer::Timer,
     admin_timeout: Duration,
 }
 

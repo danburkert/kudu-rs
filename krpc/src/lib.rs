@@ -1,16 +1,17 @@
 extern crate byteorder;
 extern crate bytes;
 extern crate fnv;
-extern crate futures_cpupool as cpupool;
 extern crate itertools;
 extern crate prost;
 extern crate prost_types;
 extern crate tacho;
+extern crate tokio;
+extern crate tokio_threadpool as threadpool;
 
 #[macro_use] extern crate futures;
 #[macro_use] extern crate log;
 #[macro_use] extern crate prost_derive;
-#[macro_use] extern crate tokio_core as tokio;
+#[macro_use] extern crate tokio_io;
 
 mod call;
 mod connection;

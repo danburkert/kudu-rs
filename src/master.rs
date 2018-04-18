@@ -55,7 +55,7 @@ impl MasterProxy {
 
         if let Some((ref mut proxy, cache_epoch)) = self.cache {
             if epoch == cache_epoch {
-                let response = proxy.clone().send_retriable(call.clone(), self.inner.options.timer.clone());
+                let response = proxy.clone().send_retriable(call.clone());
                 return MasterFuture {
                     inner: Arc::clone(&self.inner),
                     call,
@@ -155,8 +155,7 @@ impl <Req, Resp> Future for MasterFuture<Req, Resp> where Req: Message + 'static
             let state = match self.state {
                 State::Connecting(ref mut connecting) => {
                     let proxy = try_ready!(connecting.poll().map_err(|error| error.deref().clone()));
-                    let rpc = proxy.deref().clone().send_retriable(self.call.clone(),
-                                                                   self.inner.options.timer.clone());
+                    let rpc = proxy.deref().clone().send_retriable(self.call.clone());
                     State::InFlight(rpc)
                 },
                 State::InFlight(ref mut rpc) => {
@@ -194,15 +193,8 @@ impl ConnectToCluster {
                                                         Instant::now() + options.admin_timeout);
         call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
         for addr in addrs.iter().cloned() {
-            let mut proxy = Proxy::spawn(Box::new([addr]),
-                                         options.rpc.clone(),
-                                         options.threadpool.clone(),
-                                         &options.remote);
-            connect.responses.push(
-                Box::new(
-                    proxy.clone()
-                         .send_retriable(call.clone(), options.timer.clone())
-                         .map(move |_| proxy)));
+            let mut proxy = Proxy::spawn(Box::new([addr]), options.rpc.clone());
+            connect.responses.push(Box::new(proxy.clone().send_retriable(call.clone()).map(move |_| proxy)));
         }
 
         connect

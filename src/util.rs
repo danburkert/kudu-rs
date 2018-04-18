@@ -13,7 +13,7 @@ use std::time::{
 use chrono;
 use futures::{Async, Future, Poll, Stream};
 use ifaces;
-use timer;
+use tokio_timer::Delay;
 use url::Url;
 
 use DataType;
@@ -97,47 +97,42 @@ pub fn dummy_addr() -> SocketAddr {
 }
 
 /// Returns a stream which yields elements according to the backoff policy.
-pub fn backoff_stream(mut backoff: Backoff, timer: timer::Timer) -> BackoffStream {
-    let sleep = timer.sleep(backoff.next_backoff());
+pub fn backoff_stream(mut backoff: Backoff) -> BackoffStream {
+    let sleep = Delay::new(Instant::now() + backoff.next_backoff());
     BackoffStream {
-        backoff: backoff,
-        timer: timer,
-        sleep: sleep,
+        backoff,
+        sleep,
     }
 }
 /// Stream which yields elements according to a backoff policy.
 #[must_use = "streams do nothing unless polled"]
 pub struct BackoffStream {
     backoff: Backoff,
-    timer: timer::Timer,
-    sleep: timer::Sleep
+    sleep: Delay
 }
 impl Stream for BackoffStream {
     type Item = ();
     type Error = ();
     fn poll(&mut self) -> Poll<Option<()>, ()> {
-        try_ready!(self.sleep.poll());
+        try_ready!(self.sleep.poll().map_err(|error| panic!("timer failed: {}", error)));
         let backoff = self.backoff.next_backoff();
-        self.sleep = self.timer.sleep(backoff);
+        self.sleep = Delay::new(Instant::now() + backoff);
         Ok(Async::Ready(Some(())))
     }
 }
 
-pub fn retry_with_backoff<R, F>(timer: timer::Timer,
-                                mut backoff: Backoff,
-                                mut retry: R)
-                                -> RetryWithBackoff<R, F>
+pub fn retry_with_backoff<R, F>(mut backoff: Backoff, mut retry: R) -> RetryWithBackoff<R, F>
 where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
 {
     let duration = backoff.next_backoff();
-    let future = retry(Instant::now() + duration, RetryCause::Initial);
-    let sleep = timer.sleep(duration);
+    let deadline = Instant::now() + duration;
+    let future = retry(deadline, RetryCause::Initial);
+    let sleep = Delay::new(deadline);
     RetryWithBackoff {
-        backoff: backoff,
-        timer: timer,
-        sleep: sleep,
-        retry: retry,
+        backoff,
+        sleep,
+        retry,
         try: Try::Future(future),
     }
 }
@@ -169,8 +164,7 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
       F: Future,
 {
     backoff: Backoff,
-    timer: timer::Timer,
-    sleep: timer::Sleep,
+    sleep: Delay,
     retry: R,
     try: Try<F>,
 }
@@ -201,15 +195,14 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
             // the timer being out of capacity.
             match self.sleep.poll().expect("timer sleep failed") {
                 Async::Ready(_) => {
-                    let duration = self.backoff.next_backoff();
-
                     let cause = match self.try.take() {
                         Ok(_) => RetryCause::TimedOut,
                         Err(error) => RetryCause::Err(error),
                     };
 
-                    self.try = Try::Future((self.retry)(Instant::now() + duration, cause));
-                    self.sleep = self.timer.sleep(duration);
+                    let instant = Instant::now() + self.backoff.next_backoff();
+                    self.try = Try::Future((self.retry)(instant, cause));
+                    self.sleep = Delay::new(instant);
                 },
                 Async::NotReady => return Ok(Async::NotReady),
             }
@@ -287,6 +280,22 @@ impl <F, C> Future for ContextFuture<F, C> where F: Future {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn run<F>(f: F) -> Result<F::Item, F::Error>
+where
+    F: Future + 'static + Send,
+    F::Item: Send,
+    F::Error: Send,
+{
+    let (tx, rx) = ::futures::sync::oneshot::channel();
+    let f = f.then(|r| {
+        println!("util::run DONE!!!");
+        let _ = tx.send(r);
+        Ok(())
+    });
+    ::tokio::run(f);
+    rx.wait().unwrap()
+}
 
 #[cfg(test)]
 mod tests {

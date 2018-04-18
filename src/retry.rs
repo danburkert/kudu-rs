@@ -13,10 +13,7 @@ use krpc::{
     RpcFuture,
 };
 use prost::Message;
-use timer::{
-    Sleep,
-    Timer,
-};
+use tokio_timer::Delay;
 
 use Error;
 use MasterError;
@@ -30,23 +27,22 @@ pub(crate) trait Retriable : Message + Default {
 }
 
 pub(crate) trait RetryProxy {
-    fn send_retriable<Req, Resp>(self, call: Call<Req, Resp>, timer: Timer) -> RetryFuture<Req, Resp>
+    fn send_retriable<Req, Resp>(self, call: Call<Req, Resp>) -> RetryFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable;
 }
 
 impl RetryProxy for Proxy {
-    fn send_retriable<Req, Resp>(mut self, call: Call<Req, Resp>, timer: Timer) -> RetryFuture<Req, Resp>
+    fn send_retriable<Req, Resp>(mut self, call: Call<Req, Resp>) -> RetryFuture<Req, Resp>
     where Req: Message + 'static,
           Resp: Retriable {
         let mut backoff = Backoff::default();
-        let sleep = timer.sleep(backoff.next_backoff());
+        let sleep = Delay::new(Instant::now() + backoff.next_backoff());
         let state = State::InFlight(self.send(call.clone()));
 
         RetryFuture {
             backoff,
             proxy: self,
-            timer,
             call,
             sleep,
             state,
@@ -66,9 +62,8 @@ enum State<Resp> where Resp: Retriable {
 pub(crate) struct RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
     backoff: Backoff,
     proxy: Proxy,
-    timer: Timer,
     call: Call<Req, Resp>,
-    sleep: Sleep,
+    sleep: Delay,
     state: State<Resp>,
     errors: Vec<Error>,
 }
@@ -110,14 +105,14 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
                 },
                 State::Waiting =>  {
                     try_ready!(self.sleep.poll().map_err(|_| -> Error { unreachable!() }));
-                    let backoff = self.backoff.next_backoff();
-                    if self.call.deadline() < Instant::now() + backoff {
+                    let backoff = Instant::now() + self.backoff.next_backoff();
+                    if self.call.deadline() < backoff {
                         self.errors.push(Error::TimedOut);
                         fail(&mut self.errors, &self.call)?;
                     }
 
                     let response = self.proxy.send(self.call.clone());
-                    let sleep = self.timer.sleep(backoff);
+                    let sleep = Delay::new(backoff);
                     self.sleep = sleep;
                     State::InFlight(response)
                 },

@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::time::Instant;
 
-use cpupool::CpuPool;
 use futures::{
     Async,
     AsyncSink,
@@ -14,10 +13,7 @@ use futures::{
 use futures::sync::{mpsc, oneshot};
 use itertools::Itertools;
 use prost::Message;
-use tokio::reactor::{
-    Handle,
-    Remote,
-};
+use tokio;
 
 use Call;
 use Error;
@@ -36,17 +32,11 @@ pub struct Proxy {
 
 impl Proxy {
 
-    pub fn spawn(hostports: Box<[HostPort]>,
-                 options: Options,
-                 threadpool: CpuPool,
-                 remote: &Remote)
-                 -> Proxy {
+    pub fn spawn(hostports: Box<[HostPort]>, options: Options) -> Proxy {
         let (sender, receiver) = mpsc::channel(options.max_rpcs_in_flight as usize);
-        remote.spawn(move |handle| ProxyTask {
+        tokio::spawn(ProxyTask {
             hostports,
             options,
-            threadpool,
-            handle: handle.clone(),
             receiver,
             connection_state: ConnectionState::Quiesced,
             buffer: VecDeque::new(),
@@ -176,8 +166,6 @@ impl fmt::Debug for ConnectionState {
 struct ProxyTask {
     hostports: Box<[HostPort]>,
     options: Options,
-    threadpool: CpuPool,
-    handle: Handle,
     receiver: mpsc::Receiver<Rpc>,
     connection_state: ConnectionState,
     buffer: VecDeque<Rpc>,
@@ -195,8 +183,6 @@ impl Future for ProxyTask {
         // NLL hack.
         let ProxyTask { ref hostports,
                         ref options,
-                        ref threadpool,
-                        ref handle,
                         ref mut receiver,
                         ref mut connection_state,
                         ref mut buffer } = *self;
@@ -214,10 +200,7 @@ impl Future for ProxyTask {
                         }
                     }
 
-                    Connecting(Connector::connect(hostports,
-                                                  threadpool,
-                                                  handle.clone(),
-                                                  options.clone()))
+                    Connecting(Connector::connect(hostports, options.clone()))
                 },
                 Connecting(ref mut connector) => {
                     match connector.poll() {
@@ -311,7 +294,6 @@ impl fmt::Debug for ProxyTask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut debug = f.debug_struct("ProxyTask");
         debug.field("hostports", &format_args!("{:?}", &self.hostports.iter().format(",")));
-        debug.field("core", &self.handle.id());
         match self.connection_state {
             ConnectionState::Quiesced => debug.field("state", &self.connection_state),
             ConnectionState::Connecting(_) => debug.field("state", &self.connection_state),

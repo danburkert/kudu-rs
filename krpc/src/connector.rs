@@ -7,17 +7,17 @@ use std::net::{
 use std::str::FromStr;
 use std::vec;
 
-use cpupool::{CpuFuture, CpuPool};
-use itertools::Itertools;
 use futures::{
     Async,
     Future,
     Poll,
     Stream,
+    future,
 };
 use futures::stream::FuturesUnordered;
+use itertools::Itertools;
 use tacho;
-use tokio::reactor::Handle;
+use threadpool;
 
 use Error;
 use HostPort;
@@ -30,9 +30,8 @@ use transport::TransportNew;
 type SocketAddrs = vec::IntoIter<SocketAddr>;
 
 pub(crate) struct Connector {
-    handle: Handle,
     options: Options,
-    resolving: FuturesUnordered<CpuFuture<SocketAddrs, io::Error>>,
+    resolving: FuturesUnordered<Box<Future<Item=SocketAddrs, Error=Error> + Send + 'static>>,
     connecting: FuturesUnordered<TransportNew>,
     negotiating: FuturesUnordered<Negotiator>,
     errors: Vec<Error>,
@@ -41,12 +40,8 @@ pub(crate) struct Connector {
 
 impl Connector {
 
-    pub fn connect(hostports: &[HostPort],
-                   thread_pool: &CpuPool,
-                   handle: Handle,
-                   options: Options)
-                   -> Connector {
-        let mut resolving = FuturesUnordered::new();
+    pub fn connect(hostports: &[HostPort], options: Options) -> Connector {
+        let mut resolving = FuturesUnordered::<Box<Future<Item=_, Error=_> + Send + 'static>>::new();
         let mut connecting = FuturesUnordered::new();
         let negotiating = FuturesUnordered::new();
         let errors = Vec::new();
@@ -57,18 +52,18 @@ impl Connector {
             // Attempt to short-circuit DNS by parsing the host as an IP addr.
             if let Ok(addr) = IpAddr::from_str(&hostport.host()) {
                 connecting.push(Transport::connect(SocketAddr::new(addr, hostport.port()),
-                                                   options.clone(),
-                                                   &handle));
+                                                   options.clone()));
 
             // Otherwise resolve the hostport.
             } else {
-                let hostport = hostport.clone();
-                resolving.push(thread_pool.spawn_fn(move || hostport.to_socket_addrs()));
+                let hostport: HostPort = hostport.clone();
+                resolving.push(Box::new(future::poll_fn(move || {
+                    threadpool::blocking(|| hostport.to_socket_addrs().map_err(Error::from)).map_err(Error::from)
+                }).flatten()))
             }
         }
 
         Connector {
-            handle,
             options,
             resolving,
             connecting,
@@ -90,7 +85,7 @@ impl Future for Connector {
             match self.resolving.poll() {
                 Ok(Async::Ready(Some(addrs))) => {
                     for addr in addrs {
-                        let transport = Transport::connect(addr, self.options.clone(), &self.handle);
+                        let transport = Transport::connect(addr, self.options.clone());
                         self.connecting.push(transport);
                     }
                 },

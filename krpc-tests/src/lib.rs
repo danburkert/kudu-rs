@@ -1,31 +1,32 @@
-#![feature(proc_macro, conservative_impl_trait, generators)]
 #![cfg(test)]
 
 extern crate env_logger;
-extern crate futures_await as futures;
-extern crate futures_cpupool as cpupool;
+extern crate futures;
 extern crate krpc;
 extern crate tacho;
-extern crate tokio_core as tokio;
+extern crate tokio;
 
 #[macro_use] extern crate prost_derive;
 
 mod calculator_server;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cpupool::CpuPool;
-use tokio::reactor::Core;
-
 use krpc::{
+    Call,
     Error,
     Options,
     Proxy,
     RpcError,
     RpcErrorCode,
 };
+use futures::future::lazy;
+use futures::Future;
+use tokio::executor::current_thread::CurrentThread;
 
 use calculator_server::CalculatorServer;
+use rpc_tests::*;
 
 pub mod rpc {
     include!(concat!(env!("OUT_DIR"), "/kudu.rpc.rs"));
@@ -40,19 +41,14 @@ pub mod security {
     include!(concat!(env!("OUT_DIR"), "/kudu.security.rs"));
 }
 
-fn init(mut options: Options) -> (CalculatorServer, Core, Proxy, tacho::Reporter) {
+fn init(mut options: Options) -> (CalculatorServer, Proxy, tacho::Reporter) {
     let _ = env_logger::init();
 
-    let threadpool = CpuPool::new(4);
     let (scope, reporter) = tacho::new();
     options.scope = Some(scope);
     let server = CalculatorServer::start();
-    let reactor = Core::new().unwrap();
-    let proxy = Proxy::spawn(vec![server.addr().into()].into_boxed_slice(),
-                             options,
-                             threadpool,
-                             &reactor.remote());
-    (server, reactor, proxy, reporter)
+    let proxy = Proxy::spawn(vec![server.addr().into()].into_boxed_slice(), options);
+    (server, proxy, reporter)
 }
 
 fn proxy_errors(report: &tacho::Report) -> usize {
@@ -63,92 +59,88 @@ fn proxy_errors(report: &tacho::Report) -> usize {
 
 #[test]
 fn call() {
-    use rpc_tests::CalculatorService;
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (_server, mut proxy, reporter) = init(Options::default());
 
-    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
-    let deadline = Instant::now() + Duration::from_secs(10);
+        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }), Instant::now() + Duration::from_secs(10));
 
-    let (response, sidecars, _) = reactor.run(proxy.add(request, deadline, &[]))
-                                         .expect("add request failed");
-
-    assert_eq!(0, sidecars.len());
-    assert_eq!(60, response.result);
-    assert_eq!(0, proxy_errors(&reporter.peek()));
+        let (response, sidecars) = proxy.send(call).wait().expect("add request failed");
+        assert_eq!(0, sidecars.len());
+        assert_eq!(60, response.result);
+        assert_eq!(0, proxy_errors(&reporter.peek()));
+        Ok(())
+    }))
 }
 
 #[test]
 fn invalid_service() {
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (_server, mut proxy, reporter) = init(Options::default());
 
-    let now = Instant::now();
-    let request = krpc::Request {
-        service: "FooService",
-        method: "foo",
-        required_feature_flags: &[],
-        body: Box::new(rpc_tests::AddRequestPb::default()),
-        timestamp: now,
-        deadline: now + Duration::from_secs(10),
-    };
+        let now = Instant::now();
+        let call = Call::<AddRequestPb, AddResponsePb>::new("FooService", "foo", Arc::new(AddRequestPb::default()), now + Duration::from_secs(10));
 
-    match reactor.run(proxy.send::<()>(request)).unwrap_err().0 {
-        Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }) => (),
-        error => panic!("unexpected error: {}", error),
-    }
-
-    assert_eq!(0, proxy_errors(&reporter.peek()));
+        match proxy.send(call).wait().unwrap_err() {
+            Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }) => (),
+            error => panic!("unexpected error: {}", error),
+        }
+        assert_eq!(0, proxy_errors(&reporter.peek()));
+        Ok(())
+    }))
 }
 
 #[test]
 fn invalid_method() {
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (_server, mut proxy, reporter) = init(Options::default());
 
-    let now = Instant::now();
-    let request = krpc::Request {
-        service: "kudu.rpc_test.CalculatorService",
-        method: "foo",
-        required_feature_flags: &[],
-        body: Box::new(rpc_tests::AddRequestPb::default()),
-        timestamp: now,
-        deadline: now + Duration::from_secs(10),
-    };
 
-    match reactor.run(proxy.send::<()>(request)).unwrap_err().0 {
-        Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }) => (),
-        error => panic!("unexpected error: {}", error),
-    }
+        let call = Call::<AddRequestPb, AddResponsePb>::new("kudu.rpc_test.CalculatorService", "foo",
+                                                            Arc::new(AddRequestPb::default()),
+                                                            Instant::now() + Duration::from_secs(10));
 
-    assert_eq!(0, proxy_errors(&reporter.peek()));
+        match proxy.send(call).wait().unwrap_err() {
+            Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }) => (),
+            error => panic!("unexpected error: {}", error),
+        }
+
+        assert_eq!(0, proxy_errors(&reporter.peek()));
+        Ok(())
+    }))
 }
 
 #[test]
 fn timeout() {
-    use rpc_tests::CalculatorService;
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (_server, mut proxy, reporter) = init(Options::default());
 
-    // Timeout expires before the RPC is sent.
-    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
-    let deadline = Instant::now();
+        // Timeout expires before the RPC is sent.
+        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }), Instant::now());;
 
-    match reactor.run(proxy.add(request, deadline, &[])).unwrap_err().0 {
-        Error::TimedOut => (),
-        error => panic!("unexpected error: {}", error),
-    }
+        match proxy.send(call).wait().unwrap_err() {
+            Error::TimedOut => (),
+            error => panic!("unexpected error: {}", error),
+        }
 
-    assert_eq!(0, proxy_errors(&reporter.peek()));
+        assert_eq!(0, proxy_errors(&reporter.peek()));
+        Ok(())
+    }))
 }
 
 #[test]
 fn cancel() {
-    use rpc_tests::CalculatorService;
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (_server, mut proxy, reporter) = init(Options::default());
 
-    // Timeout expires before the RPC is sent.
-    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let _ = reactor.run(proxy.add(request, deadline, &[]));
+        // Timeout expires before the RPC is sent.
+        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }),
+                                          Instant::now() + Duration::from_secs(10));
 
-    assert_eq!(0, proxy_errors(&reporter.peek()));
+        let _ = proxy.send(call);
+
+        assert_eq!(0, proxy_errors(&reporter.peek()));
+        Ok(())
+    }))
 }
 
 /*
@@ -156,7 +148,7 @@ fn cancel() {
 fn disconnect() {
     use std::thread;
     use rpc_tests::CalculatorService;
-    let (_server, mut reactor, mut proxy, reporter) = init(Options::default());
+    let (_server, mut proxy, reporter) = init(Options::default());
 
     let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -182,16 +174,20 @@ fn disconnect() {
 
 #[test]
 fn server_shutdown() {
-    use rpc_tests::CalculatorService;
-    let (server, mut reactor, mut proxy, _reporter) = init(Options::default());
+    tokio::run(lazy(|| {
+        let (server, mut proxy, _reporter) = init(Options::default());
 
-    let request = Box::new(rpc_tests::AddRequestPb { x: 42, y: 18 });
-    let deadline = Instant::now() + Duration::from_secs(10);
+        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }),
+                                          Instant::now() + Duration::from_secs(20));
 
-    reactor.run(proxy.add(request.clone(), deadline, &[])).expect("add request failed");
+        proxy.send(call.clone()).wait().expect("add request failed");
 
-    drop(server);
+        drop(server);
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    reactor.run(proxy.add(request.clone(), deadline, &[])).expect_err("add request failed");
+        match proxy.send(call).wait().unwrap_err() {
+            Error::Io(_) => (),
+            error => panic!("unexpected error: {}", error),
+        }
+        Ok(())
+    }))
 }

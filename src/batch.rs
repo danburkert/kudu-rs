@@ -12,7 +12,6 @@ use futures::{
     Poll,
 };
 use krpc::Call;
-use timer::Timer;
 
 use Error;
 use HostPort;
@@ -32,7 +31,6 @@ use pb::tserver::{
 };
 use pb::SchemaPb;
 use retry::RetryFuture;
-use timer;
 use PartitionKey;
 use util::{
     RetryWithBackoff,
@@ -69,8 +67,7 @@ struct BatchFuture {
 
 impl BatchFuture {
 
-    fn new(timer: Timer,
-           schema: Schema,
+    fn new(schema: Schema,
            tablet: Arc<Tablet>,
            operations: OperationEncoder,
            num_operations: usize,
@@ -83,8 +80,7 @@ impl BatchFuture {
         //request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
         request.row_operations = Some(operations.into_pb());
         let call = TabletServerService::write(Arc::new(request), deadline);
-        let rpc = ReplicaRpc::new(timer,
-                                  tablet,
+        let rpc = ReplicaRpc::new(tablet,
                                   call.clone(),
                                   Speculation::Staggered(Duration::from_millis(100)),
                                   Selection::Leader,

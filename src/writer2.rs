@@ -44,7 +44,7 @@ use replica::{
     Selection,
 };
 use backoff::Backoff;
-use timer::Timer;
+use tokio_timer::Delay;
 use Row;
 use batch::BatchStats;
 
@@ -108,7 +108,6 @@ impl Default for WriterConfig {
 struct Writer {
     config: WriterConfig,
     table: Table,
-    timer: Timer,
 
     operations_in_lookup: OperationsInLookup,
     batches_in_flight: FuturesUnordered<Box<Future<Item=BatchStats, Error=(Error, WriteRequestPb)>>>,

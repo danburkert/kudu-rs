@@ -27,10 +27,7 @@ use krpc::{
     RpcFuture,
 };
 use prost::Message;
-use timer::{
-    Sleep,
-    Timer,
-};
+use tokio_timer::Delay;
 
 use Error;
 use MasterError;
@@ -138,13 +135,12 @@ pub(crate) struct ReplicaRpc<Set, Req, Resp>
 where Set: ReplicaSet,
       Req: Message + 'static,
       Resp: Retriable {
-    timer: Timer,
     replica_set: Set,
     call: Call<Req, Resp>,
     speculation: Speculation,
     selection: Selection,
 
-    speculative_timer: Option<Sleep>,
+    speculative_timer: Option<Delay>,
 
     /// Holds replicas which have not yet been attempted.
     queue: VecDeque<ReplicaState>,
@@ -154,7 +150,7 @@ where Set: ReplicaSet,
 
     /// Holds replicas which have failed with a retriable error, and are scheduled to be retried
     /// after a backoff period.
-    backoff: FuturesUnordered<ContextFuture<Sleep, ReplicaState>>,
+    backoff: FuturesUnordered<ContextFuture<Delay, ReplicaState>>,
 
     /// Holds replicas which have failed with non-retriable errors.
     failures: Vec<ReplicaState>,
@@ -165,8 +161,7 @@ where Set: ReplicaSet,
       Req: Message + 'static,
       Resp: Retriable {
 
-    pub(crate) fn new(timer: Timer,
-                      replica_set: Set,
+    pub(crate) fn new(replica_set: Set,
                       call: Call<Req, Resp>,
                       speculation: Speculation,
                       selection: Selection,
@@ -174,7 +169,6 @@ where Set: ReplicaSet,
 
         let queue = selection.prioritize(replica_set.replicas(), backoff);
         ReplicaRpc {
-            timer,
             replica_set,
             call,
             speculation,
@@ -194,7 +188,7 @@ where Set: ReplicaSet,
     }
 
     fn reset_speculation_timer(&mut self, duration: Duration) {
-        let mut sleep = self.timer.sleep(duration);
+        let mut sleep = Delay::new(Instant::now() + duration);
         // Poll the timer in order to schedule this task for wakeup on expiry.
         // TODO: can the timer be initially complete?
         assert!(sleep.poll().expect("timer failed").is_not_ready());
@@ -283,7 +277,7 @@ where Set: ReplicaSet,
                     self.replica_set.replicas()[replica.index].mark_follower();
                     // Retry the RPC after a backoff period.
                     replica.failure = Some(error);
-                    let mut backoff = self.timer.sleep(replica.backoff.next_backoff());
+                    let mut backoff = Delay::new(Instant::now() + replica.backoff.next_backoff());
                     let context = ContextFuture::new(backoff, replica);
                     self.backoff.push(context);
                 }

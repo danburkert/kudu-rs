@@ -21,6 +21,7 @@ use parking_lot::{
     Mutex,
 };
 use krpc;
+use tokio;
 
 use backoff::Backoff;
 use Error;
@@ -166,10 +167,7 @@ pub(crate) struct MasterReplica {
 impl MasterReplica {
 
     pub(crate) fn new(hostport: HostPort, options: &Options) -> MasterReplica {
-        let proxy = krpc::Proxy::spawn(vec![hostport.clone()].into_boxed_slice(),
-                                       options.rpc.clone(),
-                                       options.threadpool.clone(),
-                                       &options.remote);
+        let proxy = krpc::Proxy::spawn(vec![hostport.clone()].into_boxed_slice(), options.rpc.clone());
         MasterReplica {
             hostport,
             proxy,
@@ -297,8 +295,7 @@ impl TableLocations {
         let (sender, receiver) = mpsc::unbounded();
         let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
-        let remote = master.options().remote.clone();
-        let task = TableLocationsTask {
+        tokio::spawn(TableLocationsTask {
             entries: entries.clone(),
             tablet_servers,
             table_id,
@@ -308,8 +305,7 @@ impl TableLocations {
             receiver,
             requests: BTreeMap::new(),
             in_flight: None,
-        };
-        remote.spawn(move |_| task);
+        });
         TableLocations { entries, sender }
     }
 
@@ -476,11 +472,7 @@ impl TableLocationsTask {
                                                       .collect::<Vec<_>>()
                                                       .into_boxed_slice();
                                     let options = self.master.options();
-                                    krpc::Proxy::spawn(
-                                        hostports,
-                                        options.rpc.clone(),
-                                        options.threadpool.clone(),
-                                        &options.remote)
+                                    krpc::Proxy::spawn(hostports, options.rpc.clone())
                                 })
                                 .clone();
 
@@ -710,8 +702,7 @@ pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
                                                     Instant::now() + options.admin_timeout);
     call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
 
-    let rpc = ReplicaRpc::new(options.timer.clone(),
-                              replica_set.clone(),
+    let rpc = ReplicaRpc::new(replica_set.clone(),
                               call,
                               Speculation::Full,
                               Selection::Leader,
@@ -725,15 +716,15 @@ mod tests {
     use std::net::TcpListener;
     use std::time::Duration;
 
-    use cpupool::CpuPool;
     use env_logger;
+    use futures::future::lazy;
     use krpc;
-    use tokio::reactor::Core;
-    use timer::Timer;
+    use tokio;
 
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use replica::Replica;
     use super::*;
+    use util;
 
     // TODO(tests):
     //  - Shutdown single master and ensure ConnectToCluster immediately fails.
@@ -744,20 +735,16 @@ mod tests {
     //  - Connect to cluster stress test: have a thread spawning a bunch of concurrent connect to
     //    cluster calls, and have the cluster undergo constant elections and failures.
 
-    fn setup(cluster_config: &MiniClusterConfig) -> (MiniCluster, Core, Options) {
+    fn setup(cluster_config: &MiniClusterConfig) -> (MiniCluster, Options) {
         let _ = env_logger::init();
         let cluster = MiniCluster::new(cluster_config);
-        let reactor = Core::new().unwrap();
 
         let options = Options {
             rpc: krpc::Options::default(),
-            remote: reactor.remote(),
-            threadpool: CpuPool::new_num_cpus(),
-            timer: Timer::default(),
             admin_timeout: Duration::from_secs(10),
         };
 
-        (cluster, reactor, options)
+        (cluster, options)
     }
 
     #[test]
@@ -765,9 +752,10 @@ mod tests {
         let _ = env_logger::init();
 
         let run = |num_masters: u32| {
-            let (mut cluster, mut reactor, options) =
+            let (mut cluster, options) =
                 setup(MiniClusterConfig::default().num_masters(num_masters).num_tservers(0));
-            let masters = reactor.run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
+            let master_addrs = cluster.master_addrs();
+            let masters = util::run(lazy(move || connect_to_cluster(master_addrs, &options))).unwrap();
 
             assert_eq!(masters.len(), cluster.master_addrs().len());
             assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
@@ -782,13 +770,8 @@ mod tests {
         let _ = env_logger::init();
 
         let run = |num_masters: u32| -> Error {
-            let mut reactor = Core::new().unwrap();
-
             let options = Options {
                 rpc: krpc::Options::default(),
-                remote: reactor.remote(),
-                threadpool: CpuPool::new_num_cpus(),
-                timer: Timer::default(),
                 admin_timeout: Duration::from_secs(10),
             };
 
@@ -798,7 +781,7 @@ mod tests {
                 listeners.iter().flat_map(TcpListener::local_addr).map(HostPort::from).collect::<Vec<HostPort>>()
             };
 
-            reactor.run(connect_to_cluster(hostports, &options)).unwrap_err()
+            util::run(connect_to_cluster(hostports, &options)).unwrap_err()
         };
 
         match run(1) {
@@ -818,12 +801,12 @@ mod tests {
     fn test_connect_to_cluster_failover() {
         let _ = env_logger::init();
 
-        let (mut cluster, mut reactor, options) =
+        let (mut cluster, options) =
             setup(MiniClusterConfig::default().num_masters(3).num_tservers(0));
 
         cluster.stop_master(0);
 
-        let masters = reactor.run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
+        let masters = util::run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
 
         assert_eq!(masters.len(), cluster.master_addrs().len());
         assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
