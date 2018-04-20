@@ -6,6 +6,7 @@ use Row;
 use Schema;
 use Value;
 use bitmap;
+use error::Status;
 use pb::RowOperationsPb;
 use pb::row_operations_pb::{Type as OperationTypePb};
 
@@ -42,12 +43,20 @@ impl <'data> Operation<'data> {
     }
 }
 
+pub struct OperationError {
+    pub row: Row<'static>,
+    pub kind: OperationKind,
+    pub status: Status,
+}
+
+
 pub(crate) struct OperationEncoder {
     data: Vec<u8>,
     indirect_data: Vec<u8>,
 }
 
 impl OperationEncoder {
+
     pub fn new() -> OperationEncoder {
         OperationEncoder {
             data: Vec::new(),
@@ -149,7 +158,6 @@ impl OperationEncoder {
             offset: 0,
         }
     }
-
 
     pub fn into_pb(self) -> RowOperationsPb {
         RowOperationsPb {

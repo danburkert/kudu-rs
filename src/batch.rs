@@ -11,6 +11,7 @@ use futures::{
     Future,
     Poll,
 };
+use futures::sync::mpsc::UnboundedSender;
 use krpc::Call;
 
 use Error;
@@ -29,6 +30,7 @@ use pb::tserver::{
     WriteRequestPb,
     WriteResponsePb,
 };
+use pb::tserver::write_response_pb::PerRowErrorPb;
 use pb::SchemaPb;
 use retry::RetryFuture;
 use PartitionKey;
@@ -36,6 +38,7 @@ use util::{
     RetryWithBackoff,
     RetryCause,
 };
+use operation::OperationError;
 use replica::{
     ReplicaSet,
     ReplicaRpc,
@@ -50,6 +53,13 @@ pub(crate) struct Buffer {
     pub(crate) operations: usize,
 }
 
+// TODO:
+//
+// 1) Add initial step to BatchFuture that locates the tablet.
+//      OR keep it as is, and add compose this on top later
+//
+// 2) Add API to Call to get mutable request.
+
 struct BatchFuture {
     tablet_id: TabletId,
     call: Call<WriteRequestPb, WriteResponsePb>,
@@ -57,13 +67,8 @@ struct BatchFuture {
     schema: Schema,
     num_operations: usize,
     data: usize,
+    errors: UnboundedSender<OperationError>,
 }
-
-
-// TODO:
-//
-// 1) Add initial step to BatchFuture that locates the tablet.
-// 2) Add API to Call to get mutable request.
 
 impl BatchFuture {
 
@@ -71,7 +76,8 @@ impl BatchFuture {
            tablet: Arc<Tablet>,
            operations: OperationEncoder,
            num_operations: usize,
-           deadline: Instant) -> BatchFuture {
+           deadline: Instant,
+           errors: UnboundedSender<OperationError>) -> BatchFuture {
         let data = operations.len();
         let tablet_id = tablet.id();
         let mut request = WriteRequestPb::default();
@@ -85,7 +91,6 @@ impl BatchFuture {
                                   Speculation::Staggered(Duration::from_millis(100)),
                                   Selection::Leader,
                                   Backoff::default());
-
         BatchFuture {
             tablet_id,
             call,
@@ -93,6 +98,7 @@ impl BatchFuture {
             schema,
             num_operations,
             data,
+            errors,
         }
     }
 
@@ -103,6 +109,45 @@ impl BatchFuture {
                                       .take()
                                       .unwrap())
     }
+
+    fn handle_row_errors(&mut self,
+                         operations: &OperationEncoder,
+                         errors: Vec<PerRowErrorPb>) -> Result<(), Error> {
+
+        let mut rows = operations.iter(self.schema.clone());
+
+        let mut offset = 0;
+        for error in errors {
+            if error.row_index < 0 {
+                return Err(Error::Serialization(format!("row error contains invalid index: {:?}", error)));
+            }
+            let index = error.row_index as usize;
+            if index < offset {
+                return Err(Error::Serialization(format!("row error contains out-of-order index: {:?}", error)));
+            }
+
+            (&mut rows).skip(index - offset).for_each(drop);
+            let operation = match rows.next() {
+                Some(row) => row,
+                None => return Err(Error::Serialization(format!("row error contains non-existant index: {:?}", error))),
+            };
+
+            offset = index + 1;
+
+            let error = OperationError {
+                row: operation.row.into_owned(),
+                kind: operation.kind,
+                status: error.error.into(),
+            };
+
+            if let Err(_) = self.errors.unbounded_send(error) {
+                // The receiver has been dropped, so no point in sending additional errors.
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Future for BatchFuture {
@@ -110,16 +155,20 @@ impl Future for BatchFuture {
     type Error = BatchError;
     fn poll(&mut self) -> Poll<BatchStats, BatchError> {
         match self.rpc.poll() {
-
             Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Ok(Async::Ready((_, mut response, _))) => {
+            Ok(Async::Ready((_, response, _))) => {
                 assert!(response.error.is_none());
 
                 let failed_operations = response.per_row_errors.len();
                 if failed_operations != 0 {
-                    let operation_encoder = self.unwrap_operation_encoder();
-                    let mut rows = operation_encoder.iter(self.schema.clone());
-                    response.per_row_errors.sort_by_key(|error| error.row_index as usize);
+                    let operations = self.unwrap_operation_encoder();
+                    if let Err(error) = self.handle_row_errors(&operations, response.per_row_errors) {
+                        return Err(BatchError {
+                            operations,
+                            num_operations: self.num_operations,
+                            error,
+                        });
+                    }
                 }
 
                 Ok(Async::Ready(BatchStats {
@@ -129,7 +178,7 @@ impl Future for BatchFuture {
                     data: self.data,
                 }))
             },
-            Err(error) => Err(unimplemented!()),
+            Err(error) => unimplemented!(),
         }
     }
 }
