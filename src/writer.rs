@@ -28,6 +28,19 @@ use row::OperationEncoder;
 use rpc::{Callback, Messenger, Rpc, tablet_server};
 use util;
 
+pub enum WriteError {
+    RowError {
+        pub row: Row<'data>,
+        pub kind: OperationKind,
+        pub status: Status,
+    },
+    BatchError {
+        pub operations: Operations,
+
+
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
 

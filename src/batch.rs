@@ -17,6 +17,7 @@ use krpc::Call;
 use Error;
 use HostPort;
 use OperationEncoder;
+use operation::OperationDecoder;
 use TabletId;
 use TabletServerId;
 use backoff::Backoff;
@@ -102,37 +103,19 @@ impl BatchFuture {
         }
     }
 
-    fn unwrap_operation_encoder(&mut self) -> OperationEncoder {
-        OperationEncoder::from_pb(Arc::get_mut(&mut self.call.request)
-                                      .unwrap()
-                                      .row_operations
-                                      .take()
-                                      .unwrap())
-    }
+    fn handle_row_errors(&mut self, errors: Vec<PerRowErrorPb>) -> Result<(), Error> {
+        let row_operations = self.call.request.row_operations.as_ref().unwrap();
 
-    fn handle_row_errors(&mut self,
-                         operations: &OperationEncoder,
-                         errors: Vec<PerRowErrorPb>) -> Result<(), Error> {
+        let decoder = OperationDecoder::new(&self.schema,
+                                            row_operations.rows(),
+                                            row_operations.indirect_data());
 
-        let mut rows = operations.iter(self.schema.clone());
-
-        let mut offset = 0;
         for error in errors {
-            if error.row_index < 0 {
+            if error.row_index < 0 || error.row_index as usize >= self.num_operations {
                 return Err(Error::Serialization(format!("row error contains invalid index: {:?}", error)));
             }
-            let index = error.row_index as usize;
-            if index < offset {
-                return Err(Error::Serialization(format!("row error contains out-of-order index: {:?}", error)));
-            }
 
-            (&mut rows).skip(index - offset).for_each(drop);
-            let operation = match rows.next() {
-                Some(row) => row,
-                None => return Err(Error::Serialization(format!("row error contains non-existant index: {:?}", error))),
-            };
-
-            offset = index + 1;
+            let operation = decoder.decode_operation(error.row_index as usize);
 
             let error = OperationError {
                 row: operation.row.into_owned(),
@@ -161,10 +144,9 @@ impl Future for BatchFuture {
 
                 let failed_operations = response.per_row_errors.len();
                 if failed_operations != 0 {
-                    let operations = self.unwrap_operation_encoder();
-                    if let Err(error) = self.handle_row_errors(&operations, response.per_row_errors) {
+                    if let Err(error) = self.handle_row_errors(response.per_row_errors) {
                         return Err(BatchError {
-                            operations,
+                            call: self.call.clone(),
                             num_operations: self.num_operations,
                             error,
                         });
@@ -178,7 +160,12 @@ impl Future for BatchFuture {
                     data: self.data,
                 }))
             },
-            Err(error) => unimplemented!(),
+
+            Err(error) => Err(BatchError {
+                call: self.call.clone(),
+                num_operations: self.num_operations,
+                error: error.into(),
+            }),
         }
     }
 }
@@ -191,7 +178,7 @@ pub(crate) struct BatchStats {
 }
 
 pub(crate) struct BatchError {
-    operations: OperationEncoder,
+    call: Call<WriteRequestPb, WriteResponsePb>,
     num_operations: usize,
     error: Error,
 }

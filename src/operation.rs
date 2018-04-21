@@ -151,57 +151,55 @@ impl OperationEncoder {
         self.indirect_data.clear();
     }
 
-    pub fn iter(&self, schema: Schema) -> Iter {
-        Iter {
-            encoder: self,
-            schema,
-            offset: 0,
-        }
-    }
-
     pub fn into_pb(self) -> RowOperationsPb {
         RowOperationsPb {
             rows: Some(self.data),
             indirect_data: Some(self.indirect_data),
         }
     }
+}
 
-    pub fn from_pb(pb: RowOperationsPb) -> OperationEncoder {
-        OperationEncoder {
-            data: pb.rows.unwrap(),
-            indirect_data: pb.indirect_data.unwrap(),
+pub(crate) struct OperationDecoder<'a> {
+    schema: &'a Schema,
+    data: &'a [u8],
+    indirect_data: &'a [u8],
+    bitmap_len: usize,
+    row_len: usize,
+}
+
+impl <'a> OperationDecoder<'a> {
+    pub(crate) fn new(schema: &'a Schema, data: &'a [u8], indirect_data: &'a [u8]) -> OperationDecoder<'a> {
+        let bitmap_len = schema.bitmap_len();
+        let row_len = 0
+            + 1 // op type
+            + schema.bitmap_len() // is set bitmap
+            + if schema.has_nullable_columns() { bitmap_len } else { 0 } // is null bitmap
+            + schema.row_len(); // row length
+        debug_assert_eq!(data.len() % row_len, 0);
+
+        OperationDecoder {
+            schema,
+            data,
+            indirect_data,
+            bitmap_len,
+            row_len,
         }
     }
-}
 
-pub(crate) struct Iter<'a> {
-    encoder: &'a OperationEncoder,
-    schema: Schema,
-    offset: usize,
-}
+    pub(crate) fn decode_operation(&self, index: usize) -> Operation<'a> {
+        let mut offset = index * self.row_len;
 
-impl <'a> Iterator for Iter<'a> {
-    type Item = Operation<'a>;
+        let op_type = i32::from(self.data[offset]);
+        offset += 1;
 
-    fn next(&mut self) -> Option<Operation<'a>> {
-        let Iter { encoder, ref schema, ref mut offset } = *self;
-
-        if *offset >= encoder.len() {
-            return None;
-        }
-
-        let op_type = i32::from(encoder.data[*offset]);
-        *offset += 1;
-
-        let mut row = schema.new_row();
+        let mut row = self.schema.new_row();
 
         // Split the data slice into the is_set bitmap, the is_null bitmap, and the row.
-        let bitmap_len = schema.bitmap_len();
-        let (is_set, is_null) = encoder.data[*offset..].split_at(bitmap_len);
+        let (is_set, is_null) = self.data[offset..].split_at(self.bitmap_len);
 
-        *offset += bitmap_len;
+        offset += self.bitmap_len;
         if self.schema.has_nullable_columns() {
-            *offset += bitmap_len;
+            offset += self.bitmap_len;
         }
 
         for (idx, column) in self.schema.columns().iter().enumerate() {
@@ -215,34 +213,33 @@ impl <'a> Iterator for Iter<'a> {
             unsafe {
                 match column.data_type() {
                     DataType::Bool => {
-                        row.set_unchecked(idx, bool::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, bool::from_data(&self.data[offset..]));
                     },
                     DataType::Int8 => {
-                        row.set_unchecked(idx, i8::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, i8::from_data(&self.data[offset..]));
                     },
                     DataType::Int16 => {
-                        row.set_unchecked(idx, i16::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, i16::from_data(&self.data[offset..]));
                     },
                     DataType::Int32 => {
-                        row.set_unchecked(idx, i32::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, i32::from_data(&self.data[offset..]));
                     },
                     DataType::Int64 | DataType::Timestamp => {
-                        row.set_unchecked(idx, i64::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, i64::from_data(&self.data[offset..]));
                     },
                     DataType::Float => {
-                        row.set_unchecked(idx, f32::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, f32::from_data(&self.data[offset..]));
                     },
                     DataType::Double => {
-                        row.set_unchecked(idx, f64::from_data(&encoder.data[*offset..]));
+                        row.set_unchecked(idx, f64::from_data(&self.data[offset..]));
                     },
                     DataType::Binary | DataType::String => {
-                        let indirect_offset = LittleEndian::read_u64(&encoder.data[*offset..]) as usize;
-                        let len = LittleEndian::read_u64(&encoder.data[*offset + 8..]) as usize;
-                        row.set_unchecked(idx, &encoder.indirect_data[indirect_offset..indirect_offset+len]);
+                        let indirect_offset = LittleEndian::read_u64(&self.data[offset..]) as usize;
+                        let len = LittleEndian::read_u64(&self.data[offset+8..]) as usize;
+                        row.set_unchecked(idx, &self.indirect_data[indirect_offset..indirect_offset+len]);
                     },
                 }
             }
-            *offset += column.data_type().size();
         }
 
         let kind = match OperationTypePb::from_i32(op_type).unwrap_or_default() {
@@ -253,6 +250,9 @@ impl <'a> Iterator for Iter<'a> {
             other => panic!("unexpected operation type: {:?}", other),
         };
 
-        Some(Operation { row, kind })
+        Operation {
+            row,
+            kind,
+        }
     }
 }

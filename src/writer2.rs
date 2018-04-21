@@ -46,7 +46,10 @@ use replica::{
 use backoff::Backoff;
 use tokio_timer::Delay;
 use Row;
-use batch::BatchStats;
+use batch::{
+    BatchStats,
+    Buffer,
+};
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
@@ -55,12 +58,12 @@ pub struct WriterConfig {
     /// server. If the timeout expires before the batch completes, the operations will fail with
     /// `Error::TimedOut`.
     ///
-    /// Defaults to 30 second.
+    /// Defaults to 120 seconds.
     flush_timeout: Duration,
 
     /// Maximum amount of time to batch write operations before flushing.
     ///
-    /// Defaults to 1 second.
+    /// Defaults to 15 second.
     background_flush_interval: Duration,
 
     /// Maximum amount of row operation data to buffer in the writer. If an operation is applied to
@@ -95,8 +98,8 @@ pub struct WriterConfig {
 impl Default for WriterConfig {
     fn default() -> WriterConfig {
         WriterConfig {
-            flush_timeout: Duration::from_secs(30),
-            background_flush_interval: Duration::from_secs(1),
+            flush_timeout: Duration::from_secs(120),
+            background_flush_interval: Duration::from_secs(15),
             max_buffered_data: 256 * 1024 * 1024,
             max_data_per_batch: 7 * 1024 * 1024,
             max_batches_per_tablet: 2,
@@ -272,11 +275,9 @@ pub struct RowError {
     error: Error,
 }
 
-
 pub(crate) struct ErrorCollector {
     error_sender: UnboundedSender<RowError>,
     error_receiver: UnboundedReceiver<RowError>,
-
 }
 
 struct Batcher {
@@ -300,6 +301,22 @@ impl Batcher {
         self.batches_in_flight -= 1;
         self.data_in_flight -= data;
     }
+}
+
+struct TabletBatcher {
+
+    /// The current buffer 
+    buffer: Buffer,
+
+    /// The number of batches which are currently being sent. Must not exceed the
+    /// `max_batches_per_tablet` configuration.
+    batches_in_flight: u8,
+
+    /// Batches which have not yet been sent because the maximum number of batches is already
+    /// in-flight.
+    batch_queue: Vec<Buffer>,
+
+
 }
 
 struct OperationsInLookup {
