@@ -53,6 +53,8 @@ pub enum Error {
     ///
     /// TODO: change TimedOut to include this info.
     Compound(String, Vec<Error>),
+
+    RowError(Status),
 }
 
 impl Error {
@@ -78,6 +80,7 @@ impl Clone for Error {
             Error::Negotiation(ref error) => Error::Negotiation(error.clone()),
             Error::NoRangePartition => Error::NoRangePartition,
             Error::Compound(ref description, ref errors) => Error::Compound(description.clone(), errors.clone()),
+            Error::RowError(ref status) => Error::RowError(status.clone()),
         }
     }
 }
@@ -93,20 +96,24 @@ impl error::Error for Error {
             Error::Master(ref error) => error.description(),
             Error::TabletServer(ref error) => error.description(),
             Error::Io(ref error) => error.description(),
+
             Error::Negotiation(ref error) => error,
 
-            Error::Serialization(ref description)
+            | Error::Serialization(ref description)
             | Error::Compound(ref description, _) => description,
+
+            Error::RowError(_) => "row error",
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
-              Error::InvalidArgument(_)
+            | Error::InvalidArgument(_)
             | Error::Serialization(_)
             | Error::TimedOut
             | Error::Negotiation(_)
-            | Error::NoRangePartition => None,
+            | Error::NoRangePartition
+            | Error::RowError(_) => None,
             Error::Rpc(ref error) => error.cause(),
             Error::Master(ref error) => error.cause(),
             Error::TabletServer(ref error) => error.cause(),

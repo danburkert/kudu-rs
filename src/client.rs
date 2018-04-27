@@ -54,8 +54,6 @@ use table::TableBuilder;
 /// application per cluster.
 #[derive(Clone)]
 pub struct Client {
-    master_proxy: MasterProxy,
-    options: Options,
     meta_cache: MetaCache,
     latest_observed_timestamp: Arc<Mutex<u64>>, // Replace with AtomicU64 when stable.
 }
@@ -63,17 +61,17 @@ pub struct Client {
 impl Client {
 
     /// Creates a new client with the provided configuration.
-    fn new(master_addresses: Vec<HostPort>, options: Options) -> Client {
-        let master_proxy = MasterProxy::new(master_addresses, options.clone());
-        let meta_cache = /*MetaCache::new(); */ unimplemented!();
-        Client {
-            master_proxy,
-            options,
-            meta_cache,
-            latest_observed_timestamp: Arc::new(Mutex::new(0)),
-        }
+    fn new<Addrs>(master_addresses: Addrs, options: Options) -> impl Future<Item=Client, Error=Error> 
+    where Addrs: IntoMasterAddrs {
+        future::result(master_addresses.into_master_addrs())
+               .and_then(|master_addresses| MetaCache::new(master_addresses, options))
+               .map(|meta_cache| Client {
+                   meta_cache,
+                   latest_observed_timestamp: Arc::new(Mutex::new(0)),
+               })
     }
 
+    /*
     /// Creates a new Kudu table with the schema and options specified by `builder`. Returns the
     /// new table's ID, or an error on failure.
     pub fn create_table(&mut self, builder: TableBuilder) -> impl Future<Item=TableId, Error=Error> {
@@ -321,37 +319,12 @@ impl Client {
         self.meta_caches.lock()[table].clone()
     }
     */
+    */
 }
 
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Client")
-    }
-}
-
-/// Client configuration options.
-#[derive(Debug)]
-pub struct ClientBuilder {
-    master_addresses: Result<Vec<HostPort>>,
-    rpc: krpc::Options,
-    admin_timeout: Option<Duration>,
-}
-
-impl ClientBuilder {
-    pub fn new<A>(master_addresses: A) -> ClientBuilder where A: IntoMasterAddrs {
-        ClientBuilder {
-            master_addresses: master_addresses.into_master_addrs(),
-            rpc: krpc::Options::default(),
-            admin_timeout: None,
-        }
-    }
-
-    pub fn build(self) -> Result<Client> {
-        let master_addresses = self.master_addresses?;
-        let admin_timeout = self.admin_timeout.unwrap_or_else(|| Duration::from_secs(60));
-        let options = Options { rpc: self.rpc, admin_timeout };
-
-        Ok(Client::new(master_addresses, options))
     }
 }
 

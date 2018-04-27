@@ -606,6 +606,7 @@ impl Future for TableLocationsTask {
 }
 
 /// Metadata pertaining to a Kudu tablet.
+// TODO: when replacing a tablet in the table locations map, carry through the leader flag.
 pub(crate) struct Tablet {
 
     /// The tablet ID.

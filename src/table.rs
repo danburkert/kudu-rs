@@ -20,13 +20,14 @@ use pb::partition_schema_pb::{
 
 use Column;
 use Error;
-use meta_cache::TableLocations;
-use partition::PartitionSchema;
-use Result;
 use OperationEncoder;
+use Result;
 use Row;
 use Schema;
 use TableId;
+use meta_cache::TableLocations;
+use partition::PartitionSchema;
+use writer2::{Writer, WriterConfig};
 
 #[derive(Clone)]
 pub struct Table {
@@ -76,11 +77,9 @@ impl Table {
         self.num_replicas
     }
 
-    /*
     pub fn new_writer(&self, config: WriterConfig) -> Writer {
         Writer::new(self.clone(), config)
     }
-    */
 
     /*
     pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {

@@ -35,7 +35,6 @@ pub mod pb;
 mod writer2;
 //mod writer;
 mod backoff;
-mod batch;
 mod bitmap;
 mod client;
 mod error;

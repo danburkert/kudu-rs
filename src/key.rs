@@ -66,8 +66,8 @@ pub(crate) fn encode_partition_key(partition_schema: &PartitionSchema, row: &Row
 }
 
 pub(crate) fn encode_range_partition_key(range_schema: &RangePartitionSchema,
-                                  row: &Row,
-                                  buf: &mut Vec<u8>) -> Result<()> {
+                                         row: &Row,
+                                         buf: &mut Vec<u8>) -> Result<()> {
     encode_columns(row, range_schema.columns().iter().cloned(), buf)
 }
 

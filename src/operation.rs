@@ -1,12 +1,12 @@
 use byteorder::{ByteOrder, LittleEndian};
 
 use DataType;
+use Error;
 use RangePartitionBound;
 use Row;
 use Schema;
 use Value;
 use bitmap;
-use error::Status;
 use pb::RowOperationsPb;
 use pb::row_operations_pb::{Type as OperationTypePb};
 
@@ -46,13 +46,13 @@ impl <'data> Operation<'data> {
 pub struct OperationError {
     pub row: Row<'static>,
     pub kind: OperationKind,
-    pub status: Status,
+    pub error: Error,
 }
 
 
 pub(crate) struct OperationEncoder {
-    data: Vec<u8>,
-    indirect_data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
+    pub(crate) indirect_data: Vec<u8>,
 }
 
 impl OperationEncoder {
@@ -108,7 +108,7 @@ impl OperationEncoder {
                 self.data.extend_from_slice(&buf[..]);
                 self.indirect_data.extend_from_slice(data);
             } else {
-                self.data.extend_from_slice(&row_data[column_offset..column_offset + width]);
+                self.data.extend_from_slice(&row_data[column_offset..][..width]);
             }
         }
     }
