@@ -1,17 +1,18 @@
 #![allow(unused_imports)]
 
-use std::ops::Deref;
 use std::collections::{
     VecDeque,
     HashMap,
 };
+use std::cmp::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicBool;
+use std::ops::Deref;
+use std::slice;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
-use std::cmp::Ordering;
 
 use bytes::Bytes;
 use futures::{
@@ -39,7 +40,7 @@ use retry::Retriable;
 use util::ContextFuture;
 
 /// The policy for speculative execution.
-pub(crate) enum Speculation {
+pub enum Speculation {
     Full,
     Staggered(Duration),
 }
@@ -165,7 +166,8 @@ where Set: ReplicaSet,
                       call: Call<Req, Resp>,
                       speculation: Speculation,
                       selection: Selection,
-                      backoff: Backoff) -> ReplicaRpc<Set, Req, Resp> {
+                      backoff: Backoff)
+                      -> ReplicaRpc<Set, Req, Resp> {
 
         let queue = selection.prioritize(replica_set.replicas(), backoff);
         ReplicaRpc {
@@ -337,5 +339,44 @@ where Set: ReplicaSet,
 
             return Ok(Async::NotReady);
         }
+    }
+}
+
+// Proxy is it's own Replica/ReplicaSet. This allows Proxy to reuse the same retry logic, without
+// actually having different replicas.
+
+impl ReplicaSet for Proxy {
+    type Replica = Proxy;
+    fn replicas(&self) -> &[Proxy] {
+        // TODO(rust-lang/rust#45703): replace with slice::from_ref.
+        unsafe {
+            slice::from_raw_parts(self, 1)
+        }
+    }
+}
+
+impl Replica for Proxy {
+    fn proxy(&self) -> Proxy {
+        self.clone()
+    }
+
+    fn is_leader(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn mark_leader(&self) {
+        unimplemented!()
+    }
+
+    fn mark_follower(&self) {
+        unimplemented!()
+    }
+
+    fn is_stale(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn mark_stale(&self) {
+        unimplemented!()
     }
 }

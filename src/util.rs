@@ -281,23 +281,6 @@ impl <F, C> Future for ContextFuture<F, C> where F: Future {
 }
 
 #[cfg(test)]
-pub(crate) fn run<F>(f: F) -> Result<F::Item, F::Error>
-where
-    F: Future + 'static + Send,
-    F::Item: Send,
-    F::Error: Send,
-{
-    let (tx, rx) = ::futures::sync::oneshot::channel();
-    let f = f.then(|r| {
-        println!("util::run DONE!!!");
-        let _ = tx.send(r);
-        Ok(())
-    });
-    ::tokio::run(f);
-    rx.wait().unwrap()
-}
-
-#[cfg(test)]
 mod tests {
 
     use std::time::{Duration, UNIX_EPOCH};

@@ -25,9 +25,11 @@ use Result;
 use Row;
 use Schema;
 use TableId;
+use Writer;
+use WriterConfig;
 use meta_cache::TableLocations;
 use partition::PartitionSchema;
-use writer2::{Writer, WriterConfig};
+use scanner::Scanner;
 
 #[derive(Clone)]
 pub struct Table {
@@ -79,6 +81,10 @@ impl Table {
 
     pub fn new_writer(&self, config: WriterConfig) -> Writer {
         Writer::new(self.clone(), config)
+    }
+
+    pub fn new_scanner(&self) -> Scanner {
+        Scanner::new(self.table_locations.clone())
     }
 
     /*

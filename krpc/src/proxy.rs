@@ -10,6 +10,7 @@ use futures::{
     Sink,
     Stream,
 };
+use futures::future;
 use futures::sync::{mpsc, oneshot};
 use itertools::Itertools;
 use prost::Message;
@@ -31,6 +32,10 @@ pub struct Proxy {
 }
 
 impl Proxy {
+
+    pub fn new(hostports: Box<[HostPort]>, options: Options) -> impl Future<Item=Proxy, Error=Error> {
+        future::lazy(|| Ok(Proxy::spawn(hostports, options)))
+    }
 
     pub fn spawn(hostports: Box<[HostPort]>, options: Options) -> Proxy {
         let (sender, receiver) = mpsc::channel(options.max_rpcs_in_flight as usize);

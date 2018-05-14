@@ -14,12 +14,12 @@ use futures::{
     Future,
     Poll,
     Stream,
+    future,
+    stream,
 };
-use futures::future;
 use futures::sync::{mpsc, oneshot};
-use parking_lot::{
-    Mutex,
-};
+use parking_lot::Mutex;
+use prost;
 use krpc;
 use tokio;
 
@@ -33,16 +33,11 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
-use master::{
-    MasterProxy,
-    MasterFuture,
-};
 use pb::ExpectField;
 use pb::master::{
     GetTableLocationsRequestPb,
     GetTableLocationsResponsePb,
     GetTableSchemaRequestPb,
-    GetTableSchemaResponsePb,
     MasterFeatures,
     MasterService,
     TableIdentifierPb,
@@ -61,10 +56,11 @@ use replica::{
     Selection,
     Speculation,
 };
+use retry::Retriable;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Entry {
     Tablet(Arc<Tablet>),
     NonCoveredRange {
@@ -155,6 +151,7 @@ pub(crate) struct MetaCache {
     tables: Arc<Mutex<HashMap<TableId, TableLocations>>>,
     tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
     masters: Arc<Box<[MasterReplica]>>,
+    options: Options,
 }
 
 // TODO: make fields private
@@ -166,13 +163,16 @@ pub(crate) struct MasterReplica {
 
 impl MasterReplica {
 
-    pub(crate) fn new(hostport: HostPort, options: &Options) -> MasterReplica {
-        let proxy = krpc::Proxy::spawn(vec![hostport.clone()].into_boxed_slice(), options.rpc.clone());
-        MasterReplica {
-            hostport,
-            proxy,
-            is_leader: AtomicBool::new(false),
-        }
+    pub(crate) fn new(hostport: HostPort, options: &Options) -> impl Future<Item=MasterReplica, Error=Error> {
+        krpc::Proxy::new(vec![hostport.clone()].into_boxed_slice(), options.rpc.clone())
+            .map(move |proxy| {
+                MasterReplica {
+                    hostport,
+                    proxy,
+                    is_leader: AtomicBool::new(false),
+                }
+            })
+            .map_err(Error::from)
     }
 }
 
@@ -228,18 +228,35 @@ impl MetaCache {
                 tables: Arc::new(Mutex::new(HashMap::new())),
                 tablet_servers: Arc::new(Mutex::new(HashMap::new())),
                 masters: master_replicas,
+                options,
             }
         })
     }
 
-    pub(crate) fn open_table(self,
-                             table: TableIdentifierPb,
-                             mut master_proxy: MasterProxy,
-                             options: &Options) -> impl Future<Item=Table, Error=Error> {
-        let call = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }),
-                                                   Instant::now() + options.admin_timeout);
+    pub(crate) fn options(&self) -> &Options {
+        &self.options
+    }
 
-        master_proxy.send(call).and_then(move |resp: GetTableSchemaResponsePb| -> Result<Table> {
+    pub(crate) fn master_rpc<Req, Resp>(&self, call: krpc::Call<Req, Resp>) -> impl Future<Item=Resp, Error=Error>
+    where Req: prost::Message + 'static,
+          Resp: Retriable {
+        ReplicaRpc::new(self.masters.clone(),
+                        call,
+                        Speculation::Staggered(Duration::from_millis(32)),
+                        Selection::Leader,
+                        Backoff::with_duration_range(32, 2048))
+            .map(|(_, resp, _)| resp)
+    }
+
+    pub(crate) fn open_table(&self, table: TableIdentifierPb, deadline: Instant) -> impl Future<Item=Table, Error=Error> {
+        let call = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }), deadline);
+
+        let tables = self.tables.clone();
+        let tablet_servers = self.tablet_servers.clone();
+        let options = self.options.clone();
+        let masters = self.masters.clone();
+
+        self.master_rpc(call).and_then(move |resp| -> Result<Table> {
             static MESSAGE: &'static str = "GetTableSchemaResponsePb";
 
             let num_replicas = resp.num_replicas() as u32;
@@ -253,15 +270,14 @@ impl MetaCache {
                 &schema);
             let schema = Schema::from_pb(schema)?;
 
-            let MetaCache { tables, tablet_servers, .. } = self;
-
             let table_locations = tables
                 .lock()
                 .entry(id)
-                .or_insert_with(|| TableLocations::new(id,
+                .or_insert_with(|| TableLocations::new(options,
+                                                       id,
                                                        schema.primary_key_projection(),
                                                        partition_schema.clone(),
-                                                       master_proxy,
+                                                       masters,
                                                        tablet_servers))
                 .clone();
 
@@ -285,10 +301,11 @@ pub(crate) struct TableLocations {
 }
 
 impl TableLocations {
-    pub(crate) fn new(table_id: TableId,
+    pub(crate) fn new(options: Options,
+                      table_id: TableId,
                       primary_key_schema: Schema,
                       partition_schema: PartitionSchema,
-                      master: MasterProxy,
+                      masters: Arc<Box<[MasterReplica]>>,
                       tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>)
                       -> TableLocations {
 
@@ -296,12 +313,13 @@ impl TableLocations {
         let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
         tokio::spawn(TableLocationsTask {
+            options,
             entries: entries.clone(),
             tablet_servers,
             table_id,
             primary_key_schema,
             partition_schema,
-            master,
+            masters,
             receiver,
             requests: BTreeMap::new(),
             in_flight: None,
@@ -309,7 +327,7 @@ impl TableLocations {
         TableLocations { entries, sender }
     }
 
-    pub(crate) fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> {
+    pub(crate) fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> + 'static {
         self.extract(partition_key, Entry::clone)
     }
 
@@ -369,6 +387,8 @@ fn get_entry<'a, 'b>(entries: &'a BTreeMap<PartitionKey, Entry>,
 /// TODO:
 ///     - Retry RPCS that fail with tablet not running.
 struct TableLocationsTask {
+    options: Options,
+
     /// Cache of tablet entries.
     entries: Arc<Mutex<BTreeMap<PartitionKey, Entry>>>,
 
@@ -379,14 +399,14 @@ struct TableLocationsTask {
     primary_key_schema: Schema,
     partition_schema: PartitionSchema,
 
-    /// Master connection.
-    master: MasterProxy,
+    /// Master repliacs..
+    masters: Arc<Box<[MasterReplica]>>,
     /// Queue of incoming requests.
     receiver: mpsc::UnboundedReceiver<(PartitionKey, oneshot::Sender<Result<Entry>>)>,
     /// Collection of outstanding entry requests, ordered by partition key.
     requests: BTreeMap<PartitionKey, Vec<oneshot::Sender<Result<Entry>>>>,
 
-    in_flight: Option<(PartitionKey, MasterFuture<GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
+    in_flight: Option<(PartitionKey, ReplicaRpc<Arc<Box<[MasterReplica]>>, GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
 }
 
 impl TableLocationsTask {
@@ -471,8 +491,7 @@ impl TableLocationsTask {
                                                       .map(HostPort::from)
                                                       .collect::<Vec<_>>()
                                                       .into_boxed_slice();
-                                    let options = self.master.options();
-                                    krpc::Proxy::spawn(hostports, options.rpc.clone())
+                                    krpc::Proxy::spawn(hostports, self.options.rpc.clone())
                                 })
                                 .clone();
 
@@ -543,7 +562,7 @@ impl Future for TableLocationsTask {
             // Step 2: Check if the currently outstanding tablet locations lookup is complete.
             if let Some((partition_key, mut in_flight)) = self.in_flight.take() {
                 match in_flight.poll() {
-                    Ok(Async::Ready(response)) => {
+                    Ok(Async::Ready((_, response, _))) => {
                         // TODO: error handling
                         let deadline = Instant::now() + Duration::from_millis(u64::from(response.ttl_millis()));
                         let entries = self.tablet_locations_to_entries(&*partition_key,
@@ -593,9 +612,13 @@ impl Future for TableLocationsTask {
                         max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
                         replica_type_filter: None,
                     });
-                    let call = MasterService::get_table_locations(
-                        request, Instant::now() + self.master.options().admin_timeout);
-                    let resp = self.master.send(call);
+                    let call = MasterService::get_table_locations(request, Instant::now() + self.options.admin_timeout);
+
+                    let resp = ReplicaRpc::new(self.masters.clone(),
+                                               call,
+                                               Speculation::Staggered(Duration::from_millis(100)),
+                                               Selection::Leader,
+                                               Backoff::with_duration_range(250, u32::max_value()));
 
                     self.in_flight = Some((partition_key.clone(), resp));
                 },
@@ -607,6 +630,7 @@ impl Future for TableLocationsTask {
 
 /// Metadata pertaining to a Kudu tablet.
 // TODO: when replacing a tablet in the table locations map, carry through the leader flag.
+#[derive(Debug)]
 pub(crate) struct Tablet {
 
     /// The tablet ID.
@@ -682,6 +706,16 @@ impl Replica for TabletReplica {
     }
 }
 
+impl fmt::Debug for TabletReplica {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("TabletReplica")
+            .field("id", &self.id)
+            .field("is_leader", &self.is_leader)
+            .field("is_stale", &self.is_stale)
+            .finish()
+    }
+}
+
 impl TabletReplica {
 
     /// Returns the ID of the tablet server which owns this replica.
@@ -693,39 +727,39 @@ impl TabletReplica {
 pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
                                  options: &Options)
                                  -> impl Future<Item=Arc<Box<[MasterReplica]>>, Error=Error> {
+    let admin_timeout = options.admin_timeout;
+    stream::futures_unordered(master_addrs.into_iter()
+                                          .map(|hostport| MasterReplica::new(hostport, options)))
+           .collect()
+           .and_then(move |replicas: Vec<MasterReplica>| {
+               let replica_set = Arc::new(replicas.into_boxed_slice());
+               let mut call = MasterService::connect_to_master(Default::default(),
+                                                               Instant::now() + admin_timeout);
+               call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
 
-    let replicas = master_addrs.into_iter()
-                               .map(|hostport| MasterReplica::new(hostport, options))
-                               .collect::<Vec<_>>();
-    let replica_set = Arc::new(replicas.into_boxed_slice());
-
-    let mut call = MasterService::connect_to_master(Default::default(),
-                                                    Instant::now() + options.admin_timeout);
-    call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
-
-    let rpc = ReplicaRpc::new(replica_set.clone(),
-                              call,
-                              Speculation::Full,
-                              Selection::Leader,
-                              Backoff::with_duration_range(250, u32::max_value()));
-    rpc.map(|_| replica_set)
+               ReplicaRpc::new(replica_set.clone(),
+                               call,
+                               Speculation::Full,
+                               Selection::Leader,
+                               Backoff::with_duration_range(250, u32::max_value()))
+                   .map(move |_| replica_set)
+           })
 }
 
 #[cfg(test)]
 mod tests {
-
     use std::net::TcpListener;
-    use std::time::Duration;
 
     use env_logger;
-    use futures::future::lazy;
-    use krpc;
-    use tokio;
+    use tokio::runtime::Runtime;
 
+    use Client;
+    use RangePartitionBound;
+    use TableBuilder;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use replica::Replica;
+    use schema::tests::simple_schema;
     use super::*;
-    use util;
 
     // TODO(tests):
     //  - Shutdown single master and ensure ConnectToCluster immediately fails.
@@ -736,29 +770,20 @@ mod tests {
     //  - Connect to cluster stress test: have a thread spawning a bunch of concurrent connect to
     //    cluster calls, and have the cluster undergo constant elections and failures.
 
-    fn setup(cluster_config: &MiniClusterConfig) -> (MiniCluster, Options) {
-        let _ = env_logger::init();
-        let cluster = MiniCluster::new(cluster_config);
-
-        let options = Options {
-            rpc: krpc::Options::default(),
-            admin_timeout: Duration::from_secs(10),
-        };
-
-        (cluster, options)
-    }
-
     #[test]
     fn test_connect_to_cluster() {
         let _ = env_logger::init();
-
         let run = |num_masters: u32| {
-            let (mut cluster, options) =
-                setup(MiniClusterConfig::default().num_masters(num_masters).num_tservers(0));
-            let master_addrs = cluster.master_addrs();
-            let masters = util::run(lazy(move || connect_to_cluster(master_addrs, &options))).unwrap();
+            let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                                .num_masters(num_masters)
+                                                                .num_tservers(0));
+            let mut runtime = Runtime::new().unwrap();
 
-            assert_eq!(masters.len(), cluster.master_addrs().len());
+            let masters = runtime.block_on(connect_to_cluster(cluster.master_addrs(),
+                                                              &Options::default()))
+                                 .unwrap();
+
+            assert_eq!(masters.len(), num_masters as usize);
             assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
         };
 
@@ -771,10 +796,7 @@ mod tests {
         let _ = env_logger::init();
 
         let run = |num_masters: u32| -> Error {
-            let options = Options {
-                rpc: krpc::Options::default(),
-                admin_timeout: Duration::from_secs(10),
-            };
+            let mut runtime = Runtime::new().unwrap();
 
             let hostports = {
                 let listeners = (0..num_masters).map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
@@ -782,7 +804,7 @@ mod tests {
                 listeners.iter().flat_map(TcpListener::local_addr).map(HostPort::from).collect::<Vec<HostPort>>()
             };
 
-            util::run(connect_to_cluster(hostports, &options)).unwrap_err()
+            runtime.block_on(connect_to_cluster(hostports, &Options::default())).unwrap_err()
         };
 
         match run(1) {
@@ -801,32 +823,90 @@ mod tests {
     #[test]
     fn test_connect_to_cluster_failover() {
         let _ = env_logger::init();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(3)
+                                                             .num_tservers(0));
+        let mut runtime = Runtime::new().unwrap();
 
-        let (mut cluster, options) =
-            setup(MiniClusterConfig::default().num_masters(3).num_tservers(0));
+        let masters = runtime.block_on(connect_to_cluster(cluster.master_addrs(),
+                                                            &Options::default()))
+                                .unwrap();
 
-        cluster.stop_master(0);
-
-        let masters = util::run(connect_to_cluster(cluster.master_addrs(), &options)).unwrap();
-
-        assert_eq!(masters.len(), cluster.master_addrs().len());
+        assert_eq!(3, cluster.master_addrs().len());
         assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
     }
 
-/*
-    fn deadline() -> Instant {
-        Instant::now() + Duration::from_secs(5)
+    /*
+    /// Tests that RPCs are timed out when the leader is unavailable.
+    #[test]
+    fn timeout() {
+        let _ = env_logger::init();
+        let test_reactor = util::TestReactor::default();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(2)
+                                                             .num_tservers(0)
+                                                             .log_rpc_negotiation_trace(true)
+                                                             .rpc_negotiation_delay(1000));
+        let addr = cluster.master_addrs()[0];
+        cluster.stop_node(addr);
+
+        let now = Instant::now();
+        let proxy = MasterProxy::new(cluster.master_addrs().to_owned(), test_reactor.io().clone());
+        let result = proxy.list_tables(now + Duration::from_millis(100),
+                                       ListTablesRequestPB::new())
+                          .wait();
+
+        let elapsed = Instant::now().duration_since(now);
+
+        assert_eq!(Err(Error::TimedOut), result);
+
+        // If this gets flaky, figure out how to get tighter times out of mio.
+        assert!(elapsed > Duration::from_millis(100), "expected: 100ms, elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(150), "expected: 100ms, elapsed: {:?}", elapsed);
     }
+
+    /// Tests that the `MasterProxy` will discover and reroute RPCs to a new leader when the
+    /// current leader becomes unreachable.
+    #[test]
+    fn leader_failover() {
+        let _ = env_logger::init();
+        let test_reactor = util::TestReactor::default();
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(3)
+                                                             .num_tservers(0));
+
+        let proxy = MasterProxy::new(cluster.master_addrs().to_owned(), test_reactor.io().clone());
+        let result = proxy.list_tables(Instant::now() + Duration::from_secs(5),
+                                       ListTablesRequestPB::new())
+                          .wait();
+        check_list_tables_response(result);
+
+        // TODO: this check occasionally causes tests failures when only two of three masters comes
+        // up before the initial election is decided, and we filter the master address of the
+        // not-yet available replica.
+        assert_eq!(3, replicas(&proxy).len());
+
+        info!("Stopping leader {}", leader(&proxy));
+        cluster.stop_node(leader(&proxy));
+
+        info!("Sending list tables");
+        // Reelection can take a disapointingly long time...
+        let result = proxy.list_tables(Instant::now() + Duration::from_secs(10),
+                                       ListTablesRequestPB::new())
+                          .wait();
+        check_list_tables_response(result);
+    }
+    */
+
 
     #[test]
     fn single_tablet() {
         let _ = env_logger::init();
         let mut cluster = MiniCluster::default();
-        let mut reactor = Core::new().unwrap();
+        let mut runtime = Runtime::new().unwrap();
 
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
-                                       .build()
-                                       .expect("client");
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
 
         let schema = simple_schema();
 
@@ -834,35 +914,31 @@ mod tests {
         table_builder.set_range_partition_columns(vec!["key".to_owned()]);
         table_builder.set_num_replicas(1);
 
-        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
 
-        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
-        let cache = table.meta_cache().clone();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let locations = table.table_locations().clone();
 
         {
-            let entries = cache.inner.entries.lock().clone();
+            let entries = locations.entries.lock().clone();
             assert!(entries.is_empty());
         }
 
         {
-            let entry = reactor.run(cache.entry(&[])).expect("entry");
+            let entry = runtime.block_on(locations.entry(&[])).expect("entry");
 
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
             assert_eq!(b"", entry.upper_bound());
 
-            let entries = cache.inner.entries.lock().clone();
+            let entries = locations.entries.lock().clone();
             assert_eq!(1, entries.len());
             assert!(entry.equiv(entries.values().next().unwrap()));
-
-            assert!(entry.equiv(&cache.cached_entry(b"").unwrap()));
-            assert!(entry.equiv(&cache.cached_entry(b"foo").unwrap()));
         }
 
-        cache.clear();
+        locations.clear();
         {
-            let entry = reactor.run(cache.entry(b"some-key")).expect("entry");
-
+            let entry = runtime.block_on(locations.entry(b"some-key")).expect("entry");
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
             assert_eq!(b"", entry.upper_bound());
@@ -873,11 +949,10 @@ mod tests {
     fn multi_tablet() {
         let _ = env_logger::init();
         let mut cluster = MiniCluster::default();
-        let mut reactor = Core::new().unwrap();
+        let mut runtime = Runtime::new().unwrap();
 
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
-                                       .build()
-                                       .expect("client");
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
 
         let schema = simple_schema();
 
@@ -885,52 +960,55 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
 
-        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
-        let cache = table.meta_cache().clone();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let cache = table.table_locations().clone();
 
-        let first = reactor.run(cache.entry(&[0, 0, 0, 0, 1])).expect("entry");
+        let first = runtime.block_on(cache.entry(&[0, 0, 0, 0, 1])).expect("entry");
 
         assert!(first.is_tablet());
         assert_eq!(b"", first.lower_bound());
         assert_eq!(vec![0, 0, 0, 1], first.upper_bound());
 
-        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+        let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
         assert_eq!(10, entries.len());
         assert!(first.equiv(&entries[0]));
 
+        /*
         assert!(first.equiv(&cache.cached_entry(b"").unwrap()));
         assert!(cache.cached_entry(b"foo").is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
+        */
 
-        let last = reactor.run(cache.entry(&[0, 0, 0, 11])).expect("entry");
+        let last = runtime.block_on(cache.entry(&[0, 0, 0, 11])).expect("entry");
 
-        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+        let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
 
         assert_eq!(11, entries.len());
         assert!(entries[10].equiv(&last));
 
+        /*
         assert!(cache.cached_entry(b"foo").unwrap().equiv(&last));
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
         assert!(cache.cached_entry(&vec![0, 0, 0, 10, 5]).is_none());
+        */
 
-        reactor.run(cache.entry(&[0, 0, 0, 9])).expect("entry");
-        assert_eq!(11, cache.inner.entries.lock().len());
+        runtime.block_on(cache.entry(&[0, 0, 0, 9])).expect("entry");
+        assert_eq!(11, cache.entries.lock().len());
 
-        reactor.run(cache.entry(&[0, 0, 0, 10])).expect("entry");
-        assert_eq!(12, cache.inner.entries.lock().len());
+        runtime.block_on(cache.entry(&[0, 0, 0, 10])).expect("entry");
+        assert_eq!(12, cache.entries.lock().len());
     }
 
     #[test]
     fn multi_tablet_concurrent() {
         let _ = env_logger::init();
         let mut cluster = MiniCluster::default();
-        let mut reactor = Core::new().unwrap();
+        let mut runtime = Runtime::new().unwrap();
 
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
-                                       .build()
-                                       .expect("client");
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
 
         let schema = simple_schema();
 
@@ -938,14 +1016,14 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
 
-        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
-        let cache = table.meta_cache().clone();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let cache = table.table_locations().clone();
 
-        reactor.run(cache.entry(&[0, 0, 0, 0]).join(cache.entry(&[0, 0, 0, 9])))
+        runtime.block_on(cache.entry(&[0, 0, 0, 0]).join(cache.entry(&[0, 0, 0, 9])))
                .expect("entry");
-        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+        let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
         assert_eq!(entries.len(), 10);
     }
 
@@ -953,11 +1031,10 @@ mod tests {
     fn non_covered_ranges() {
         let _ = env_logger::init();
         let mut cluster = MiniCluster::default();
-        let mut reactor = Core::new().unwrap();
+        let mut runtime = Runtime::new().unwrap();
 
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
-                                       .build()
-                                       .expect("client");
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
 
         let schema = simple_schema();
 
@@ -985,13 +1062,13 @@ mod tests {
         split.set(0, "c").unwrap();
         table_builder.add_range_partition_split(split);
 
-        let table_id = reactor.run(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
 
-        let table = reactor.run(client.open_table_by_id(table_id)).expect("open_table");
-        let cache = table.meta_cache().clone();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let cache = table.table_locations().clone();
 
-        reactor.run(cache.entry(&[0])).expect("entry");
-        let entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
+        runtime.block_on(cache.entry(&[0])).expect("entry");
+        let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
         assert_eq!(6, entries.len());
 
         let expected: Vec<(&[u8], &[u8], bool)> = vec![ (b"",  b"a", false),
@@ -1016,14 +1093,14 @@ mod tests {
 
         for (key, expected_entries) in cases {
             cache.clear();
-            reactor.run(cache.entry(key)).expect("entry");
+            runtime.block_on(cache.entry(key)).expect("entry");
 
-            let new_entries: Vec<Entry> = cache.inner.entries.lock().values().cloned().collect();
-
-            assert_eq!(&entries[6 - expected_entries..], &new_entries[..],
-                       "key: {:?}, expected entries: {}, entries: {:?}",
-                       key, expected_entries, &new_entries[..]);
+            let new_entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
+            for (expected_entry, new_entry) in entries[6 - expected_entries..].iter().zip(new_entries.iter()) {
+                assert!(expected_entry.equiv(new_entry),
+                       "key: {:?}, expected entry: {:?}, new entry: {:?}",
+                       key, expected_entry, new_entry);
+            }
         }
     }
-*/
 }

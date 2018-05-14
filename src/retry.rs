@@ -173,3 +173,4 @@ macro_rules! tserver_response {
 }
 
 tserver_response!(WriteResponsePb);
+tserver_response!(ScanResponsePb);

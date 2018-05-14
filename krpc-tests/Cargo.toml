@@ -16,7 +16,7 @@ prost = "0.2"
 prost-derive = "0.2"
 prost-types = "0.2"
 tacho = "0.4"
-tokio = { git = "https://github.com/tokio-rs/tokio" }
+tokio = { git = "https://github.com/danburkert/tokio" }
 
 
 [build-dependencies]

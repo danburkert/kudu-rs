@@ -5,13 +5,11 @@ extern crate bytes;
 extern crate chrono;
 extern crate ieee754;
 extern crate ifaces;
-extern crate itertools;
 extern crate krpc;
 extern crate parking_lot;
 extern crate prost;
 extern crate prost_types;
 extern crate rand;
-extern crate slab;
 extern crate tokio;
 extern crate tokio_timer;
 extern crate url;
@@ -30,29 +28,25 @@ extern crate vec_map;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 
-pub mod pb;
-
-mod writer2;
-//mod writer;
 mod backoff;
 mod bitmap;
 mod client;
 mod error;
 mod key;
+mod meta_cache;
 mod operation;
 mod partition;
-mod refresh;
+mod pb;
+mod replica;
 mod retry;
 mod row;
+mod scanner;
 mod schema;
 mod server;
-mod server_picker;
 mod table;
 mod util;
 mod value;
-pub mod master;
-pub mod meta_cache;
-mod replica;
+mod writer;
 
 #[cfg(test)]
 mod mini_cluster;
@@ -66,13 +60,12 @@ pub use schema::*;
 pub use server::*;
 pub use table::*;
 pub use value::Value;
-//pub use writer::*;
+pub use writer::*;
 
 use std::fmt;
 use std::str;
 use std::time::Duration;
 
-use uuid::Uuid;
 pub use krpc::HostPort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -292,7 +285,7 @@ macro_rules! id {
     ($id:ident) => {
         #[derive(Copy, Clone, PartialEq, Eq, Hash)]
         pub struct $id {
-            id: Uuid,
+            id: ::uuid::Uuid,
         }
 
         impl $id {
@@ -301,25 +294,26 @@ macro_rules! id {
             }
 
             fn parse(input: &str) -> Result<$id> {
-                Uuid::parse_str(input).map_err(|error| Error::Serialization(format!("{}", error)))
-                                      .map(|id| $id { id: id })
+                ::uuid::Uuid::parse_str(input)
+                             .map_err(|error| Error::Serialization(format!("{}", error)))
+                             .map(|id| $id { id: id })
             }
 
             fn parse_bytes(input: &[u8]) -> Result<$id> {
                 str::from_utf8(input)
-                    .map_err(|error| Error::Serialization(format!("{}", error)))
+                    .map_err(|error| ::error::Error::Serialization(format!("{}", error)))
                     .and_then($id::parse)
             }
         }
 
-        impl fmt::Debug for $id {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl ::std::fmt::Debug for $id {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> fmt::Result {
                 write!(f, "{}", self.id.simple())
             }
         }
 
-        impl fmt::Display for $id {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl ::std::fmt::Display for $id {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> fmt::Result {
                 write!(f, "{}", self.id.simple())
             }
         }
@@ -331,10 +325,22 @@ id!(TableId);
 id!(TabletId);
 id!(TabletServerId);
 
+// TODO: move this invocation to scanner.rs
+id!(ScannerId);
+
 #[derive(Clone)]
 pub struct Options {
     rpc: krpc::Options,
     admin_timeout: Duration,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            rpc: krpc::Options::default(),
+            admin_timeout: Duration::from_secs(60),
+        }
+    }
 }
 
 pub trait IntoMasterAddrs {

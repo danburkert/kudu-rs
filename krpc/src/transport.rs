@@ -207,12 +207,13 @@ impl Transport {
                 Ok(Async::Ready((call_id, Ok((buf, Vec::new())))))
             } else {
                 let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
-                let body = buf.split_to(prev_offset);
+                let body = buf.split_to(prev_offset + 1);
 
                 let mut sidecars = Vec::new();
                 for &offset in &self.response_header.sidecar_offsets[1..] {
                     let offset = offset as usize;
-                    sidecars.push(buf.split_to(offset - prev_offset));
+                    // TODO(dan): is the + 1 correct? Needs test coverage.
+                    sidecars.push(buf.split_to(offset - prev_offset + 1));
                     prev_offset = offset;
                 }
                 sidecars.push(buf);
