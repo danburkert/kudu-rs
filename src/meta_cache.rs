@@ -751,7 +751,7 @@ mod tests {
     use std::net::TcpListener;
 
     use env_logger;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::current_thread::Runtime;
 
     use Client;
     use RangePartitionBound;

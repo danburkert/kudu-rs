@@ -96,7 +96,7 @@ impl <'data> Value<'data> for SystemTime {
     fn can_read_from(data_type: DataType) -> bool { data_type == DataType::Timestamp || data_type == DataType::Int64 }
     fn can_write_to(data_type: DataType) -> bool { data_type == DataType::Timestamp || data_type == DataType::Int64 }
     fn size() -> usize { 8 }
-    fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, time_to_us(self)) }
+    fn copy_data(&self, dest: &mut [u8]) { LittleEndian::write_i64(dest, time_to_us(*self)) }
     unsafe fn from_data(data: &[u8]) -> SystemTime { us_to_time(LittleEndian::read_i64(data)) }
 }
 

@@ -555,7 +555,7 @@ mod test {
 
     use env_logger;
     use futures::future;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::current_thread::Runtime;
 
     #[test]
     fn insert() {

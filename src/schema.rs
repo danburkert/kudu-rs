@@ -13,6 +13,7 @@ use Error;
 use Result;
 use Row;
 use bitmap;
+use row2;
 
 /// `Column` instances hold metadata information about columns in a Kudu table.
 ///
@@ -256,8 +257,17 @@ impl Schema {
         &self.inner.column_offsets
     }
 
+    #[inline]
+    pub(crate) fn column_offset(&self, idx: usize) -> isize {
+        self.inner.column_offsets[idx] as isize
+    }
+
     pub fn new_row<'a>(&self) -> Row<'a> {
         Row::new(self.clone())
+    }
+
+    pub fn new_row2<'a>(&self) -> row2::Row<'a> {
+        row2::Row::partial(self.clone())
     }
 
     pub fn ref_eq(&self, other: &Schema) -> bool {

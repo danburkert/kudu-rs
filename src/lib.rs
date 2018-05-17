@@ -39,6 +39,7 @@ mod partition;
 mod pb;
 mod replica;
 mod retry;
+mod row2;
 mod row;
 mod scanner;
 mod schema;

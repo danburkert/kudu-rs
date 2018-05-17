@@ -293,7 +293,7 @@ mod tests {
     use super::*;
 
     use env_logger;
-    use tokio::runtime::Runtime;
+    use tokio::runtime::current_thread::Runtime;
 
     #[test]
     fn table_lifecycle() {

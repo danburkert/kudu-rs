@@ -39,7 +39,7 @@ use backoff::Backoff;
 use retry::Retriable;
 use util::ContextFuture;
 
-/// The policy for speculative execution.
+/// The strategy for speculative execution.
 pub enum Speculation {
     Full,
     Staggered(Duration),

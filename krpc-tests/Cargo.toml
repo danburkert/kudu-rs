@@ -16,8 +16,7 @@ prost = "0.2"
 prost-derive = "0.2"
 prost-types = "0.2"
 tacho = "0.4"
-tokio = { git = "https://github.com/danburkert/tokio" }
-
+tokio = "0.1"
 
 [build-dependencies]
 env_logger = "0.4"
