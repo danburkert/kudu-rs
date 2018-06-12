@@ -13,7 +13,6 @@ use Error;
 use Result;
 use Row;
 use bitmap;
-use row2;
 
 /// `Column` instances hold metadata information about columns in a Kudu table.
 ///
@@ -72,51 +71,26 @@ impl Column {
     }
 
     pub fn set_nullable(mut self) -> Column {
-        self.set_nullable_by_ref();
-        self
-    }
-
-    pub fn set_nullable_by_ref(&mut self) -> &mut Column {
         self.is_nullable = true;
         self
     }
 
     pub fn set_not_null(mut self) -> Column {
-        self.set_not_null_by_ref();
-        self
-    }
-
-    pub fn set_not_null_by_ref(&mut self) -> &mut Column {
         self.is_nullable = false;
         self
     }
 
     pub fn set_encoding(mut self, encoding: EncodingType) -> Column {
-        self.set_encoding_by_ref(encoding);
-        self
-    }
-
-    pub fn set_encoding_by_ref(&mut self, encoding: EncodingType) -> &mut Column {
         self.encoding = encoding;
         self
     }
 
     pub fn set_compression(mut self, compression: CompressionType) -> Column {
-        self.set_compression_by_ref(compression);
-        self
-    }
-
-    pub fn set_compression_by_ref(&mut self, compression: CompressionType) -> &mut Column {
         self.compression = compression;
         self
     }
 
     pub fn set_block_size(mut self, block_size: u32) -> Column {
-        self.set_block_size_by_ref(block_size);
-        self
-    }
-
-    pub fn set_block_size_by_ref(&mut self, block_size: u32) -> &mut Column {
         self.block_size = block_size;
         self
     }
@@ -138,9 +112,9 @@ impl Column {
     pub(crate) fn from_pb(pb: ColumnSchemaPb) -> Result<Column> {
         Ok(Column {
             is_nullable: pb.is_nullable(),
-            data_type: try!(DataType::from_pb(pb.type_())),
-            compression: try!(CompressionType::from_pb(pb.compression())),
-            encoding: try!(EncodingType::from_pb(pb.encoding())),
+            data_type: DataType::from_pb(pb.type_())?,
+            compression: CompressionType::from_pb(pb.compression())?,
+            encoding: EncodingType::from_pb(pb.encoding())?,
             block_size: pb.cfile_block_size() as u32,
             name: pb.name,
         })
@@ -149,18 +123,18 @@ impl Column {
 
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f, "{} {:?}", self.name, self.data_type));
+        write!(f, "{} {:?}", self.name, self.data_type)?;
         if !self.is_nullable {
-            try!(write!(f, " NOT NULL"));
+            write!(f, " NOT NULL")?;
         }
         if self.encoding != EncodingType::Auto {
-            try!(write!(f, " ENCODING {:?}", self.encoding));
+            write!(f, " ENCODING {:?}", self.encoding)?;
         }
         if self.compression != CompressionType::Default {
-            try!(write!(f, " COMPRESSION {:?}", self.compression));
+            write!(f, " COMPRESSION {:?}", self.compression)?;
         }
         if let Some(block_size) = self.block_size() {
-            try!(write!(f, " BLOCK SIZE {}", block_size));
+            write!(f, " BLOCK SIZE {}", block_size)?;
         }
         Ok(())
     }
@@ -170,7 +144,10 @@ struct Inner {
     // TODO: switch columns and column_offsets to be a Box<[]>.
     columns: Vec<Column>,
     columns_by_name: HashMap<String, usize>,
+    // TODO: inline this into the Column struct instances
     column_offsets: Vec<usize>,
+    // TODO: replace this with a bitset containing indices of var len columns
+    var_len_column_offsets: Vec<usize>,
     num_primary_key_columns: usize,
 
     /// Length of the encoded columns.
@@ -185,14 +162,18 @@ pub struct Schema {
 
 impl Schema {
 
-    fn new(columns: Vec<Column>, num_primary_key_columns: usize) -> Schema {
+    pub(crate) fn new(columns: Vec<Column>, num_primary_key_columns: usize) -> Schema {
         let mut columns_by_name = HashMap::with_capacity(columns.len());
         let mut column_offsets = Vec::with_capacity(columns.len());
+        let mut var_len_column_offsets = Vec::new();
         let mut row_len = 0;
         let mut has_nullable_columns = false;
         for (idx, column) in columns.iter().enumerate() {
             columns_by_name.insert(column.name().to_string(), idx);
             column_offsets.push(row_len);
+            if column.data_type.is_var_len() {
+                var_len_column_offsets.push(row_len);
+            }
             row_len += column.data_type.size();
             has_nullable_columns |= column.is_nullable();
         }
@@ -202,6 +183,7 @@ impl Schema {
                 columns,
                 columns_by_name,
                 column_offsets,
+                var_len_column_offsets,
                 num_primary_key_columns,
                 row_len,
                 has_nullable_columns,
@@ -237,6 +219,14 @@ impl Schema {
         Schema::new(self.primary_key().to_owned(), self.num_primary_key_columns())
     }
 
+    pub(crate) fn check_index(&self, idx: usize) -> Result<()> {
+        if idx >= self.columns().len() {
+            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}", idx, self)))
+        } else {
+            Ok(())
+        }
+    }
+
     #[inline]
     pub(crate) fn bitmap_len(&self) -> usize {
         bitmap::len(self.inner.columns.len())
@@ -258,16 +248,17 @@ impl Schema {
     }
 
     #[inline]
+    pub(crate) fn var_len_column_offsets(&self) -> &[usize] {
+        &self.inner.var_len_column_offsets
+    }
+
+    #[inline]
     pub(crate) fn column_offset(&self, idx: usize) -> isize {
         self.inner.column_offsets[idx] as isize
     }
 
     pub fn new_row<'a>(&self) -> Row<'a> {
-        Row::new(self.clone())
-    }
-
-    pub fn new_row2<'a>(&self) -> row2::Row<'a> {
-        row2::Row::partial(self.clone())
+        Row::partial(self.clone())
     }
 
     pub fn ref_eq(&self, other: &Schema) -> bool {
@@ -357,25 +348,26 @@ impl quickcheck::Arbitrary for Schema {
                                 else { DataType::arbitrary(g) };
 
 
-            let mut column = Column::builder(column.as_str(), data_type);
+            let column = Column::builder(column.as_str(), data_type);
 
-            if is_pk || bool::arbitrary(g) { column.set_not_null_by_ref() }
-            else { column.set_nullable_by_ref() };
+            let column = if is_pk || bool::arbitrary(g) { column.set_not_null() }
+            else { column.set_nullable() };
 
-            column.set_encoding_by_ref(EncodingType::arbitrary(g, data_type));
-            column.set_compression_by_ref(CompressionType::arbitrary(g));
-            if bool::arbitrary(g) {
+            let column = column.set_encoding(EncodingType::arbitrary(g, data_type));
+            let column = column.set_compression(CompressionType::arbitrary(g));
+            let column = if bool::arbitrary(g) {
                 // TODO: can Kudu support arbitrary block sizes?
-                column.set_block_size_by_ref(u32::arbitrary(g));
-            }
-            builder.add_column_by_ref(column);
+                column.set_block_size(u32::arbitrary(g))
+            } else {
+                column
+            };
+            builder = builder.add_column(column);
         }
 
         let mut primary_key_columns: Vec<String> = primary_key_columns.iter().cloned().collect();
         g.shuffle(&mut primary_key_columns);
 
-        builder.set_primary_key_by_ref(primary_key_columns);
-        builder.build().unwrap()
+        builder.set_primary_key(primary_key_columns).build().unwrap()
     }
 
     /// Returns an iterator containing versions of the schema with columns removed.
@@ -389,7 +381,7 @@ impl quickcheck::Arbitrary for Schema {
             let mut builder = SchemaBuilder::new();
 
             for column in self.columns()[..idx].iter().chain(self.columns()[idx+1..].iter()).cloned() {
-                builder.add_column_by_ref(column);
+                builder = builder.add_column(column);
             }
 
             let mut primary_key_columns = Vec::new();
@@ -397,8 +389,7 @@ impl quickcheck::Arbitrary for Schema {
                 if idx == pk_idx { continue; }
                 primary_key_columns.push(self.columns()[pk_idx].name().to_owned());
             }
-            builder.set_primary_key_by_ref(primary_key_columns);
-            schemas.push(builder.build().unwrap());
+            schemas.push(builder.set_primary_key(primary_key_columns).build().unwrap());
         }
 
         Box::new(schemas.into_iter())
@@ -423,21 +414,11 @@ impl SchemaBuilder {
     }
 
     pub fn add_column(mut self, column: Column) -> SchemaBuilder {
-        self.add_column_by_ref(column);
-        self
-    }
-
-    pub fn add_column_by_ref(&mut self, column: Column) -> &mut SchemaBuilder {
         self.columns.push(column);
         self
     }
 
     pub fn set_primary_key<S>(mut self, columns: Vec<S>) -> SchemaBuilder where S: Into<String> {
-        self.set_primary_key_by_ref(columns);
-        self
-    }
-
-    pub fn set_primary_key_by_ref<S>(&mut self, columns: Vec<S>) -> &mut SchemaBuilder where S: Into<String> {
         self.primary_key = columns.into_iter().map(Into::into).collect();
         self
     }

@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
+use bytes::BytesMut;
 use futures::{
     Async,
     Future,
@@ -229,7 +229,7 @@ where Set: ReplicaSet,
         in_flight_count != self.in_flight.len()
     }
 
-    fn poll_in_flight(&mut self) -> Poll<(Proxy, Resp, Vec<Bytes>), Error> {
+    fn poll_in_flight(&mut self) -> Poll<(Proxy, Resp, Vec<BytesMut>), Error> {
         loop {
             let (response, mut replica) = match self.in_flight.poll() {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => return Ok(Async::NotReady),
@@ -279,7 +279,7 @@ where Set: ReplicaSet,
                     self.replica_set.replicas()[replica.index].mark_follower();
                     // Retry the RPC after a backoff period.
                     replica.failure = Some(error);
-                    let mut backoff = Delay::new(Instant::now() + replica.backoff.next_backoff());
+                    let backoff = Delay::new(Instant::now() + replica.backoff.next_backoff());
                     let context = ContextFuture::new(backoff, replica);
                     self.backoff.push(context);
                 }
@@ -305,7 +305,7 @@ where Set: ReplicaSet,
       Req: Message + 'static,
       Resp: Retriable {
 
-    type Item = (Proxy, Resp, Vec<Bytes>);
+    type Item = (Proxy, Resp, Vec<BytesMut>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Error> {

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#![feature(nll)]
+
 extern crate byteorder;
 extern crate bytes;
 extern crate chrono;
@@ -39,15 +41,14 @@ mod partition;
 mod pb;
 mod replica;
 mod retry;
-mod row2;
 mod row;
 mod scanner;
 mod schema;
 mod server;
 mod table;
 mod util;
-mod value;
 mod writer;
+mod value;
 
 #[cfg(test)]
 mod mini_cluster;

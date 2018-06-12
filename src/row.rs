@@ -1,51 +1,74 @@
 use std::cmp;
 use std::fmt;
 use std::marker::PhantomData;
+use std::mem;
+use std::slice;
+use std::str;
 
-use bitmap;
-use vec_map::VecMap;
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
 use Error;
 use Result;
 use Schema;
-use Value;
 use util;
+use value::{
+    Value,
+    read_var_len_value,
+    write_var_len_value,
+};
+
+/// Returns the size of the data array for a partial row with the given schema.
+fn partial_row_data_len(schema: &Schema) -> usize {
+    let row_len = schema.row_len();
+    let bitmap_len = schema.bitmap_len();
+    row_len + schema.has_nullable_columns() as usize * bitmap_len + bitmap_len
+}
 
 pub struct Row<'data> {
-    /// The row data.
+
+    /// A pointer to the row data array, plus a 1 bit payload indicating whether this is a mutable
+    /// partial row, or a constant contiguous row.
     ///
-    /// Laid out as follows:
-    ///     - is-set bitmap
-    ///     - is-null bitmap
-    ///     - column values
-    pub(crate) data: Box<[u8]>,
-    pub(crate) owned_data: VecMap<Vec<u8>>,
-    pub(crate) schema: Schema,
+    /// The row data array consists of the individual columns laid out contiguously, followed by
+    /// a null bitmap if there are nullable columns, followed by the is-set bitmap if the row is a
+    /// mutable partial row.
+    ///
+    /// The tag payload is stored in the least-significant bit.
+    tagged_ptr: i64,
+
+    /// The schema of the row.
+    schema: Schema,
+
     _marker: PhantomData<&'data [u8]>,
 }
 
 // TODO: unset/unset_by_name.
 impl <'data> Row<'data> {
 
-    /// Creates a new empty row.
-    ///
-    /// Initially all values will be unset.
-    pub(crate) fn new(schema: Schema) -> Row<'data> {
-        let row_len = schema.row_len();
-        let bitmap_len = schema.bitmap_len();
-        let data_len = row_len
-                     + if schema.has_nullable_columns() { bitmap_len } else { 0 }
-                     + bitmap_len;
+    /// Creates an empty mutable partial row.
+    pub(crate) fn partial(schema: Schema) -> Row<'data> {
+        let data_len = partial_row_data_len(&schema);
 
         // N.B. zeroing the bitmap portions of the data array is necessary.
-        let data = vec![0; data_len].into_boxed_slice();
+        let data = vec![0u8; data_len];
+        debug_assert_eq!(data.len(), data_len);
+        debug_assert_eq!(data.capacity(), data_len);
+        let ptr = data.as_ptr() as i64;
+        mem::forget(data);
 
         Row {
-            data,
-            owned_data: VecMap::new(),
+            tagged_ptr: (ptr << 1) | 1,
             schema,
-            _marker: Default::default(),
+            _marker: PhantomData::default(),
+        }
+    }
+
+    pub(crate) fn contiguous(schema: Schema, data: &[u8]) -> Row {
+        let tagged_ptr = (data.as_ptr() as i64) << 1;
+        Row {
+            tagged_ptr,
+            schema,
+            _marker: PhantomData::default(),
         }
     }
 
@@ -79,24 +102,23 @@ impl <'data> Row<'data> {
                                    idx: usize,
                                    value: V)
                                    -> &mut Self where V: Value<'data> {
-        bitmap::set(&mut *self.data, idx);
-        let bitmap_len = self.schema.bitmap_len();
+        if self.is_contiguous_row() {
+            self.into_partial_row();
+        } else if V::DATA_TYPE.is_var_len() {
+            // Deallocate the existing value, if it has already been set to an owned value.
+            self.deallocate(idx);
+        }
+
+        let data = self.data_mut();
+        bitmap_set(data.offset(self.is_set_offset()), idx);
         if value.is_null() {
-            bitmap::set(&mut self.data[bitmap_len..], idx);
-            self.owned_data.remove(idx);
+            bitmap_set(data.offset(self.is_null_offset()), idx);
         } else {
-            let mut row_offset = bitmap_len;
             if self.schema.has_nullable_columns() {
-                bitmap::clear(&mut self.data[bitmap_len..], idx);
-                row_offset += bitmap_len;
+                bitmap_clear(data.offset(self.is_null_offset()), idx);
             }
 
-            value.copy_data(&mut self.data[row_offset + self.schema.column_offsets()[idx]..]);
-            if let Some(owned_data) = value.owned_data() {
-                self.owned_data.insert(idx, owned_data);
-            } else {
-                self.owned_data.remove(idx);
-            }
+            value.write(data.offset(self.schema.column_offset(idx)));
         }
         self
     }
@@ -106,10 +128,17 @@ impl <'data> Row<'data> {
     /// Returns an error if the column does not exist, or the column is not nullable.
     pub fn set_null(&mut self, idx: usize) -> Result<&mut Row<'data>> {
         self.check_column_for_nullability(idx)?;
-        let bitmap_len = self.schema.bitmap_len();
-        bitmap::set(&mut self.data[bitmap_len..], idx);
-        bitmap::set(&mut *self.data, idx);
-        self.owned_data.remove(idx);
+
+        if self.is_contiguous_row() {
+            self.into_partial_row();
+        }
+
+        unsafe {
+            // Deallocate the existing value, if it has already been set to an owned value.
+            self.deallocate(idx);
+            bitmap_set(self.data_mut().offset(self.is_set_offset()), idx);
+            bitmap_set(self.data_mut().offset(self.is_null_offset()), idx);
+        }
         Ok(self)
     }
 
@@ -130,31 +159,21 @@ impl <'data> Row<'data> {
     /// does not match the value type.
     pub fn get<'self_, V>(&'self_ self, idx: usize) -> Result<V> where V: Value<'self_> {
         self.check_column_for_read::<V>(idx)?;
-        let bitmap_len = self.schema.bitmap_len();
 
-        // Split the data slice into the is_set bitmap, the is_null bitmap, and the row.
-        let (is_set, data) = self.data.split_at(bitmap_len);
-        let (is_null, row) = if self.schema.has_nullable_columns() {
-            data.split_at(bitmap_len)
-        } else {
-            let empty: &'static [u8] = &[];
-            (empty, data)
-        };
-
-        if !bitmap::get(is_set, idx) {
-            Err(Error::InvalidArgument(format!("column {} ({}) is not set",
-                                               self.schema.columns()[idx].name(), idx)))
-        } else if self.schema.has_nullable_columns() && bitmap::get(is_null, idx) {
-            if let Some(null) = V::null() {
-                Ok(null)
-            } else {
-                Err(Error::InvalidArgument(format!("column {} ({}) is null",
+        unsafe {
+            if !self.is_set_unchecked(idx) {
+                Err(Error::InvalidArgument(format!("column {} ({}) is not set",
                                                    self.schema.columns()[idx].name(), idx)))
+            } else if self.is_null_unchecked(idx) {
+                if let Some(null) = V::null() {
+                    Ok(null)
+                } else {
+                    Err(Error::InvalidArgument(format!("column {} ({}) is null",
+                                                    self.schema.columns()[idx].name(), idx)))
+                }
+            } else {
+                Ok(V::read(self.data().offset(self.schema.column_offset(idx)))?)
             }
-        } else {
-            let offset = self.schema.column_offsets()[idx];
-            let size = V::size();
-            unsafe { Ok(V::from_data(&row[offset..offset + size])) }
         }
     }
 
@@ -172,15 +191,19 @@ impl <'data> Row<'data> {
 
     /// Returns `true` if the column at index `idx` is null.
     ///
+    /// The result is undefined if the `idx` is not valid.
+    #[inline]
+    pub unsafe fn is_null_unchecked(&self, idx: usize) -> bool {
+        self.schema.has_nullable_columns()
+            && bitmap_get(self.data().offset(self.is_null_offset() as isize), idx)
+    }
+
+    /// Returns `true` if the column at index `idx` is null.
+    ///
     /// Returns an error if the column does not exist.
     pub fn is_null(&self, idx: usize) -> Result<bool> {
-        if idx >= self.schema.columns().len() {
-            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                               idx, self.schema)))
-        } else {
-            Ok(self.schema.has_nullable_columns() &&
-               bitmap::get(&self.data[self.schema.bitmap_len()..], idx))
-        }
+        self.schema.check_index(idx)?;
+        Ok(unsafe { self.is_null_unchecked(idx) })
     }
 
     /// Returns `true` if the column is null.
@@ -196,14 +219,18 @@ impl <'data> Row<'data> {
 
     /// Returns `true` if the column at index `idx` is set.
     ///
+    /// The result is undefined if the `idx` is not valid.
+    #[inline]
+    pub unsafe fn is_set_unchecked(&self, idx: usize) -> bool {
+        self.is_contiguous_row() || bitmap_get(self.data().offset(self.is_set_offset()), idx)
+    }
+
+    /// Returns `true` if the column at index `idx` is set.
+    ///
     /// Returns an error if the column does not exist.
     pub fn is_set(&self, idx: usize) -> Result<bool> {
-        if idx >= self.schema.columns().len() {
-            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                               idx, self.schema)))
-        } else {
-            Ok(bitmap::get(&*self.data, idx))
-        }
+        self.schema.check_index(idx)?;
+        Ok(unsafe { self.is_set_unchecked(idx) })
     }
 
     /// Returns `true` if the column is set.
@@ -222,48 +249,137 @@ impl <'data> Row<'data> {
         &self.schema
     }
 
+    /// Returns the offset of the is-null bitmap in the data array.
+    #[inline]
+    fn is_null_offset(&self) -> isize {
+        debug_assert!(self.schema.has_nullable_columns());
+        self.schema.row_len() as isize
+    }
+
+    pub(crate) fn is_null_bitmap(&self) -> &[u8] {
+        if self.schema.has_nullable_columns() {
+            unsafe {
+                slice::from_raw_parts(self.data().offset(self.schema.row_len() as isize),
+                                      self.schema.bitmap_len())
+            }
+        } else {
+            &[]
+        }
+    }
+
+    /// Returns the offset of the is-set bitmap in the data array.
+    ///
+    /// Must only be called on a partial row.
+    #[inline]
+    fn is_set_offset(&self) -> isize {
+        debug_assert!(self.is_partial_row());
+        (self.schema.row_len()
+            + self.schema.has_nullable_columns() as usize * self.schema.bitmap_len()) as isize
+    }
+
+    #[inline]
+    pub(crate) fn is_set_bitmap(&self) -> Option<&[u8]> {
+        let len = self.schema.bitmap_len();
+        if self.is_partial_row() {
+            let offset = self.schema.row_len() + self.schema.has_nullable_columns() as usize * len;
+            unsafe { Some(slice::from_raw_parts(self.data().offset(offset as isize), len)) }
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn is_partial_row(&self) -> bool {
+        self.tagged_ptr & 1 == 1
+    }
+
+    #[inline]
+    fn is_contiguous_row(&self) -> bool {
+        !self.is_partial_row()
+    }
+
+    #[inline]
+    pub(crate) fn data(&self) -> *const u8 {
+        (self.tagged_ptr >> 1) as _
+    }
+
+    #[inline]
+    fn data_mut(&mut self) -> *mut u8 {
+        debug_assert!(self.is_partial_row());
+        (self.tagged_ptr >> 1) as _
+    }
+
+    #[inline(never)]
+    fn into_partial_row(&mut self) {
+        debug_assert!(self.is_partial_row());
+        unimplemented!()
+    }
+
     /// Copies all borrowed values into a new row with a `'static` lifetime.
     pub fn into_owned(mut self) -> Row<'static> {
-        // Find all borrowed var len columns, and copy them into owned_data.
-        { // NLL hack
-            let bitmap_len = self.schema.bitmap_len();
-            let (bitmaps, row_data) = self.data.split_at_mut(
-                if self.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
-
-            for (idx, column) in self.schema.columns().iter().enumerate() {
-                let data_type = column.data_type();
-                if !data_type.is_var_len() ||
-                !bitmap::get(bitmaps, idx) ||
-                (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) ||
-                self.owned_data.contains_key(idx) {
-                    continue;
-                }
-                let column_offset = self.schema.column_offsets()[idx];
-                let data = unsafe { Vec::<u8>::from_data(&row_data[column_offset..]) };
-                data.copy_data(&mut row_data[column_offset..]);
-                self.owned_data.insert(idx, data);
-            }
+        if self.is_contiguous_row() {
+            self.into_partial_row();
         }
 
-        // Copy the fields to a new row with a static lifetime.
-        Row {
-            data: self.data,
-            owned_data: self.owned_data,
-            schema: self.schema,
-            _marker: PhantomData::default(),
+        let data = self.data_mut();
+        unsafe {
+            for (idx, column) in self.schema.columns().iter().enumerate() {
+                if !column.data_type().is_var_len()
+                    || !self.is_set_unchecked(idx)
+                    || self.is_null_unchecked(idx) {
+                    continue;
+                }
+
+                let data = data.offset(self.schema.column_offset(idx));
+                let (ptr, len, cap) = read_var_len_value(data);
+                // If capacity is 0, then this is a borrowed value. Copy it and write the new owned
+                // value back to the row.
+                if cap == 0 {
+                    // Copy it into a Vec and write it to the new data array.
+                    let copy: Vec<u8> = slice::from_raw_parts(ptr, len).to_owned();
+                    write_var_len_value(data, copy.as_ptr(), copy.len(), copy.capacity());
+                    mem::forget(copy);
+                }
+            }
+
+            // Extend the lifetime, which is safe now that there are no borrowed values.
+            mem::transmute(self)
+        }
+    }
+
+    /// Deallocates the value at the provided index. Does nothing if the value is not set, or is
+    /// not owned by the row.
+    ///
+    /// # Preconditions
+    ///
+    ///   * must be a mutable partial row
+    unsafe fn deallocate(&mut self, idx: usize) {
+        debug_assert!(self.is_partial_row());
+
+        // Check that the value is set, and that it's variable length.
+        if !self.schema.columns()[idx].data_type().is_var_len()
+            || !self.is_set_unchecked(idx)
+            || self.is_null_unchecked(idx) {
+            return;
+        }
+
+        let data = self.data().offset(self.schema.column_offset(idx));
+        let (ptr, len, cap) = read_var_len_value(data);
+
+        // If capacity is greater than 0, then this is an owned value.
+        if cap > 0 {
+            // Drop the owned value.
+            drop(Vec::<u8>::from_raw_parts(ptr as *mut u8, len, cap));
         }
     }
 
     /// Checks that the column with the specified index has the expected type.
     fn check_column_for_write<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
-        if idx >= self.schema.columns().len() {
-            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                                      idx, self.schema)));
-        }
+        self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !V::can_write_to(column.data_type()) {
             return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
-                                                      V::data_type(),
+                                                      V::DATA_TYPE,
                                                       column)));
         }
         if V::is_nullable() && !column.is_nullable() {
@@ -275,10 +391,7 @@ impl <'data> Row<'data> {
 
     /// Checks that the column with the specified index is nullable.
     fn check_column_for_nullability(&self, idx: usize) -> Result<()> {
-        if idx >= self.schema.columns().len() {
-            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                                      idx, self.schema)));
-        }
+        self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !column.is_nullable() {
             return Err(Error::InvalidArgument(format!("column {:?} is not nullable", column)));
@@ -288,14 +401,11 @@ impl <'data> Row<'data> {
 
     /// Checks that the column with the specified index has the expected type.
     fn check_column_for_read<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
-        if idx >= self.schema.columns().len() {
-            return Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}",
-                                                      idx, self.schema)));
-        }
+        self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !V::can_read_from(column.data_type()) {
             return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
-                                                      V::data_type(),
+                                                      V::DATA_TYPE,
                                                       column)));
         }
         if V::is_nullable() && !column.is_nullable() {
@@ -334,22 +444,52 @@ impl <'data> Row<'data> {
 
 impl <'data> Clone for Row<'data> {
     fn clone(&self) -> Row<'data> {
-        // Copy the inline and borrowed data.
-        let mut row = Row {
-            data: self.data.clone(),
-            owned_data: VecMap::with_capacity(self.owned_data.len()),
-            schema: self.schema.clone(),
-            _marker: PhantomData::default(),
-        };
-
-        // Copy the owned data.
-        for (idx, data) in &self.owned_data {
+        if self.is_contiguous_row() {
+            // A cloned contiguous row can reference the same const data.
+            Row {
+                tagged_ptr: self.tagged_ptr,
+                schema: self.schema.clone(),
+                _marker: PhantomData::default(),
+            }
+        } else {
             unsafe {
-                row.set_unchecked(idx, data.to_owned());
+                // Copy the data and owned data.
+                let data_len = partial_row_data_len(&self.schema);
+                let mut data = slice::from_raw_parts(self.data(), data_len).to_owned();
+                debug_assert_eq!(data.len(), data_len);
+                debug_assert_eq!(data.capacity(), data_len);
+
+                let ptr = data.as_mut_ptr();
+
+                mem::forget(data);
+
+                // Copy each owned value to the new data array.
+                for (idx, column) in self.schema.columns().iter().enumerate() {
+                    if !column.data_type().is_var_len()
+                        || !self.is_set_unchecked(idx)
+                        || self.is_null_unchecked(idx) {
+                        continue;
+                    }
+
+                    let data = ptr.offset(self.schema.column_offset(idx));
+                    let (ptr, len, cap) = read_var_len_value(data);
+                    // If capacity is not 0, then this is a an owned value. Copy it and write the
+                    // new owned value back to the new row.
+                    if cap > 0 {
+                        // Copy it into a Vec and write it to the new data array.
+                        let copy: Vec<u8> = slice::from_raw_parts(ptr, len).to_owned();
+                        write_var_len_value(data, copy.as_ptr(), copy.len(), copy.capacity());
+                        mem::forget(copy);
+                    }
+                }
+
+                Row {
+                    tagged_ptr: ((ptr as i64) << 1) | 1,
+                    schema: self.schema.clone(),
+                    _marker: PhantomData::default(),
+                }
             }
         }
-
-        row
     }
 }
 
@@ -362,7 +502,6 @@ impl <'data> fmt::Debug for Row<'data> {
             }
         }
 
-
         struct CellWrapper<'a>(&'a Row<'a>, usize);
         impl <'a> fmt::Debug for CellWrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -373,8 +512,9 @@ impl <'data> fmt::Debug for Row<'data> {
         let mut map = f.debug_map();
         for (idx, column) in self.schema.columns().iter().enumerate() {
             // TODO: add iterator to bitmap.
-            if !bitmap::get(&*self.data, idx) { continue; }
-            map.entry(&ColumnWrapper(column.name()), &CellWrapper(self, idx));
+            if unsafe { self.is_set_unchecked(idx) } {
+                map.entry(&ColumnWrapper(column.name()), &CellWrapper(self, idx));
+            }
         }
         map.finish()
     }
@@ -386,33 +526,53 @@ impl <'data> cmp::PartialEq for Row<'data> {
             return false;
         }
 
-        let bitmap_len = self.schema.bitmap_len();
-        let row_offset = if self.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len };
-
-        // Check that all of the columns are set the same, and set null the same.
-        if self.data[..row_offset] != other.data[..row_offset] {
-            return false;
+        if self.tagged_ptr == other.tagged_ptr {
+            // TODO: is this right?  Can't a row be compared to itself?
+            debug_assert!(self.is_contiguous_row());
+            return true;
         }
 
-        for (idx, (column, &column_offset)) in self.schema.columns().iter().zip(self.schema.column_offsets()).enumerate() {
-            // Check if the column is unset or null.
-            if !bitmap::get(&*self.data, idx) ||
-               (column.is_nullable() && bitmap::get(&self.data[bitmap_len..], idx)) {
-                continue;
+        let num_columns = self.schema.columns().len();
+
+        unsafe {
+            // Check the is-set bitmap (if this is a partial row).
+            if self.is_partial_row() {
+                assert!(other.is_partial_row(), "TODO");
+                let is_set_offset = self.is_set_offset();
+                if !bitmap_eq(self.data().offset(is_set_offset), other.data().offset(is_set_offset), num_columns) {
+                    return false;
+                }
             }
 
-            let start = row_offset + column_offset;
-            let end = start + column.data_type().size();
-
-            if column.data_type().is_var_len() {
-                unsafe {
-                    let a: &[u8] = Value::from_data(&self.data[start..end]);
-                    let b: &[u8] = Value::from_data(&other.data[start..end]);
-                    if a != b {
-                        return false;
-                    }
+            // Check the is-null bitmap (if there are nullable columns).
+            if self.schema.has_nullable_columns() {
+                let offset = self.is_null_offset();
+                if !bitmap_eq(self.data().offset(offset), other.data().offset(offset), num_columns) {
+                    return false;
                 }
-            } else if self.data[start..end] != other.data[start..end] {
+            }
+
+            for (idx, (column, &offset)) in self.schema.columns().iter().zip(self.schema.column_offsets()).enumerate() {
+                // Check if the column is unset or null.
+                if !self.is_set_unchecked(idx) || self.is_null_unchecked(idx) {
+                    continue;
+                }
+
+                let size = column.data_type().size();
+                let offset = offset as isize;
+
+                let a = self.data().offset(offset);
+                let b = other.data().offset(offset);
+
+                if slice::from_raw_parts(a, size) == slice::from_raw_parts(b, size) {
+                    continue;
+                }
+
+                if column.data_type().is_var_len()
+                    && <&[u8] as Value>::read(a).unwrap() == <&[u8] as Value>::read(b).unwrap() {
+                    continue;
+                }
+
                 return false;
             }
         }
@@ -448,6 +608,48 @@ impl <'data> cmp::PartialOrd for Row<'data> {
         Some(cmp::Ordering::Equal)
         */
     }
+}
+
+impl <'data> Drop for Row<'data> {
+    fn drop(&mut self) {
+        if self.is_partial_row() {
+            unsafe {
+                for idx in 0..self.schema.columns().len() {
+                    self.deallocate(idx);
+                }
+                let data_len = partial_row_data_len(&self.schema);
+                Vec::from_raw_parts(self.data_mut(), data_len, data_len);
+            }
+        }
+    }
+}
+
+/// Returns the number of bytes required to hold a number of bits.
+fn bitmap_len(num_bits: usize) -> usize {
+    (num_bits + 7) / 8
+}
+
+/// Returns the value of the bit at the index.
+unsafe fn bitmap_get(bits: *const u8, idx: usize) -> bool {
+    *bits.offset((idx >> 3) as isize) & (1 << (idx & 7)) > 0
+}
+
+/// Sets the value of the bit at the index to 1.
+unsafe fn bitmap_set(bits: *mut u8, idx: usize) {
+    *bits.offset((idx >> 3) as isize) |= 1 << (idx & 7)
+}
+
+/// Sets the value of the bit at the index to 0.
+unsafe fn bitmap_clear(bits: *mut u8, idx: usize) {
+    *bits.offset((idx >> 3) as isize) &= !(1 << (idx & 7));
+}
+
+unsafe fn bitmap_eq(a: *const u8, b: *const u8, bits: usize) -> bool {
+    let bytes = bits >> 3;
+    let bytes_eq = slice::from_raw_parts(a, bytes) == slice::from_raw_parts(b, bytes);
+    let bytes = bytes as isize;
+    let remainder_eq = bits & 0x07 == 0 || *a.offset(bytes) & 0x07 == *b.offset(bytes) & 0x07;
+    bytes_eq && remainder_eq
 }
 
 #[cfg(test)]
@@ -610,23 +812,59 @@ mod tests {
         let mut row = schema.new_row();
 
         row.set::<i32>(0, 12).unwrap();
-        println!("row is set: {:?}", row.is_set(0));
         assert!(row.is_set(0).unwrap_or(false));
         assert_eq!(12, row.get::<i32>(0).unwrap());
 
-        row.set(10, "foo").unwrap();
-        assert_eq!("foo".to_owned(), row.get::<String>(10).unwrap());
+        // Test a borrowed string.
+        row.set(10, "foo_borrowed").unwrap();
+        assert_eq!("foo_borrowed".to_owned(), row.get::<String>(10).unwrap());
+
+        // Test an owned string.
+        row.set(10, "foo_owned".to_owned()).unwrap();
+        assert_eq!("foo_owned", row.get::<&str>(10).unwrap());
+
+        assert_eq!("{key: 12, string: \"foo_owned\"}",
+                   &format!("{:?}", row));
+
+        assert_eq!("{key: 12, string: \"foo_owned\"}",
+                   &format!("{:?}", row.clone()));
+
+        // Test another borrowed string to ensure the owned string is deallocated.
+        row.set(10, "foo_borrowed2").unwrap();
+        assert_eq!("foo_borrowed2", row.get::<&str>(10).unwrap());
+
+        row.set_null_by_name("nullable_i32").unwrap();
+
+        assert_eq!("{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
+                   &format!("{:?}", row));
+        assert_eq!("{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
+                   &format!("{:?}", row.clone()));
     }
 
     #[test]
     fn check_to_string() {
-
         fn rows_to_string(schema: schema::Schema) -> TestResult {
             let mut g = StdGen::new(rand::thread_rng(), 100);
 
             for _ in 0..10 {
                 let row = Row::arbitrary(&mut g, &schema);
                 format!("{:?}", row);
+            }
+
+            TestResult::passed()
+        }
+
+        quickcheck(rows_to_string as fn(schema::Schema) -> TestResult);
+    }
+
+    #[test]
+    fn check_eq() {
+        fn rows_to_string(schema: schema::Schema) -> TestResult {
+            let mut g = StdGen::new(rand::thread_rng(), 100);
+
+            for _ in 0..10 {
+                let row = Row::arbitrary(&mut g, &schema);
+                assert_eq!(row, row.clone());
             }
 
             TestResult::passed()

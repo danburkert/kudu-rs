@@ -21,7 +21,6 @@ use Error;
 use Row;
 use backoff::Backoff;
 use pb::HostPortPb;
-use row2;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
@@ -74,26 +73,6 @@ fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
 }
 
 pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
-    debug_assert!(row.is_set(idx).unwrap());
-    if row.is_null(idx).unwrap() {
-        return write!(f, "NULL")
-    }
-
-    match row.schema().columns()[idx].data_type() {
-        DataType::Bool => write!(f, "{}", row.get::<bool>(idx).unwrap()),
-        DataType::Int8 => write!(f, "{}", row.get::<i8>(idx).unwrap()),
-        DataType::Int16 => write!(f, "{}", row.get::<i16>(idx).unwrap()),
-        DataType::Int32 => write!(f, "{}", row.get::<i32>(idx).unwrap()),
-        DataType::Int64 => write!(f, "{}", row.get::<i64>(idx).unwrap()),
-        DataType::Timestamp => fmt_timestamp(f, row.get::<SystemTime>(idx).unwrap()),
-        DataType::Float => write!(f, "{}", row.get::<f32>(idx).unwrap()),
-        DataType::Double => write!(f, "{}", row.get::<f64>(idx).unwrap()),
-        DataType::Binary => fmt_hex(f, row.get::<&[u8]>(idx).unwrap()),
-        DataType::String => write!(f, "{:?}", row.get::<&str>(idx).unwrap()),
-    }
-}
-
-pub fn fmt_cell2(f: &mut fmt::Formatter, row: &row2::Row, idx: usize) -> fmt::Result {
     debug_assert!(row.is_set(idx).unwrap());
     if row.is_null(idx).unwrap() {
         return write!(f, "NULL")

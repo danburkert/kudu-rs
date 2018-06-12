@@ -59,7 +59,7 @@ impl <M> RequestBody for M where M: Message {
     }
 }
 
-type RpcResult = Result<(Bytes, Vec<Bytes>), Error>;
+type RpcResult = Result<(Bytes, Vec<BytesMut>), Error>;
 
 #[must_use = "futures do nothing unless polled"]
 pub struct RpcFuture<Resp> where Resp: Message + Default {
@@ -78,12 +78,12 @@ impl <Resp> RpcFuture<Resp> where Resp: Message + Default {
 }
 
 impl <Resp> Future for RpcFuture<Resp> where Resp: Message + Default {
-    type Item = (Resp, Vec<Bytes>);
+    type Item = (Resp, Vec<BytesMut>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let (bytes, sidecars) = try_ready!(self.receiver.poll().map_err(|_| -> Error { unreachable!("RPC dropped"); }))?;
-        let body = Resp::decode_length_delimited(&bytes)?;
+        let body = Resp::decode(&bytes).expect("poll");
 
         trace!("RpcFuture complete: {:?}", body);
 

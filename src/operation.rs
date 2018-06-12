@@ -1,4 +1,5 @@
 use std::fmt;
+use std::slice;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -11,6 +12,7 @@ use Value;
 use bitmap;
 use pb::RowOperationsPb;
 use pb::row_operations_pb::{Type as OperationTypePb};
+use value::read_var_len_value;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OperationKind {
@@ -90,28 +92,41 @@ impl OperationEncoder {
     }
 
     pub fn encode_row(&mut self, op_type: OperationTypePb, row: &Row) {
-        self.data.reserve(1 + row.data.len());
-        self.data.push(op_type as u8);
-        let bitmap_len = row.schema.bitmap_len();
-        let (bitmaps, row_data) = row.data.split_at(
-            if row.schema.has_nullable_columns() { bitmap_len * 2 } else { bitmap_len });
-        self.data.extend_from_slice(bitmaps);
-        for (idx, column) in row.schema.columns().iter().enumerate() {
-            if !bitmap::get(bitmaps, idx) ||
-               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
+        let schema = row.schema();
+        let bitmap_len = schema.bitmap_len();
+        self.data.reserve(1
+                          + schema.row_len()
+                          + schema.has_nullable_columns() as usize * bitmap_len);
 
-            let data_type = column.data_type();
-            let column_offset = row.schema.column_offsets()[idx];
-            let width = data_type.size();
-            if data_type.is_var_len() {
-                let data: &[u8] = unsafe { Value::from_data(&row_data[column_offset..]) };
-                let mut buf = [0u8; 16];
-                LittleEndian::write_u64(&mut buf[..], self.indirect_data.len() as u64);
-                LittleEndian::write_u64(&mut buf[8..], data.len() as u64);
-                self.data.extend_from_slice(&buf[..]);
-                self.indirect_data.extend_from_slice(data);
-            } else {
-                self.data.extend_from_slice(&row_data[column_offset..][..width]);
+        self.data.push(op_type as u8);
+
+        match row.is_set_bitmap() {
+            Some(bitmap) => self.data.extend_from_slice(bitmap),
+            None => {
+                let len = self.data.len() + schema.bitmap_len();
+                self.data.resize(len, 0xFF);
+            },
+        }
+        self.data.extend_from_slice(row.is_null_bitmap());
+
+        unsafe {
+            for (idx, column) in row.schema().columns().iter().enumerate() {
+                if !row.is_set_unchecked(idx) || (column.is_nullable() && row.is_null_unchecked(idx)) {
+                    continue;
+                }
+                let data_type = column.data_type();
+                if data_type.is_var_len() {
+                    let data = row.get::<&[u8]>(idx).unwrap();
+                    let mut buf = [0u8; 16];
+                    LittleEndian::write_u64(&mut buf[..], self.indirect_data.len() as u64);
+                    LittleEndian::write_u64(&mut buf[8..], data.len() as u64);
+                    self.data.extend_from_slice(&buf[..]);
+                    self.indirect_data.extend_from_slice(data);
+                } else {
+                    let column_offset = row.schema().column_offsets()[idx] as isize;
+                    let data = slice::from_raw_parts(row.data().offset(column_offset), data_type.size());
+                    self.data.extend_from_slice(data);
+                }
             }
         }
     }
@@ -119,27 +134,28 @@ impl OperationEncoder {
     /// Returns the encoded length for the row.
     /// TODO: it's pretty wasteful to do this as a separate step than encode_row.
     pub fn encoded_len(row: &Row) -> usize {
-        let mut len = 0;
+        let mut len = 1; // op type
 
-        let bitmap_len = row.schema.bitmap_len();
+        let bitmap_len = row.schema().bitmap_len();
         len += bitmap_len;
-        if row.schema.has_nullable_columns() {
+        if row.schema().has_nullable_columns() {
             len += bitmap_len;
         }
 
-        let (bitmaps, row_data) = row.data.split_at(len);
-        for (idx, column) in row.schema.columns().iter().enumerate() {
-            if !bitmap::get(bitmaps, idx) ||
-               (column.is_nullable() && bitmap::get(&bitmaps[bitmap_len..], idx)) { continue; }
+        for (idx, column) in row.schema().columns().iter().enumerate() {
+            unsafe {
+                if !row.is_set_unchecked(idx) || (column.is_nullable() && row.is_null_unchecked(idx)) {
+                    continue;
+                }
+            }
 
             len += column.data_type().size();
             if column.data_type().is_var_len() {
-                let offset = row.schema.column_offsets()[idx];
-                let slice: &[u8] = unsafe { Value::from_data(&row_data[offset..]) };
-                len += slice.len()
+                len += row.get::<&[u8]>(idx).unwrap().len();
             }
         }
-        len + 1 // op type
+
+        len
     }
 
     pub fn len(&self) -> usize {
@@ -174,7 +190,7 @@ impl <'a> Iterator for OperationDecoder<'a> {
     type Item = Operation<'a>;
 
     fn next(&mut self) -> Option<Operation<'a>> {
-        let Self { schema, data, indirect_data, ref mut offset } = *self;
+        let Self { schema, data, ref mut offset, .. } = *self;
 
         if *offset >= data.len() {
             return None;
@@ -203,32 +219,32 @@ impl <'a> Iterator for OperationDecoder<'a> {
             }
 
             unsafe {
+                let data = data.as_ptr().offset(*offset as isize);
                 match column.data_type() {
                     DataType::Bool => {
-                        row.set_unchecked(idx, bool::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, bool::read(data).unwrap());
                     },
                     DataType::Int8 => {
-                        row.set_unchecked(idx, i8::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, i8::read(data).unwrap());
                     },
                     DataType::Int16 => {
-                        row.set_unchecked(idx, i16::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, i16::read(data).unwrap());
                     },
                     DataType::Int32 => {
-                        row.set_unchecked(idx, i32::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, i32::read(data).unwrap());
                     },
                     DataType::Int64 | DataType::Timestamp => {
-                        row.set_unchecked(idx, i64::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, i64::read(data).unwrap());
                     },
                     DataType::Float => {
-                        row.set_unchecked(idx, f32::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, f32::read(data).unwrap());
                     },
                     DataType::Double => {
-                        row.set_unchecked(idx, f64::from_data(&data[*offset..]));
+                        row.set_unchecked(idx, f64::read(data).unwrap());
                     },
                     DataType::Binary | DataType::String => {
-                        let indirect_offset = LittleEndian::read_u64(&data[*offset..]) as usize;
-                        let len = LittleEndian::read_u64(&data[*offset + 8..]) as usize;
-                        row.set_unchecked(idx, &indirect_data[indirect_offset..][..len]);
+                        let (ptr, len, _) = read_var_len_value(data);
+                        row.set_unchecked(idx, slice::from_raw_parts(ptr, len));
                     },
                 }
             }

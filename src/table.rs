@@ -29,7 +29,7 @@ use Writer;
 use WriterConfig;
 use meta_cache::TableLocations;
 use partition::PartitionSchema;
-use scanner::Scanner;
+use scanner::ScanBuilder;
 
 #[derive(Clone)]
 pub struct Table {
@@ -83,8 +83,8 @@ impl Table {
         Writer::new(self.clone(), config)
     }
 
-    pub fn new_scanner(&self) -> Scanner {
-        Scanner::new(self.table_locations.clone())
+    pub fn scan_builder(&self) -> ScanBuilder {
+        ScanBuilder::new(self.schema.clone(), self.table_locations.clone())
     }
 
     /*

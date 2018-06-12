@@ -1,7 +1,7 @@
 use std::mem;
 use std::time::Instant;
 
-use bytes::Bytes;
+use bytes::BytesMut;
 use futures::{
     Async,
     Future,
@@ -77,7 +77,7 @@ where Req: Message + 'static,
 }
 
 impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
-    type Item = (Resp, Vec<Bytes>);
+    type Item = (Resp, Vec<BytesMut>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {

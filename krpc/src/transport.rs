@@ -25,7 +25,10 @@ use futures::{
     Poll,
 };
 use prost::Message;
-use prost::encoding::encoded_len_varint;
+use prost::encoding::{
+    encoded_len_varint,
+    decode_varint,
+};
 use tokio::net::{
     ConnectFuture,
     TcpStream,
@@ -46,7 +49,7 @@ use pb::rpc::{
 const INITIAL_CAPACITY: usize = 8 * 1024;
 const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
 
-pub type TransportResponse = (Bytes, Vec<Bytes>);
+pub type TransportResponse = (Bytes, Vec<BytesMut>);
 
 /// `Transport` handles sending and receiving raw KRPC messages to a TCP stream.
 ///
@@ -147,7 +150,7 @@ impl Transport {
                 }.into());
             }
 
-            self.send_buf.put_u32::<BigEndian>(len as u32);
+            self.send_buf.put_u32_be(len as u32);
             Message::encode_length_delimited(&self.request_header, &mut self.send_buf).unwrap();
             body.encode_length_delimited(&mut self.send_buf);
             Ok(())
@@ -188,7 +191,7 @@ impl Transport {
                 try_ready!(self.poll_fill(needed));
             }
             let _ = self.recv_buf.split_to(4);
-            let buf = self.recv_buf.split_to(msg_len).freeze();
+            let mut buf = self.recv_buf.split_to(msg_len);
 
             // Decode the header.
             let header_len = {
@@ -198,25 +201,40 @@ impl Transport {
                 cursor.position() as usize
             };
 
-            let mut buf = buf.slice_from(header_len);
+            buf.split_to(header_len);
             let call_id = self.response_header.call_id;
             if self.response_header.is_error() {
                 let error = Error::Rpc(ErrorStatusPb::decode_length_delimited(buf)?.into());
                 Ok(Async::Ready((call_id, Err(error))))
-            } else if self.response_header.sidecar_offsets.is_empty() {
-                Ok(Async::Ready((call_id, Ok((buf, Vec::new())))))
             } else {
-                let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
-                let body = buf.split_to(prev_offset + 1);
+                // KRPC inserts a len integer before the main message whose value is the length of
+                // the main message and sidecars. This is completely useless since this can be
+                // solved for easily using the header length and the overall length. Unfortunately
+                // stripping this integer is not trivial, since it's variable length. In order to
+                // know its width we are forced to read it. Who designed this crap?
+                //
+                // There's probably a way to solve for the width of the varint based on the
+                // remaining length of the buffer, but it's unfortunately not as simple as just
+                // calling encoded_len_varint since the buffer contains the varint itself.
+                let main_message_len = decode_varint(&mut (&buf).into_buf()).unwrap();
+                buf.split_to(encoded_len_varint(main_message_len));
 
                 let mut sidecars = Vec::new();
-                for &offset in &self.response_header.sidecar_offsets[1..] {
-                    let offset = offset as usize;
-                    // TODO(dan): is the + 1 correct? Needs test coverage.
-                    sidecars.push(buf.split_to(offset - prev_offset + 1));
-                    prev_offset = offset;
+                let body;
+
+                if self.response_header.sidecar_offsets.is_empty() {
+                    body = buf.freeze();
+                } else {
+                    let mut prev_offset = self.response_header.sidecar_offsets[0] as usize;
+                    body = buf.split_to(prev_offset).freeze();
+
+                    for &offset in &self.response_header.sidecar_offsets[1..] {
+                        let offset = offset as usize;
+                        sidecars.push(buf.split_to(offset - prev_offset));
+                        prev_offset = offset;
+                    }
+                    sidecars.push(buf);
                 }
-                sidecars.push(buf);
 
                 Ok(Async::Ready((call_id, Ok((body, sidecars)))))
             }

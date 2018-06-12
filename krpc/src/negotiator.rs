@@ -101,7 +101,7 @@ impl Inner {
                             "Received illegal RPC sidecars during negotiation".to_string()));
                 }
                 self.pb.clear();
-                self.pb.merge_length_delimited(body)?;
+                self.pb.merge(body)?;
                 info!("{:?}: received negotiation message: {:?}", self, self.pb);
                 Ok(Async::Ready(()))
             },

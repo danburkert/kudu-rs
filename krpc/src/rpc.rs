@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::sync::oneshot;
 
 use Error;
@@ -35,7 +35,7 @@ impl Rpc {
     }
 
     /// Completes the RPC.
-    pub fn complete(self, body: Bytes, sidecars: Vec<Bytes>) {
+    pub fn complete(self, body: Bytes, sidecars: Vec<BytesMut>) {
         let _ = self.completer.send(Ok((body, sidecars)));
     }
 
