@@ -15,7 +15,6 @@ krpc = { path = "../krpc" }
 prost = "0.2"
 prost-derive = "0.2"
 prost-types = "0.2"
-tacho = "0.4"
 tokio = "0.1"
 
 [build-dependencies]

@@ -16,7 +16,6 @@ use futures::{
 };
 use futures::stream::FuturesUnordered;
 use itertools::Itertools;
-use tacho;
 use threadpool;
 
 use Error;
@@ -35,7 +34,6 @@ pub(crate) struct Connector {
     connecting: FuturesUnordered<TransportNew>,
     negotiating: FuturesUnordered<Negotiator>,
     errors: Vec<Error>,
-    metrics: Option<Metrics>,
 }
 
 impl Connector {
@@ -45,8 +43,6 @@ impl Connector {
         let mut connecting = FuturesUnordered::new();
         let negotiating = FuturesUnordered::new();
         let errors = Vec::new();
-
-        let metrics = options.scope.as_ref().cloned().map(Metrics::new);
 
         for hostport in hostports {
             // Attempt to short-circuit DNS by parsing the host as an IP addr.
@@ -69,7 +65,6 @@ impl Connector {
             connecting,
             negotiating,
             errors,
-            metrics,
         }
     }
 }
@@ -93,9 +88,6 @@ impl Future for Connector {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => break,
                 Err(error) => {
                     warn!("{}", error);
-                    if let Some(ref mut metrics) = self.metrics {
-                        metrics.resolve_errors.incr(1);
-                    }
                     self.errors.push(error.into())
                 },
             }
@@ -111,9 +103,6 @@ impl Future for Connector {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => break,
                 Err(error) => {
                     warn!("{}", error);
-                    if let Some(ref mut metrics) = self.metrics {
-                        metrics.connect_errors.incr(1);
-                    }
                     self.errors.push(error.into())
                 },
             }
@@ -129,9 +118,6 @@ impl Future for Connector {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => break,
                 Err(error) => {
                     warn!("{}", error);
-                    if let Some(ref mut metrics) = self.metrics {
-                        metrics.negotiate_errors.incr(1);
-                    }
                     self.errors.push(error);
                 },
             }
@@ -149,31 +135,5 @@ impl Future for Connector {
         }
 
         Ok(Async::NotReady)
-    }
-}
-
-struct Metrics {
-    /// Number of failures while attempting DNS resolution.
-    resolve_errors: tacho::Counter,
-
-    /// Number of failures while attempting to connect.
-    connect_errors: tacho::Counter,
-
-    /// Number of failures while negotiating.
-    negotiate_errors: tacho::Counter,
-}
-
-impl Metrics {
-    fn new(scope: tacho::Scope) -> Metrics {
-        let scope = scope.prefixed("krpc");
-        let resolve_errors = scope.clone().labeled("kind", "resolve").counter("errors");
-        let connect_errors = scope.clone().labeled("kind", "connect").counter("errors");
-        let negotiate_errors = scope.labeled("kind", "negotiate").counter("errors");
-
-        Metrics {
-            resolve_errors,
-            connect_errors,
-            negotiate_errors,
-        }
     }
 }

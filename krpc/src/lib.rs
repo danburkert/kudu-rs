@@ -4,7 +4,6 @@ extern crate fnv;
 extern crate itertools;
 extern crate prost;
 extern crate prost_types;
-extern crate tacho;
 extern crate tokio;
 extern crate tokio_threadpool as threadpool;
 
@@ -107,8 +106,6 @@ pub struct Options {
     ///
     /// Defaults to true.
     pub nodelay: bool,
-
-    pub scope: Option<tacho::Scope>,
 }
 
 impl Default for Options {
@@ -117,7 +114,6 @@ impl Default for Options {
             max_rpcs_in_flight: 32,
             max_message_length: 5 * 1024 * 1024,
             nodelay: true,
-            scope: None,
         }
     }
 }

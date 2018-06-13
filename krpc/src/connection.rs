@@ -1,14 +1,13 @@
 use std::cmp;
 use std::fmt;
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use fnv::FnvHashMap;
 use futures::{
     Async,
     Poll,
 };
-use tacho;
 
 use Error;
 use Options;
@@ -38,8 +37,6 @@ pub(crate) struct Connection {
 
     /// The next call id.
     next_call_id: i32,
-
-    metrics: Option<Metrics>,
 }
 
 impl Connection {
@@ -53,7 +50,6 @@ impl Connection {
             in_flight_rpcs: FnvHashMap::default(),
             throttle,
             next_call_id: 0,
-            metrics: options.scope.as_ref().cloned().map(Metrics::new),
         }
     }
 
@@ -150,9 +146,6 @@ impl Connection {
                 Ok(Async::Ready((call_id, Ok((body, sidecars))))) => {
                     self.unthrottle();
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
-                        if let Some(ref metrics) = self.metrics {
-                            metrics.successful_rpcs.add(duration_to_us(now - rpc.timestamp));
-                        }
                         rpc.complete(body, sidecars);
                     }
                 },
@@ -167,9 +160,6 @@ impl Connection {
                     let is_fatal = error.is_fatal();
 
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
-                        if let Some(ref metrics) = self.metrics {
-                            metrics.failed_rpcs.add(duration_to_us(now - rpc.timestamp));
-                        }
                         error!("{:?}: {:?} failed: {}", self, rpc, error);
                         rpc.fail(error);
                     } else {
@@ -197,42 +187,4 @@ impl fmt::Debug for Connection {
                                                  self.transport.recv_buf_len()));
         debug.finish()
     }
-}
-
-struct Metrics {
-
-    // in_flight_rpcs: tacho::Gauge,
-    // in_flight_capacity: tacho::Gauge,
-
-    /// Successful RPC statistics.
-    successful_rpcs: tacho::Stat,
-
-    /// Failed RPC statistics.
-    failed_rpcs: tacho::Stat,
-
-    /// Timed-out RPC statistics.
-    timed_out_rpcs: tacho::Stat,
-
-    /// Canceled RPC statistics.
-    canceled_rpcs: tacho::Stat,
-}
-
-impl Metrics {
-    fn new(scope: tacho::Scope) -> Metrics {
-        let successful_rpcs = scope.clone().labeled("result", "success").stat("rpc");
-        let failed_rpcs = scope.clone().labeled("result", "failed").stat("rpc");
-        let timed_out_rpcs = scope.clone().labeled("result", "timed_out").stat("rpc");
-        let canceled_rpcs = scope.labeled("result", "canceled").stat("rpc");
-
-        Metrics {
-            successful_rpcs: successful_rpcs,
-            failed_rpcs: failed_rpcs,
-            timed_out_rpcs: timed_out_rpcs,
-            canceled_rpcs: canceled_rpcs,
-        }
-    }
-}
-
-fn duration_to_us(duration: Duration) -> u64 {
-    duration.as_secs() * 1_000_000 + duration.subsec_nanos() as u64 / 1000
 }
