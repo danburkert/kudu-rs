@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn test_connect_to_cluster() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let run = |num_masters: u32| {
             let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                                 .num_masters(num_masters)
@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn test_connect_to_cluster_unavailable() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
 
         let run = |num_masters: u32| -> Error {
             let mut runtime = Runtime::new().unwrap();
@@ -822,7 +822,7 @@ mod tests {
     // Test cluster connection when one of the replicas is down.
     #[test]
     fn test_connect_to_cluster_failover() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(3)
                                                              .num_tservers(0));
@@ -840,7 +840,7 @@ mod tests {
     /// Tests that RPCs are timed out when the leader is unavailable.
     #[test]
     fn timeout() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let test_reactor = util::TestReactor::default();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(2)
@@ -869,7 +869,7 @@ mod tests {
     /// current leader becomes unreachable.
     #[test]
     fn leader_failover() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let test_reactor = util::TestReactor::default();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(3)
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn single_tablet() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn multi_tablet() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn multi_tablet_concurrent() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
@@ -1029,7 +1029,7 @@ mod tests {
 
     #[test]
     fn non_covered_ranges() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 

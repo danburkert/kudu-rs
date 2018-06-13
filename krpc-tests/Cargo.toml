@@ -9,15 +9,15 @@ doctest = false
 
 [dependencies]
 bytes = "0.4"
-env_logger = "0.4"
+env_logger = "0.5"
 futures = "0.1"
 krpc = { path = "../krpc" }
-prost = "0.2"
-prost-derive = "0.2"
-prost-types = "0.2"
+prost = "0.4"
+prost-derive = "0.4"
+prost-types = "0.4"
 tokio = "0.1"
 
 [build-dependencies]
-env_logger = "0.4"
+env_logger = "0.5"
 krpc-build = { path = "../krpc-build" }
-prost-build = "0.2"
+prost-build = "0.4"

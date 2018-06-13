@@ -4,7 +4,7 @@ extern crate prost_build;
 pub struct KrpcServiceGenerator;
 
 impl prost_build::ServiceGenerator for KrpcServiceGenerator {
-    fn generate(&self, service: prost_build::Service, buf: &mut String) {
+    fn generate(&mut self, service: prost_build::Service, buf: &mut String) {
             // Generate a trait for the service.
             service.comments.append_with_indent(0, buf);
             buf.push_str(&format!("pub struct {};\n", &service.name));

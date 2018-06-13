@@ -42,7 +42,7 @@ pub mod security {
 }
 
 fn init(mut options: Options) -> (CalculatorServer, Proxy, tacho::Reporter) {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
 
     let (scope, reporter) = tacho::new();
     options.scope = Some(scope);

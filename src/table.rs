@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn create_table_builder() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
 
         let mut table_builder = TableBuilder::new("t", simple_schema());
 
@@ -411,7 +411,7 @@ mod tests {
     /*
     #[test]
     fn list_tablets() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let cluster = MiniCluster::new(MiniClusterConfig::default()
                                                          .num_masters(1)
                                                          .num_tservers(3));

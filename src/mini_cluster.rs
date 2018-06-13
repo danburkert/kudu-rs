@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_spawn_mini_cluster() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
 
         cluster.stop_cluster();

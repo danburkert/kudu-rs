@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn timestamp_conversion() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
 
         fn roundtrip(us: i64) -> TestResult {
             TestResult::from_bool(us == time_to_us(us_to_time(us)))
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_format_timestamp() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_is_local_addr() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let addr = "127.0.1.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
         assert!(is_local_addr(&addr));
         let addr = "127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap().ip();

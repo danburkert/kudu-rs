@@ -13,10 +13,10 @@ use curl::easy::Easy;
 use flate2::bufread::GzDecoder;
 use tar::Archive;
 
-const VERSION: &'static str = "1.7.0";
+const VERSION: &'static str = "1.7.1";
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
     let target = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR environment variable not set"));
     let dir = target.join(format!("kudu-{}", VERSION));
 

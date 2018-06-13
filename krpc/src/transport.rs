@@ -24,10 +24,10 @@ use futures::{
     Future,
     Poll,
 };
-use prost::Message;
-use prost::encoding::{
-    encoded_len_varint,
-    decode_varint,
+use prost::{
+    Message,
+    decode_length_delimiter,
+    length_delimiter_len,
 };
 use tokio::net::{
     ConnectFuture,
@@ -136,8 +136,8 @@ impl Transport {
 
             let header_len = Message::encoded_len(&self.request_header);
             let body_len = body.encoded_len();
-            let len = encoded_len_varint(header_len as u64)
-                    + encoded_len_varint(body_len as u64)
+            let len = length_delimiter_len(header_len)
+                    + length_delimiter_len(body_len)
                     + header_len
                     + body_len;
 
@@ -215,9 +215,9 @@ impl Transport {
                 //
                 // There's probably a way to solve for the width of the varint based on the
                 // remaining length of the buffer, but it's unfortunately not as simple as just
-                // calling encoded_len_varint since the buffer contains the varint itself.
-                let main_message_len = decode_varint(&mut (&buf).into_buf()).unwrap();
-                buf.split_to(encoded_len_varint(main_message_len));
+                // calling length_delimiter_len since the buffer contains the varint itself.
+                let main_message_len = decode_length_delimiter(&mut (&buf).into_buf()).unwrap();
+                buf.split_to(length_delimiter_len(main_message_len));
 
                 let mut sidecars = Vec::new();
                 let body;

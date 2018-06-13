@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn table_lifecycle() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn list_servers() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(3)
                                                              .num_tservers(3));
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn alter_table() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(1)
                                                              .num_tservers(1));

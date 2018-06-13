@@ -559,7 +559,7 @@ mod test {
 
     #[test]
     fn insert() {
-        let _ = env_logger::init();
+        let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
