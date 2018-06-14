@@ -14,7 +14,6 @@ use futures::{
     Future,
     Poll,
     Stream,
-    future,
     stream,
 };
 use futures::sync::{mpsc, oneshot};
@@ -44,6 +43,7 @@ use pb::master::{
     TabletLocationsPb,
 };
 use table::Table;
+use tablet::TabletInfo;
 use partition::{
     IntoPartitionKey,
     PartitionKey,
@@ -327,11 +327,11 @@ impl TableLocations {
         TableLocations { entries, sender }
     }
 
-    pub(crate) fn entry(&self, partition_key: &[u8]) -> impl Future<Item=Entry, Error=Error> + 'static {
+    pub(crate) fn entry(&self, partition_key: &[u8]) -> Lookup<Entry> {
         self.extract(partition_key, Entry::clone)
     }
 
-    pub(crate) fn tablet_id(&self, partition_key: &[u8]) -> impl Future<Item=Option<TabletId>, Error=Error> {
+    pub(crate) fn tablet_id(&self, partition_key: &[u8]) -> Lookup<Option<TabletId>> {
         self.extract(partition_key, |entry| {
             if let Entry::Tablet(ref tablet) = *entry {
                 Some(tablet.id())
@@ -341,35 +341,51 @@ impl TableLocations {
         })
     }
 
-    pub(crate) fn tablet(&self, partition_key: &[u8]) -> impl Future<Item=Option<Arc<Tablet>>, Error=Error> {
+    pub(crate) fn tablet(&self, partition_key: &[u8]) -> Lookup<Option<Arc<Tablet>>> {
         self.extract(partition_key, |entry| match *entry {
             Entry::Tablet(ref tablet) => Some(Arc::clone(tablet)),
             Entry::NonCoveredRange { .. } => None,
         })
     }
 
-    fn extract<T>(&self,
-                  partition_key: &[u8],
-                  extractor: fn(&Entry) -> T)
-                  -> impl Future<Item=T, Error=Error> {
-
+    fn extract<T>(&self, partition_key: &[u8], extractor: fn(&Entry) -> T) -> Lookup<T> {
         if let Some(entry) = get_entry(&self.entries.lock(), partition_key) {
-            return future::Either::A(future::ok(extractor(entry)));
+            Lookup::Hit(Some(extractor(entry)))
+        } else {
+            let partition_key = partition_key.into_partition_key();
+            let (send, recv) = oneshot::channel();
+            self.sender.unbounded_send((partition_key, send)).expect("TableLocationsTask finished");
+            Lookup::Miss { recv, extractor }
         }
-
-        let partition_key = partition_key.into_partition_key();
-        let (send, recv) = oneshot::channel();
-
-        self.sender.unbounded_send((partition_key, send)).expect("TableLocationsTask finished");
-        future::Either::B(recv.then(move |result| match result {
-            Ok(Ok(entry)) => Ok(extractor(&entry)),
-            Ok(Err(error)) => Err(error),
-            Err(_) => unreachable!("TableLocationsTask finished"),
-        }))
     }
 
     pub(crate) fn clear(&self) {
         self.entries.lock().clear()
+    }
+}
+
+pub(crate) enum Lookup<T> {
+    Hit(Option<T>),
+    Miss {
+        recv: oneshot::Receiver<Result<Entry>>,
+        extractor: fn(&Entry) -> T,
+    },
+}
+
+impl <T> Future for Lookup<T> {
+    type Item = T;
+    type Error = Error;
+    fn poll(&mut self) -> Poll<T, Error> {
+        match self {
+            Lookup::Hit(ref mut item) => Ok(Async::Ready(item.take().unwrap())),
+            Lookup::Miss { ref mut recv, extractor } => {
+                match recv.poll() {
+                    Ok(Async::Ready(entry)) => Ok(Async::Ready(extractor(&entry?))),
+                    Ok(Async::NotReady) => Ok(Async::NotReady),
+                    Err(_) => unreachable!("TableLocationsTask finished"),
+                }
+            },
+        }
     }
 }
 
@@ -481,22 +497,22 @@ impl TableLocationsTask {
             let replicas = pb.replicas.into_iter().map(move |pb| {
                 let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
                 let is_leader = pb.role() == RaftRole::Leader;
+                let rpc_addrs = pb.ts_info
+                                  .rpc_addresses
+                                  .into_iter()
+                                  .map(HostPort::from)
+                                  .collect::<Vec<_>>()
+                                  .into_boxed_slice();
+
                 let proxy = self.tablet_servers
                                 .lock()
                                 .entry(id)
-                                .or_insert_with(move || {
-                                    let hostports = pb.ts_info
-                                                      .rpc_addresses
-                                                      .into_iter()
-                                                      .map(HostPort::from)
-                                                      .collect::<Vec<_>>()
-                                                      .into_boxed_slice();
-                                    krpc::Proxy::spawn(hostports, self.options.rpc.clone())
-                                })
+                                .or_insert_with(|| krpc::Proxy::spawn(rpc_addrs.clone(), self.options.rpc.clone()))
                                 .clone();
 
                 Ok(TabletReplica {
                     id,
+                    rpc_addrs,
                     proxy,
                     is_stale: AtomicBool::new(false),
                     is_leader: AtomicBool::new(is_leader)
@@ -661,6 +677,10 @@ impl Tablet {
     pub fn upper_bound(&self) -> &PartitionKey {
         &self.upper_bound
     }
+
+    pub fn info(&self) -> Result<TabletInfo> {
+        unimplemented!()
+    }
 }
 
 impl ReplicaSet for Arc<Tablet> {
@@ -674,6 +694,7 @@ impl ReplicaSet for Arc<Tablet> {
 /// Tablet replica belonging to a tablet server.
 pub(crate) struct TabletReplica {
     id: TabletServerId,
+    rpc_addrs: Box<[HostPort]>,
     proxy: krpc::Proxy,
     is_leader: AtomicBool,
     is_stale: AtomicBool,

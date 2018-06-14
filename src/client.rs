@@ -200,12 +200,12 @@ impl Client {
     }
 
     /// Lists all tables and their associated table ID.
-    pub fn list_tables(&mut self) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
+    pub fn tables(&mut self) -> impl Future<Item=Vec<(String, TableId)>, Error=Error> {
         self.do_list_tables(Default::default())
     }
 
     /// Lists all tables with the a name matching the provided prefix, and their associated table ID.
-    pub fn list_tables_with_prefix<S>(&mut self, name_prefix: S) -> impl Future<Item=Vec<(String, TableId)>, Error=Error>
+    pub fn tables_with_prefix<S>(&mut self, name_prefix: S) -> impl Future<Item=Vec<(String, TableId)>, Error=Error>
     where S: Into<String> {
         self.do_list_tables(Arc::new(ListTablesRequestPb { name_filter: Some(name_prefix.into()) }))
     }
@@ -222,7 +222,7 @@ impl Client {
         })
     }
 
-    pub fn list_masters(&mut self) -> impl Future<Item=Vec<MasterInfo>, Error=Error> {
+    pub fn masters(&mut self) -> impl Future<Item=Vec<MasterInfo>, Error=Error> {
         let call = MasterService::list_masters(Default::default(), self.deadline());
 
         self.meta_cache.master_rpc(call).and_then(|resp| {
@@ -234,7 +234,7 @@ impl Client {
         })
     }
 
-    pub fn list_tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServerInfo>, Error=Error> {
+    pub fn tablet_servers(&mut self) -> impl Future<Item=Vec<TabletServerInfo>, Error=Error> {
         let call = MasterService::list_tablet_servers(Default::default(), self.deadline());
 
         self.meta_cache.master_rpc(call).and_then(|resp| {
@@ -323,11 +323,11 @@ mod tests {
         let table = runtime.block_on(client.open_table("table_lifecycle_renamed")).expect("open_table");
         assert_eq!(table_id, table.id());
 
-        let tables = runtime.block_on(client.list_tables()).expect("list_tables");
+        let tables = runtime.block_on(client.tables()).expect("tables");
         assert_eq!(vec![("table_lifecycle_renamed".to_string(), table_id)], tables);
 
         runtime.block_on(client.delete_table_by_id(table_id)).expect("delete_table");
-        assert!(runtime.block_on(client.list_tables()).expect("list_tables").is_empty());
+        assert!(runtime.block_on(client.tables()).expect("tables").is_empty());
     }
 
     #[test]
@@ -341,10 +341,10 @@ mod tests {
         let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
                                 .expect("client");
 
-        let tablet_servers = runtime.block_on(client.list_tablet_servers()).expect("list_table_servers");
+        let tablet_servers = runtime.block_on(client.tablet_servers()).expect("list_table_servers");
         assert_eq!(3, tablet_servers.len());
 
-        let masters = runtime.block_on(client.list_masters()).expect("list_masters");
+        let masters = runtime.block_on(client.masters()).expect("masters");
         assert_eq!(3, masters.len());
     }
 

@@ -16,14 +16,19 @@ use futures::{
     Poll,
 };
 
+use Column;
+use Error;
+use Result;
+use Row;
+use ScannerId;
+use Schema;
+use TabletId;
 use meta_cache::{
+    Lookup,
     Entry,
     TableLocations,
     Tablet,
 };
-
-use Error;
-use ScannerId;
 use pb::{
     ColumnSchemaPb,
     ExpectField,
@@ -41,11 +46,6 @@ use replica::{
     Speculation,
 };
 use backoff::Backoff;
-use Schema;
-use Column;
-use Result;
-use TabletId;
-use Row;
 
 #[derive(Clone)]
 pub struct ScanBuilder {
@@ -101,15 +101,13 @@ impl ScanBuilder {
     }
 
     pub fn build(self) -> Scan {
-        let lookup = Box::new(self.table_locations.entry(&[]));
-
         let mut columns = Vec::new();
         for idx in self.projected_columns {
             columns.push(self.table_schema.columns()[idx].clone());
         }
         let projected_schema = Schema::new(columns, 0);
 
-        let state = ScannerState::Lookup { lookup };
+        let state = ScannerState::Lookup(self.table_locations.entry(&[]));
         Scan {
             projected_schema,
             table_locations: self.table_locations,
@@ -125,9 +123,7 @@ pub struct Scan {
 }
 
 enum ScannerState {
-    Lookup {
-        lookup: Box<Future<Item=Entry, Error=Error> + Send + 'static>,
-    },
+    Lookup(Lookup<Entry>),
     Scan {
         tablet: Arc<Tablet>,
         tablet_scan: TabletScan,
@@ -159,7 +155,7 @@ impl Stream for Scan {
         trace!("Scan::poll");
         loop {
             match mem::replace(&mut self.state, ScannerState::Finished) {
-                ScannerState::Lookup { mut lookup } => {
+                ScannerState::Lookup(mut lookup) => {
                     match lookup.poll()? {
                         Async::Ready(Entry::Tablet(tablet)) => {
                             let tablet_scan = TabletScan::new(self.projected_schema.clone(),
@@ -168,11 +164,11 @@ impl Stream for Scan {
                             self.state = ScannerState::Scan { tablet, tablet_scan };
                         },
                         Async::Ready(Entry::NonCoveredRange { upper_bound, .. }) => if !upper_bound.is_empty() {
-                            let lookup = Box::new(self.table_locations.entry(&upper_bound));
-                            self.state = ScannerState::Lookup { lookup };
+                            let lookup = self.table_locations.entry(&upper_bound);
+                            self.state = ScannerState::Lookup(lookup);
                         },
                         Async::NotReady => {
-                            self.state = ScannerState::Lookup { lookup };
+                            self.state = ScannerState::Lookup(lookup);
                             return Ok(Async::NotReady);
                         }
                     }
@@ -184,8 +180,8 @@ impl Stream for Scan {
                             return Ok(Async::Ready(Some(batch)))
                         },
                         Async::Ready(None) => if !tablet.upper_bound().is_empty() {
-                            let lookup = Box::new(self.table_locations.entry(tablet.upper_bound()));
-                            self.state = ScannerState::Lookup { lookup };
+                            let lookup = self.table_locations.entry(tablet.upper_bound());
+                            self.state = ScannerState::Lookup(lookup);
                         },
                         Async::NotReady => {
                             self.state = ScannerState::Scan { tablet, tablet_scan };

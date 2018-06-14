@@ -27,9 +27,21 @@ use Schema;
 use TableId;
 use Writer;
 use WriterConfig;
-use meta_cache::TableLocations;
+use meta_cache::{
+    Entry,
+    Lookup,
+    TableLocations,
+};
 use partition::PartitionSchema;
 use scanner::ScanBuilder;
+use tablet::TabletInfo;
+
+use futures::{
+    Async,
+    Future,
+    Poll,
+    Stream,
+};
 
 #[derive(Clone)]
 pub struct Table {
@@ -87,36 +99,45 @@ impl Table {
         ScanBuilder::new(self.schema.clone(), self.table_locations.clone())
     }
 
-    /*
-    pub fn list_tablets(&self, deadline: Instant) -> Result<Vec<Tablet>> {
-        let mut tablets = Vec::new();
-        let (send, recv) = sync_channel(1);
-        let mut last_partition_key = Vec::new();
-
-        loop {
-            let send = send.clone();
-            self.meta_cache.entry(mem::replace(&mut last_partition_key, Vec::new()),
-                                  deadline,
-                                  move |entry| send.send(entry).unwrap());
-
-            match try!(recv.recv().unwrap()) {
-                Entry::Tablet(tablet) => {
-                    last_partition_key = tablet.partition().upper_bound_key().to_owned();
-                    tablets.push(tablet);
-                },
-                Entry::NonCoveredRange { partition_upper_bound, .. } => {
-                    last_partition_key = partition_upper_bound;
-                },
-            };
-            if last_partition_key.is_empty() { break; }
+    // TODO: should this be a stream?
+    pub fn tablets(&self) -> Tablets {
+        Tablets {
+            table_locations: self.table_locations.clone(),
+            lookup: Some(self.table_locations.entry(&[])),
         }
-
-        Ok(tablets)
     }
-    */
 
     pub(crate) fn table_locations(&self) -> &TableLocations {
         &self.table_locations
+    }
+}
+
+pub struct Tablets {
+    table_locations: TableLocations,
+    lookup: Option<Lookup<Entry>>,
+}
+
+impl Stream for Tablets {
+    type Item = TabletInfo;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<TabletInfo>, Error> {
+        let entry = match self.lookup.as_mut() {
+            Some(lookup) => try_ready!(lookup.poll()),
+            None => return Ok(Async::Ready(None)),
+        };
+        let (tablet, upper_bound) = match entry {
+            Entry::Tablet(ref tablet) => {
+                (Some(tablet.info()?), tablet.upper_bound())
+            },
+            Entry::NonCoveredRange { ref upper_bound, .. } => (None, upper_bound),
+        };
+        if upper_bound.is_empty() {
+            self.lookup = None;
+        } else {
+            self.lookup = Some(self.table_locations.entry(upper_bound));
+        }
+        Ok(Async::Ready(tablet))
     }
 }
 

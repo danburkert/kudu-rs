@@ -46,9 +46,10 @@ mod scanner;
 mod schema;
 mod server;
 mod table;
+mod tablet;
 mod util;
-mod writer;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod mini_cluster;
