@@ -17,6 +17,7 @@ use futures::{
     Poll,
     Sink,
     Stream,
+    future,
 };
 use futures::stream::{
     FuturesOrdered,
@@ -187,6 +188,10 @@ impl Writer {
         }
     }
 
+    pub fn flush(self) -> Flush {
+        Flush { writer: Some(self) }
+    }
+
     pub fn apply(&mut self, op: Operation) {
         if op.row.schema() != self.common.table.schema() {
             self.fail_operation(op, Error::InvalidArgument(
@@ -238,16 +243,56 @@ impl Writer {
         }
     }
 
+    pub fn apply_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
+        where I: IntoIterator<Item=Operation<'data>>
+    {
+        WriteAll {
+            items: rows.into_iter(),
+            f: Writer::apply,
+            writer: Some(self)
+        }
+    }
+
     pub fn insert(&mut self, row: Row) {
         self.apply(Operation { row, kind: OperationKind::Insert })
+    }
+
+    pub fn insert_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
+        where I: IntoIterator<Item=Row<'data>>
+    {
+        WriteAll {
+            items: rows.into_iter(),
+            f: Writer::insert,
+            writer: Some(self)
+        }
     }
 
     pub fn update(&mut self, row: Row) {
         self.apply(Operation { row, kind: OperationKind::Update })
     }
 
+    pub fn update_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
+        where I: IntoIterator<Item=Row<'data>>
+    {
+        WriteAll {
+            items: rows.into_iter(),
+            f: Writer::update,
+            writer: Some(self)
+        }
+    }
+
     pub fn delete(&mut self, row: Row) {
         self.apply(Operation { row, kind: OperationKind::Delete })
+    }
+
+    pub fn delete_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
+        where I: IntoIterator<Item=Row<'data>>
+    {
+        WriteAll {
+            items: rows.into_iter(),
+            f: Writer::delete,
+            writer: Some(self)
+        }
     }
 
     fn poll_operations_in_lookup(&mut self) -> Poll<(), Error> {
@@ -327,6 +372,42 @@ impl fmt::Debug for Writer {
             .field("operations_in_lookup", &self.operations_in_lookup.len())
             .field("batches_in_flight", &self.common.batches_in_flight.len())
             .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct Flush {
+    writer: Option<Writer>,
+}
+
+impl Future for Flush {
+    type Item = (Writer, FlushStats);
+    type Error = Error;
+    fn poll(&mut self) -> Poll<(Writer, FlushStats), Error> {
+        let flush_stats = try_ready!(self.writer.as_mut().unwrap().poll_flush());
+        Ok(Async::Ready((self.writer.take().unwrap(), flush_stats)))
+    }
+}
+
+pub struct WriteAll<Iter>
+where Iter: Iterator {
+    items: Iter,
+    f: fn(&mut Writer, Iter::Item),
+    writer: Option<Writer>,
+}
+
+impl <Iter> Future for WriteAll<Iter>
+where Iter: Iterator {
+    type Item = Writer;
+    type Error = Error;
+    fn poll(&mut self) -> Poll<Writer, Error> {
+        loop {
+            try_ready!(self.writer.as_mut().unwrap().poll_ready());
+            match self.items.next() {
+                Some(item) => (self.f)(self.writer.as_mut().unwrap(), item),
+                None => return Ok(Async::Ready(self.writer.take().unwrap())),
+            }
+        }
     }
 }
 
