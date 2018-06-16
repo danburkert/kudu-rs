@@ -247,13 +247,13 @@ impl Client {
     }
 
     /// Returns an open table.
-    pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error> + 'static
+    pub fn open_table<S>(&mut self, table: S) -> impl Future<Item=Table, Error=Error>
     where S: Into<String> {
         self.meta_cache.open_table(TableIdentifierPb::from(table.into()), self.deadline())
     }
 
     /// Returns an open table.
-    pub fn open_table_by_id(&mut self, id: TableId) -> impl Future<Item=Table, Error=Error> + 'static {
+    pub fn open_table_by_id(&mut self, id: TableId) -> impl Future<Item=Table, Error=Error> {
         self.meta_cache.open_table(id.into(), self.deadline())
     }
 
