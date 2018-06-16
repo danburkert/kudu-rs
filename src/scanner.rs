@@ -23,11 +23,11 @@ use Row;
 use ScannerId;
 use Schema;
 use TabletId;
+use tablet::Tablet;
 use meta_cache::{
     Lookup,
     Entry,
     TableLocations,
-    Tablet,
 };
 use pb::{
     ColumnSchemaPb,

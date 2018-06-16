@@ -102,7 +102,7 @@ impl Inner {
                 }
                 self.pb.clear();
                 self.pb.merge(body)?;
-                info!("{:?}: received negotiation message: {:?}", self, self.pb);
+                debug!("{:?}: received negotiation message: {:?}", self, self.pb);
                 Ok(Async::Ready(()))
             },
             Err(error) => {

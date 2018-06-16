@@ -103,6 +103,8 @@ impl Table {
     pub fn tablets(&self) -> Tablets {
         Tablets {
             table_locations: self.table_locations.clone(),
+            primary_key_schema: self.schema.primary_key_projection(),
+            partition_schema: self.partition_schema.clone(),
             lookup: Some(self.table_locations.entry(&[])),
         }
     }
@@ -114,6 +116,8 @@ impl Table {
 
 pub struct Tablets {
     table_locations: TableLocations,
+    primary_key_schema: Schema,
+    partition_schema: PartitionSchema,
     lookup: Option<Lookup<Entry>>,
 }
 
@@ -122,22 +126,27 @@ impl Stream for Tablets {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<TabletInfo>, Error> {
-        let entry = match self.lookup.as_mut() {
-            Some(lookup) => try_ready!(lookup.poll()),
-            None => return Ok(Async::Ready(None)),
-        };
-        let (tablet, upper_bound) = match entry {
-            Entry::Tablet(ref tablet) => {
-                (Some(tablet.info()?), tablet.upper_bound())
-            },
-            Entry::NonCoveredRange { ref upper_bound, .. } => (None, upper_bound),
-        };
-        if upper_bound.is_empty() {
-            self.lookup = None;
-        } else {
-            self.lookup = Some(self.table_locations.entry(upper_bound));
+        loop {
+            let entry = match self.lookup.as_mut() {
+                Some(lookup) => try_ready!(lookup.poll()),
+                None => return Ok(Async::Ready(None)),
+            };
+
+            if !entry.upper_bound().is_empty() {
+                self.lookup = Some(self.table_locations.entry(entry.upper_bound()));
+            }
+
+            match entry {
+                Entry::Tablet(ref tablet) => {
+                    return Ok(Async::Ready(Some(tablet.info(&self.primary_key_schema,
+                                                            self.partition_schema.clone())?)));
+                },
+                Entry::NonCoveredRange { ref upper_bound, .. } if upper_bound.is_empty() => {
+                    return Ok(Async::Ready(None));
+                },
+                Entry::NonCoveredRange { .. } => (),
+            }
         }
-        Ok(Async::Ready(tablet))
     }
 }
 
@@ -409,8 +418,16 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use env_logger;
+    use futures::Stream;
+    use tokio::runtime::current_thread::Runtime;
 
+    use SchemaBuilder;
+    use TableBuilder;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use schema::tests::simple_schema;
+    use Client;
+    use DataType;
+    use Options;
     use super::*;
 
     fn deadline() -> Instant {
@@ -429,17 +446,16 @@ mod tests {
         table_builder.add_range_partition_split(split_row);
     }
 
-    /*
     #[test]
-    fn list_tablets() {
+    fn tablets() {
         let _ = env_logger::try_init();
-        let cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                         .num_masters(1)
-                                                         .num_tservers(3));
-        let mut reactor = Core::new().unwrap();
-        let mut client = ClientBuilder::new(cluster.master_addrs(), reactor.remote())
-                                       .build()
-                                       .expect("client");
+        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
+                                                             .num_masters(1)
+                                                             .num_tservers(3));
+        let mut runtime = Runtime::new().unwrap();
+
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -467,15 +483,11 @@ mod tests {
         table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound),
                                           RangePartitionBound::Exclusive(upper_bound));
 
-        let table_id = reactor.run(client.create_table(table_builder)).unwrap();
+        let table_id = runtime.block_on(client.create_table(table_builder)).unwrap();
 
-        // TODO: wait
-        thread::sleep(Duration::from_millis(2000));
-
-        let table = reactor.run(client.open_table_by_id(table_id)).unwrap();
-        let tablets = reactor.run(table.list_tablets()).unwrap();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).unwrap();
+        let tablets = runtime.block_on(table.tablets().collect()).unwrap();
 
         assert_eq!(8, tablets.len());
     }
-    */
 }

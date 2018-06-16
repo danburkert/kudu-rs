@@ -43,7 +43,7 @@ use pb::master::{
     TabletLocationsPb,
 };
 use table::Table;
-use tablet::TabletInfo;
+use tablet::{Tablet, TabletReplica};
 use partition::{
     IntoPartitionKey,
     PartitionKey,
@@ -82,28 +82,28 @@ impl Entry {
         }
     }
 
-    fn is_tablet(&self) -> bool {
+    pub fn is_tablet(&self) -> bool {
         match *self {
             Entry::Tablet(_) => true,
             Entry::NonCoveredRange { .. } => false,
         }
     }
 
-    fn lower_bound(&self) -> &[u8] {
+    pub fn lower_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.lower_bound(),
             Entry::NonCoveredRange { ref lower_bound, .. } => lower_bound,
         }
     }
 
-    fn upper_bound(&self) -> &[u8] {
+    pub fn upper_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.upper_bound(),
             Entry::NonCoveredRange { ref upper_bound, .. } => upper_bound,
         }
     }
 
-    fn contains_partition_key(&self, partition_key: &[u8]) -> bool {
+    pub fn contains_partition_key(&self, partition_key: &[u8]) -> bool {
         let upper_bound = self.upper_bound();
         (upper_bound.is_empty() || partition_key < upper_bound)
             && partition_key >= self.lower_bound()
@@ -207,7 +207,7 @@ impl fmt::Debug for MasterReplica {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("MasterReplica")
             .field("addr", &self.hostport)
-            .field("is_leader", &self.is_leader)
+            .field("role", if self.is_leader() { &RaftRole::Leader } else { &RaftRole::Follower })
             .finish()
     }
 }
@@ -422,7 +422,7 @@ struct TableLocationsTask {
     /// Collection of outstanding entry requests, ordered by partition key.
     requests: BTreeMap<PartitionKey, Vec<oneshot::Sender<Result<Entry>>>>,
 
-    in_flight: Option<(PartitionKey, ReplicaRpc<Arc<Box<[MasterReplica]>>, GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
+    in_flight: Option<(PartitionKey, Instant, ReplicaRpc<Arc<Box<[MasterReplica]>>, GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
 }
 
 impl TableLocationsTask {
@@ -576,11 +576,14 @@ impl Future for TableLocationsTask {
             }
 
             // Step 2: Check if the currently outstanding tablet locations lookup is complete.
-            if let Some((partition_key, mut in_flight)) = self.in_flight.take() {
+            if let Some((partition_key, start, mut in_flight)) = self.in_flight.take() {
                 match in_flight.poll() {
                     Ok(Async::Ready((_, response, _))) => {
                         // TODO: error handling
-                        let deadline = Instant::now() + Duration::from_millis(u64::from(response.ttl_millis()));
+                        let now = Instant::now();
+                        let ttl = Duration::from_millis(u64::from(response.ttl_millis()));
+                        let deadline = now + ttl;
+                        let num_tablets = response.tablet_locations.len();
                         let entries = self.tablet_locations_to_entries(&*partition_key,
                                                                        response.tablet_locations,
                                                                        deadline)
@@ -604,10 +607,14 @@ impl Future for TableLocationsTask {
                             }
                         }
 
+                        // TODO: implement pretty-printers for partition keys.
+                        debug!("received tablet locations; duration: {:?}, table-id: {}, request-key: {}, tablets: {}, non-covered-ranges: {}, key-range: [{}, {}), ttl: {:?}",
+                               now - start, self.table_id, "", num_tablets, entries.len() - num_tablets, "", "", ttl);
+
                         self.splice_entries(entries);
                     }
                     Ok(Async::NotReady) => {
-                        self.in_flight = Some((partition_key, in_flight));
+                        self.in_flight = Some((partition_key, start, in_flight));
                         return Ok(Async::NotReady);
                     },
                     Err(error) => {
@@ -636,7 +643,7 @@ impl Future for TableLocationsTask {
                                                Selection::Leader,
                                                Backoff::with_duration_range(250, u32::max_value()));
 
-                    self.in_flight = Some((partition_key.clone(), resp));
+                    self.in_flight = Some((partition_key.clone(), Instant::now(), resp));
                 },
                 None => return Ok(Async::NotReady),
             }
@@ -644,111 +651,11 @@ impl Future for TableLocationsTask {
     }
 }
 
-/// Metadata pertaining to a Kudu tablet.
-// TODO: when replacing a tablet in the table locations map, carry through the leader flag.
-#[derive(Debug)]
-pub(crate) struct Tablet {
-
-    /// The tablet ID.
-    id: TabletId,
-
-    /// The tablet lower-bound partition key.
-    lower_bound: PartitionKey,
-
-    /// The tablet upper-bound partition key.
-    upper_bound: PartitionKey,
-
-    /// The tablet replicas.
-    replicas: Vec<TabletReplica>,
-}
-
-impl Tablet {
-
-    /// Returns the unique tablet ID.
-    pub fn id(&self) -> TabletId {
-        self.id
-    }
-
-    /// Returns the tablet partition.
-    pub fn lower_bound(&self) -> &PartitionKey {
-        &self.lower_bound
-    }
-
-    pub fn upper_bound(&self) -> &PartitionKey {
-        &self.upper_bound
-    }
-
-    pub fn info(&self) -> Result<TabletInfo> {
-        unimplemented!()
-    }
-}
-
-impl ReplicaSet for Arc<Tablet> {
-    type Replica = TabletReplica;
-
-    fn replicas(&self) -> &[TabletReplica] {
-        &self.replicas
-    }
-}
-
-/// Tablet replica belonging to a tablet server.
-pub(crate) struct TabletReplica {
-    id: TabletServerId,
-    rpc_addrs: Box<[HostPort]>,
-    proxy: krpc::Proxy,
-    is_leader: AtomicBool,
-    is_stale: AtomicBool,
-}
-
-impl Replica for TabletReplica {
-
-    fn proxy(&self) -> krpc::Proxy {
-        self.proxy.clone()
-    }
-
-    fn is_leader(&self) -> bool {
-        self.is_leader.load(Relaxed)
-    }
-
-    fn mark_leader(&self) {
-        self.is_leader.store(true, Relaxed)
-    }
-
-    fn mark_follower(&self) {
-        self.is_leader.store(false, Relaxed)
-    }
-
-    fn is_stale(&self) -> bool {
-        self.is_stale.load(Relaxed)
-    }
-
-    fn mark_stale(&self) {
-        self.is_stale.store(true, Relaxed)
-    }
-}
-
-impl fmt::Debug for TabletReplica {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("TabletReplica")
-            .field("id", &self.id)
-            .field("is_leader", &self.is_leader)
-            .field("is_stale", &self.is_stale)
-            .finish()
-    }
-}
-
-impl TabletReplica {
-
-    /// Returns the ID of the tablet server which owns this replica.
-    pub fn id(&self) -> TabletServerId {
-        self.id
-    }
-}
-
 pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
                                  options: &Options)
                                  -> impl Future<Item=Arc<Box<[MasterReplica]>>, Error=Error> {
     let admin_timeout = options.admin_timeout;
+    let start = Instant::now();
     stream::futures_unordered(master_addrs.into_iter()
                                           .map(|hostport| MasterReplica::new(hostport, options)))
            .collect()
@@ -764,6 +671,11 @@ pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
                                Selection::Leader,
                                Backoff::with_duration_range(250, u32::max_value()))
                    .map(move |_| replica_set)
+           })
+           .inspect(move |masters| {
+               info!("(re)connected to cluster; duration: {:?}, masters: {:?}",
+                     Instant::now() - start,
+                     masters);
            })
 }
 

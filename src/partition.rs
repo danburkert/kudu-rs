@@ -222,8 +222,8 @@ impl IntoPartitionKey for [u8] {
 #[derive(Clone)]
 pub struct Partition {
     partition_schema: PartitionSchema,
-    lower_bound_key: PartitionKey,
-    upper_bound_key: PartitionKey,
+    lower_bound: PartitionKey,
+    upper_bound: PartitionKey,
     hash_partitions: Vec<u32>,
     range_lower_bound: Row<'static>,
     range_upper_bound: Row<'static>,
@@ -231,14 +231,14 @@ pub struct Partition {
 
 impl fmt::Debug for Partition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[({:?}), ({:?}))", self.lower_bound_key, self.upper_bound_key)
+        write!(f, "[({:?}), ({:?}))", self.lower_bound, self.upper_bound)
     }
 }
 
 impl cmp::PartialEq for Partition {
     fn eq(&self, other: &Partition) -> bool {
-        self.lower_bound_key == other.lower_bound_key &&
-            self.upper_bound_key == other.upper_bound_key
+        self.lower_bound == other.lower_bound &&
+            self.upper_bound == other.upper_bound
     }
 }
 
@@ -246,12 +246,12 @@ impl cmp::Eq for Partition { }
 
 impl Partition {
 
-    pub fn lower_bound_key(&self) -> &[u8] {
-        &self.lower_bound_key
+    pub fn lower_bound(&self) -> &[u8] {
+        &self.lower_bound
     }
 
-    pub fn upper_bound_key(&self) -> &[u8] {
-        &self.upper_bound_key
+    pub fn upper_bound(&self) -> &[u8] {
+        &self.upper_bound
     }
 
     pub fn range_lower_bound(&self) -> &Row {
@@ -301,23 +301,20 @@ impl Partition {
         }
     }
 
-    pub(crate) fn from_pb(primary_key_schema: &Schema,
-                          partition_schema: PartitionSchema,
-                          mut partition: PartitionPb)
-                          -> Result<Partition> {
-        let lower_bound_key = partition.partition_key_start.take().unwrap().into_partition_key();
-        let upper_bound_key = partition.partition_key_end.take().unwrap().into_partition_key();
-
+    pub(crate) fn from_bounds(primary_key_schema: &Schema,
+                              partition_schema: PartitionSchema,
+                              lower_bound: PartitionKey,
+                              upper_bound: PartitionKey) -> Result<Partition> {
         let hash_partition_levels = partition_schema.hash_partition_schemas().len();
         let mut hash_partitions = Vec::with_capacity(hash_partition_levels);
         {
-            let mut key = &lower_bound_key[..];
+            let mut key = &lower_bound[..];
             for _ in partition_schema.hash_partition_schemas() {
                 if key.is_empty() {
                     hash_partitions.push(0)
                 } else if key.len() < 4 {
                     return Err(Error::Serialization(format!("invalid lower bound partition key: {:?}",
-                                                            lower_bound_key)));
+                                                            lower_bound)));
                 } else {
                     hash_partitions.push(BigEndian::read_u32(key));
                     key = &key[4..];
@@ -325,29 +322,38 @@ impl Partition {
             }
         }
 
-        let range_lower_bound = if lower_bound_key.len() > hash_partition_levels * 4 {
+        let range_lower_bound = if lower_bound.len() > hash_partition_levels * 4 {
             try!(key::decode_range_partition_key(primary_key_schema,
                                                  partition_schema.range_partition_schema(),
-                                                 &lower_bound_key[hash_partition_levels * 4..]))
+                                                 &lower_bound[hash_partition_levels * 4..]))
         } else {
             primary_key_schema.new_row()
         };
-        let range_upper_bound = if upper_bound_key.len() > hash_partition_levels * 4 {
+        let range_upper_bound = if upper_bound.len() > hash_partition_levels * 4 {
             try!(key::decode_range_partition_key(primary_key_schema,
                                                  partition_schema.range_partition_schema(),
-                                                 &upper_bound_key[hash_partition_levels * 4..]))
+                                                 &upper_bound[hash_partition_levels * 4..]))
         } else {
             primary_key_schema.new_row()
         };
 
         Ok(Partition {
             partition_schema,
-            lower_bound_key,
-            upper_bound_key,
+            lower_bound,
+            upper_bound,
             hash_partitions,
             range_lower_bound,
             range_upper_bound,
         })
+    }
+
+    pub(crate) fn from_pb(primary_key_schema: &Schema,
+                          partition_schema: PartitionSchema,
+                          mut partition: PartitionPb)
+                          -> Result<Partition> {
+        let lower_bound = partition.partition_key_start.take().unwrap().into_partition_key();
+        let upper_bound = partition.partition_key_end.take().unwrap().into_partition_key();
+        Partition::from_bounds(primary_key_schema, partition_schema, lower_bound, upper_bound)
     }
 }
 

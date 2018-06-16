@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use curl::easy::Easy;
 use tempdir::TempDir;
 
-const VERSION: &'static str = "1.4.0";
+const VERSION: &'static str = "1.7.1";
 const URL_BASE: &'static str = "https://raw.githubusercontent.com/apache/kudu";
 
 const PROTOS: &[&str] = &[

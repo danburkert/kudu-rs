@@ -36,19 +36,21 @@ use PartitionSchema;
 use Schema;
 use Table;
 use TabletId;
+use Row;
+use backoff::Backoff;
 use key;
-use meta_cache::Tablet;
-use pb::tserver::{
-    TabletServerService,
-    WriteRequestPb,
-    WriteResponsePb,
-};
 use operation::{
     Operation,
     OperationDecoder,
     OperationEncoder,
     OperationError,
     OperationKind,
+};
+use partition::PartitionKey;
+use pb::tserver::{
+    TabletServerService,
+    WriteRequestPb,
+    WriteResponsePb,
 };
 use replica::{
     Replica,
@@ -57,10 +59,8 @@ use replica::{
     Selection,
     Speculation,
 };
-use backoff::Backoff;
+use tablet::Tablet;
 use tokio_timer::Delay;
-use Row;
-use partition::PartitionKey;
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
