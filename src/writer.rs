@@ -612,6 +612,34 @@ impl FlushStats {
         }
     }
 
+    pub fn batches(&self) -> usize {
+        self.successful_batches + self.failed_batches
+    }
+
+    pub fn successful_batches(&self) -> usize {
+        self.successful_batches
+    }
+
+    pub fn failed_batches(&self) -> usize {
+        self.failed_batches
+    }
+
+    pub fn operations(&self) -> usize {
+        self.operations
+    }
+
+    pub fn successful_operations(&self) -> usize {
+        self.operations - self.row_errors
+    }
+
+    pub fn failed_operations(&self) -> usize {
+        self.row_errors
+    }
+
+    pub fn data(&self) -> usize {
+        self.data
+    }
+
     fn add_succesful_batch(&mut self, batch: &BatchStats) {
         self.successful_batches += 1;
         self.operations += batch.operations;
