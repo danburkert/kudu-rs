@@ -382,7 +382,7 @@ impl <T> Future for Lookup<T> {
                 match recv.poll() {
                     Ok(Async::Ready(entry)) => Ok(Async::Ready(extractor(&entry?))),
                     Ok(Async::NotReady) => Ok(Async::NotReady),
-                    Err(_) => unreachable!("TableLocationsTask finished"),
+                    Err(error) => unreachable!("TableLocationsTask finished: {}", error),
                 }
             },
         }
@@ -831,9 +831,52 @@ mod tests {
     }
     */
 
+    #[test]
+    fn unpartitioned() {
+        let _ = env_logger::try_init();
+        let mut cluster = MiniCluster::default();
+        let mut runtime = Runtime::new().unwrap();
+
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
+
+        let schema = simple_schema();
+
+        let mut table = TableBuilder::new("unpartitioned", schema.clone());
+        table.set_num_replicas(1);
+        let table_id = runtime.block_on(client.create_table(table)).expect("create_table");
+
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let locations = table.table_locations().clone();
+
+        {
+            let entries = locations.entries.lock().clone();
+            assert!(entries.is_empty());
+        }
+
+        {
+            let entry = runtime.block_on(locations.entry(&[])).expect("entry");
+
+            assert!(entry.is_tablet());
+            assert_eq!(b"", entry.lower_bound());
+            assert_eq!(b"", entry.upper_bound());
+
+            let entries = locations.entries.lock().clone();
+            assert_eq!(1, entries.len());
+            assert!(entry.equiv(entries.values().next().unwrap()));
+        }
+
+        locations.clear();
+        {
+            let entry = runtime.block_on(locations.entry(b"some-key")).expect("entry");
+            assert!(entry.is_tablet());
+            assert_eq!(b"", entry.lower_bound());
+            assert_eq!(b"", entry.upper_bound());
+        }
+    }
 
     #[test]
-    fn single_tablet() {
+    fn single_range_partition() {
         let _ = env_logger::try_init();
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();

@@ -132,9 +132,11 @@ impl Stream for Tablets {
                 None => return Ok(Async::Ready(None)),
             };
 
-            if !entry.upper_bound().is_empty() {
-                self.lookup = Some(self.table_locations.entry(entry.upper_bound()));
-            }
+            self.lookup = if entry.upper_bound().is_empty() {
+                None
+            } else {
+                Some(self.table_locations.entry(entry.upper_bound()))
+            };
 
             match entry {
                 Entry::Tablet(ref tablet) => {
@@ -447,7 +449,27 @@ mod tests {
     }
 
     #[test]
-    fn tablets() {
+    fn tablets_unpartitioned() {
+        let _ = env_logger::try_init();
+        let mut cluster = MiniCluster::default();
+        let mut runtime = Runtime::new().unwrap();
+
+        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
+                                .expect("client");
+
+        let schema = simple_schema();
+
+        let mut table = TableBuilder::new("tablets_unpartitioned", schema.clone());
+        table.set_num_replicas(1);
+        let table_id = runtime.block_on(client.create_table(table)).expect("create_table");
+
+        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let tablets = runtime.block_on(table.tablets().collect()).unwrap();
+        assert_eq!(1, tablets.len());
+    }
+
+    #[test]
+    fn tablets_non_covered_ranges() {
         let _ = env_logger::try_init();
         let mut cluster = MiniCluster::new(MiniClusterConfig::default()
                                                              .num_masters(1)

@@ -62,6 +62,7 @@ pub use row::Row;
 pub use schema::*;
 pub use server::*;
 pub use table::*;
+pub use tablet::*;
 pub use value::Value;
 pub use writer::*;
 
