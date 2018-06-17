@@ -96,8 +96,8 @@ impl From<prost::DecodeError> for Error {
     }
 }
 impl From<threadpool::BlockingError> for Error {
-    fn from(_: threadpool::BlockingError) -> Error {
-        Error::Io(io::Error::new(io::ErrorKind::Other, "no tokio threadpool context"))
+    fn from(error: threadpool::BlockingError) -> Error {
+        Error::Io(io::Error::new(io::ErrorKind::Other, format!("{}", error)))
     }
 }
 
