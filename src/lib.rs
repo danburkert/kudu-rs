@@ -59,6 +59,7 @@ pub use error::*;
 pub use operation::*;
 pub use partition::*;
 pub use row::Row;
+pub use scanner::*;
 pub use schema::*;
 pub use server::*;
 pub use table::*;
