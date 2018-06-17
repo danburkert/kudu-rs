@@ -360,7 +360,7 @@ impl IntoMasterAddrs for Vec<String> {
     fn into_master_addrs(self) -> Result<Vec<HostPort>> {
         let mut master_addrs = Vec::new();
         for master_addr in self {
-            master_addrs.push(HostPort::parse(master_addr.as_ref(), 7180)?);
+            master_addrs.push(HostPort::parse(master_addr.as_ref(), 7051)?);
         }
         Ok(master_addrs)
     }
@@ -370,7 +370,7 @@ impl <'a> IntoMasterAddrs for &'a str {
     fn into_master_addrs(self) -> Result<Vec<HostPort>> {
         let mut master_addrs = Vec::new();
         for master_addr in self.split(',') {
-            master_addrs.push(HostPort::parse(master_addr, 7180)?);
+            master_addrs.push(HostPort::parse(master_addr, 7051)?);
         }
         Ok(master_addrs)
     }

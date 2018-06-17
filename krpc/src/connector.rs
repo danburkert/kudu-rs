@@ -57,6 +57,7 @@ impl Connector {
                 // TODO(tokio-rs/tokio#432): use tokio_threadpool::blocking.
                 let (send, recv) = futures::sync::oneshot::channel();
                 ::std::thread::spawn(move || {
+                    // TODO: add hostport context to error.
                     send.send(hostport.to_socket_addrs().map_err(Error::from)).unwrap()
                 });
                 resolving.push(Box::new(recv.map_err(|_| -> Error { unreachable!() }).flatten()))
