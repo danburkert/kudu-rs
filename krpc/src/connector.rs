@@ -13,6 +13,7 @@ use futures::{
     Poll,
     Stream,
     future,
+    self,
 };
 use futures::stream::FuturesUnordered;
 use itertools::Itertools;
@@ -53,9 +54,12 @@ impl Connector {
             // Otherwise resolve the hostport.
             } else {
                 let hostport: HostPort = hostport.clone();
-                resolving.push(Box::new(future::poll_fn(move || {
-                    threadpool::blocking(|| hostport.to_socket_addrs().map_err(Error::from)).map_err(Error::from)
-                }).flatten()))
+                // TODO(tokio-rs/tokio#432): use tokio_threadpool::blocking.
+                let (send, recv) = futures::sync::oneshot::channel();
+                ::std::thread::spawn(move || {
+                    send.send(hostport.to_socket_addrs().map_err(Error::from)).unwrap()
+                });
+                resolving.push(Box::new(recv.map_err(|_| -> Error { unreachable!() }).flatten()))
             }
         }
 
