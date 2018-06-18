@@ -145,6 +145,10 @@ impl Scan {
             ..Default::default()
         }
     }
+
+    fn projected_schema(&self) -> &Schema {
+        &self.projected_schema
+    }
 }
 
 impl Stream for Scan {
@@ -273,6 +277,14 @@ impl RowBatch {
             data: data.freeze(),
             indirect_data,
         })
+    }
+
+    pub fn num_rows(&self) -> usize {
+        self.len
+    }
+
+    pub fn projected_schema(&self) -> &Schema {
+        &self.projected_schema
     }
 }
 
