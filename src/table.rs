@@ -443,7 +443,7 @@ mod tests {
         let mut table_builder = TableBuilder::new("t", simple_schema());
 
         let mut split_row = table_builder.schema().new_row();
-        split_row.set_by_name("key", "foo").unwrap();
+        split_row.set("key", "foo").unwrap();
 
         table_builder.add_range_partition_split(split_row);
     }

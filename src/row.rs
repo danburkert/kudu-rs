@@ -7,6 +7,7 @@ use std::str;
 
 #[cfg(any(feature="quickcheck", test))] use quickcheck;
 
+use ColumnSelector;
 use Error;
 use Result;
 use Schema;
@@ -42,7 +43,7 @@ pub struct Row<'data> {
     _marker: PhantomData<&'data [u8]>,
 }
 
-// TODO: unset/unset_by_name.
+// TODO: unset
 impl <'data> Row<'data> {
 
     /// Creates an empty mutable partial row.
@@ -63,6 +64,7 @@ impl <'data> Row<'data> {
         }
     }
 
+    /// Creates a constant contiguous row referencing the provided data.
     pub(crate) fn contiguous(schema: Schema, data: &[u8]) -> Row {
         let tagged_ptr = (data.as_ptr() as i64) << 1;
         Row {
@@ -72,23 +74,17 @@ impl <'data> Row<'data> {
         }
     }
 
-    /// Sets the value of the column at index `idx`.
+    /// Sets the value of the column.
     ///
     /// Returns an error if the column does not exist, or the value's type is wrong.
-    pub fn set<V>(&mut self, idx: usize, value: V) -> Result<&mut Self> where V: Value<'data> {
+    pub fn set<C, V>(&mut self, column: C, value: V) -> Result<&mut Self>
+    where C: ColumnSelector,
+          V: Value<'data>
+    {
+        let idx = column.column_index(&self.schema)?;
         self.check_column_for_write::<V>(idx)?;
         unsafe {
             Ok(self.set_unchecked(idx, value))
-        }
-    }
-
-    /// Sets the value of the column by name.
-    ///
-    /// Returns an error if the column does not exist, or the value's type is wrong.
-    pub fn set_by_name<V>(&mut self, column: &str, value: V) -> Result<&mut Row<'data>> where V: Value<'data> {
-        match self.schema.column_index(column) {
-            Some(idx) => self.set(idx, value),
-            None => Err(Error::InvalidArgument(format!("unknown column {}", column))),
         }
     }
 
@@ -98,10 +94,9 @@ impl <'data> Row<'data> {
     ///
     /// This method may invoke undefined behavior if the column does not exist, or the value type
     /// does not match the column type.
-    pub unsafe fn set_unchecked<V>(&mut self,
-                                   idx: usize,
-                                   value: V)
-                                   -> &mut Self where V: Value<'data> {
+    pub unsafe fn set_unchecked<V>(&mut self, idx: usize, value: V) -> &mut Self
+    where V: Value<'data>
+    {
         if self.is_contiguous_row() {
             self.into_partial_row();
         } else if V::DATA_TYPE.is_var_len() {
@@ -123,10 +118,13 @@ impl <'data> Row<'data> {
         self
     }
 
-    /// Sets the column at index `idx` to null.
+    /// Sets the column to null.
     ///
     /// Returns an error if the column does not exist, or the column is not nullable.
-    pub fn set_null(&mut self, idx: usize) -> Result<&mut Row<'data>> {
+    pub fn set_null<C>(&mut self, column: C) -> Result<&mut Row<'data>>
+    where C: ColumnSelector
+    {
+        let idx = column.column_index(&self.schema)?;
         self.check_column_for_nullability(idx)?;
 
         if self.is_contiguous_row() {
@@ -142,22 +140,15 @@ impl <'data> Row<'data> {
         Ok(self)
     }
 
-    /// Sets the column by name to null.
-    ///
-    /// Returns an error if the column does not exist, or the column is not nullable.
-    pub fn set_null_by_name(&mut self, column: &str) -> Result<&mut Row<'data>> {
-        if let Some(idx) = self.schema.column_index(column) {
-            self.set_null(idx)
-        } else {
-            Err(Error::InvalidArgument(format!("unknown column {}", column)))
-        }
-    }
-
-    /// Gets the value of the column at index `idx`.
+    /// Gets the value of the column.
     ///
     /// Returns an error if the column does not exist, the column is unset, the column type
     /// does not match the value type.
-    pub fn get<'self_, V>(&'self_ self, idx: usize) -> Result<V> where V: Value<'self_> {
+    pub fn get<'self_, C, V>(&'self_ self, column: C) -> Result<V>
+    where C: ColumnSelector,
+          V: Value<'self_>
+    {
+        let idx = column.column_index(&self.schema)?;
         self.check_column_for_read::<V>(idx)?;
 
         unsafe {
@@ -177,18 +168,6 @@ impl <'data> Row<'data> {
         }
     }
 
-    /// Gets the value of the column by name.
-    ///
-    /// Returns an error if the column does not exist, the column is unset, the column type
-    /// does not match the value type.
-    pub fn get_by_name<'self_, V>(&'self_ self, column: &str) -> Result<V> where V: Value<'self_> {
-        if let Some(idx) = self.schema.column_index(column) {
-            self.get(idx)
-        } else {
-            Err(Error::InvalidArgument(format!("unknown column {}", column)))
-        }
-    }
-
     /// Returns `true` if the column at index `idx` is null.
     ///
     /// The result is undefined if the `idx` is not valid.
@@ -198,23 +177,12 @@ impl <'data> Row<'data> {
             && bitmap_get(self.data().offset(self.is_null_offset() as isize), idx)
     }
 
-    /// Returns `true` if the column at index `idx` is null.
-    ///
-    /// Returns an error if the column does not exist.
-    pub fn is_null(&self, idx: usize) -> Result<bool> {
-        self.schema.check_index(idx)?;
-        Ok(unsafe { self.is_null_unchecked(idx) })
-    }
-
     /// Returns `true` if the column is null.
     ///
     /// Returns an error if the column does not exist.
-    pub fn is_null_by_name(&self, column: &str) -> Result<bool> {
-        if let Some(idx) = self.schema.column_index(column) {
-            self.is_null(idx)
-        } else {
-            Err(Error::InvalidArgument(format!("unknown column {}", column)))
-        }
+    pub fn is_null<C>(&self, column: C) -> Result<bool> where C: ColumnSelector {
+        let idx = column.column_index(&self.schema)?;
+        Ok(unsafe { self.is_null_unchecked(idx) })
     }
 
     /// Returns `true` if the column at index `idx` is set.
@@ -225,23 +193,12 @@ impl <'data> Row<'data> {
         self.is_contiguous_row() || bitmap_get(self.data().offset(self.is_set_offset()), idx)
     }
 
-    /// Returns `true` if the column at index `idx` is set.
-    ///
-    /// Returns an error if the column does not exist.
-    pub fn is_set(&self, idx: usize) -> Result<bool> {
-        self.schema.check_index(idx)?;
-        Ok(unsafe { self.is_set_unchecked(idx) })
-    }
-
     /// Returns `true` if the column is set.
     ///
     /// Returns an error if the column does not exist.
-    pub fn is_set_by_name(&self, column: &str) -> Result<bool> {
-        if let Some(idx) = self.schema.column_index(column) {
-            self.is_set(idx)
-        } else {
-            Err(Error::InvalidArgument(format!("unknown column {}", column)))
-        }
+    pub fn is_set<C>(&self, column: C) -> Result<bool> where C: ColumnSelector {
+        let idx = column.column_index(&self.schema)?;
+        Ok(unsafe { self.is_set_unchecked(idx) })
     }
 
     /// Returns the schema of the row.
@@ -401,7 +358,6 @@ impl <'data> Row<'data> {
 
     /// Checks that the column with the specified index has the expected type.
     fn check_column_for_read<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
-        self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !V::can_read_from(column.data_type()) {
             return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
@@ -678,22 +634,22 @@ mod tests {
         // Set/get 'string' by index.
         assert_eq!(10, schema.column_index("string").unwrap());
         row.set(10, "foo").unwrap();
-        assert_eq!("foo", row.get::<&str>(10).unwrap());
-        assert_eq!("foo".to_string(), row.get::<String>(10).unwrap());
+        assert_eq!("foo", row.get::<_, &str>(10).unwrap());
+        assert_eq!("foo".to_string(), row.get::<_, String>(10).unwrap());
         assert!(row.is_set(10).unwrap());
 
         // Set/get 'nullable_string'.
-        row.set_by_name("nullable_string", "bar".to_string()).unwrap();
-        assert_eq!("bar", row.get_by_name::<&str>("nullable_string").unwrap());
-        assert_eq!("bar".to_string(), row.get_by_name::<String>("nullable_string").unwrap());
-        assert_eq!(Some("bar"), row.get_by_name::<Option<&str>>("nullable_string").unwrap());
-        assert_eq!(Some("bar".to_string()), row.get_by_name::<Option<String>>("nullable_string").unwrap());
+        row.set("nullable_string", "bar".to_string()).unwrap();
+        assert_eq!("bar", row.get::<_, &str>("nullable_string").unwrap());
+        assert_eq!("bar".to_string(), row.get::<_, String>("nullable_string").unwrap());
+        assert_eq!(Some("bar"), row.get::<_, Option<&str>>("nullable_string").unwrap());
+        assert_eq!(Some("bar".to_string()), row.get::<_, Option<String>>("nullable_string").unwrap());
 
-        row.set_by_name("nullable_binary", &b""[..]).unwrap();
-        assert_eq!(&b""[..], row.get_by_name::<&[u8]>("nullable_binary").unwrap());
-        assert_eq!(Vec::<u8>::new(), row.get_by_name::<Vec<u8>>("nullable_binary").unwrap());
-        assert_eq!(Some(&b""[..]), row.get_by_name::<Option<&[u8]>>("nullable_binary").unwrap());
-        assert_eq!(Some(Vec::new()), row.get_by_name::<Option<Vec<u8>>>("nullable_binary").unwrap());
+        row.set("nullable_binary", &b""[..]).unwrap();
+        assert_eq!(&b""[..], row.get::<_, &[u8]>("nullable_binary").unwrap());
+        assert_eq!(Vec::<u8>::new(), row.get::<_, Vec<u8>>("nullable_binary").unwrap());
+        assert_eq!(Some(&b""[..]), row.get::<_, Option<&[u8]>>("nullable_binary").unwrap());
+        assert_eq!(Some(Vec::new()), row.get::<_, Option<Vec<u8>>>("nullable_binary").unwrap());
     }
 
     #[test]
@@ -703,21 +659,21 @@ mod tests {
         let mut b = schema.new_row();
         assert_eq!(a, b);
 
-        a.set_by_name("i32", 100i32).unwrap();
+        a.set("i32", 100i32).unwrap();
         assert_ne!(a, b);
-        b.set_by_name("i32", 100i32).unwrap();
+        b.set("i32", 100i32).unwrap();
         assert_eq!(a, b);
 
-        a.set_null_by_name("nullable_i32").unwrap();
+        a.set_null("nullable_i32").unwrap();
         assert_ne!(a, b);
-        b.set_null_by_name("nullable_i32").unwrap();
+        b.set_null("nullable_i32").unwrap();
         assert_eq!(a, b);
 
-        a.set_by_name("string", "foo").unwrap();
+        a.set("string", "foo").unwrap();
         assert_ne!(a, b);
-        b.set_by_name("string", "bar").unwrap();
+        b.set("string", "bar").unwrap();
         assert_ne!(a, b);
-        b.set_by_name("string", "foo".to_string()).unwrap();
+        b.set("string", "foo".to_string()).unwrap();
         assert_eq!(a, b);
 
         let mut c = a.clone();
@@ -728,12 +684,12 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a, c);
 
-        a.set_by_name("nullable_bool", true).unwrap();
-        b.set_by_name("nullable_bool", false).unwrap();
+        a.set("nullable_bool", true).unwrap();
+        b.set("nullable_bool", false).unwrap();
         assert_ne!(a, b);
         assert_ne!(a, c);
 
-        c.set_by_name("nullable_bool", true).unwrap();
+        c.set("nullable_bool", true).unwrap();
         assert_eq!(a, c);
         assert_ne!(b, a);
     }
@@ -744,12 +700,12 @@ mod tests {
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {
             assert!(!row.is_null(idx).unwrap());
-            assert!(!row.is_null_by_name(column.name()).unwrap());
+            assert!(!row.is_null(column.name()).unwrap());
             assert!(!row.is_set(idx).unwrap());
         }
 
         assert!(row.is_null(schema.columns().len()).is_err());
-        assert!(row.is_null_by_name("bogus").is_err());
+        assert!(row.is_null("bogus").is_err());
 
         let nullable_columns = &[
             "nullable_bool",
@@ -764,21 +720,19 @@ mod tests {
             "nullable_string",
         ];
 
-        for nullable_column in nullable_columns {
-            row.set_null_by_name(nullable_column).unwrap();
-            assert!(row.is_null(schema.column_index(nullable_column).unwrap()).unwrap());
-            assert!(row.is_null_by_name(nullable_column).unwrap());
-            assert!(row.is_set_by_name(nullable_column).unwrap());
+        for &nullable_column in nullable_columns {
+            row.set_null(nullable_column).unwrap();
+            assert!(row.is_null(nullable_column).unwrap());
+            assert!(row.is_set(nullable_column).unwrap());
         }
 
         let clone = row.clone();
-        for nullable_column in nullable_columns {
-            assert!(clone.is_null(schema.column_index(nullable_column).unwrap()).unwrap());
-            assert!(clone.is_null_by_name(nullable_column).unwrap());
-            assert!(clone.is_set_by_name(nullable_column).unwrap());
+        for &nullable_column in nullable_columns {
+            assert!(clone.is_null(nullable_column).unwrap());
+            assert!(clone.is_set(nullable_column).unwrap());
         }
 
-        assert!(!row.is_null_by_name("key").unwrap());
+        assert!(!row.is_null("key").unwrap());
     }
 
     #[test]
@@ -786,14 +740,14 @@ mod tests {
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
-        row.set_by_name("key", 42).unwrap();
-        row.set_by_name("bool", true).unwrap();
-        row.set_by_name("i64", -123i64).unwrap();
-        row.set_by_name("timestamp", 1514768523456789i64).unwrap();
-        row.set_by_name("binary", &[0x01, 0x02, 0x42, 0x88, 0xf7][..]).unwrap();
-        row.set_by_name("string", "foo").unwrap();
-        row.set_by_name("nullable_i32", None::<i32>).unwrap();
-        row.set_null_by_name("nullable_string").unwrap();
+        row.set("key", 42i32).unwrap();
+        row.set("bool", true).unwrap();
+        row.set("i64", -123i64).unwrap();
+        row.set("timestamp", 1514768523456789i64).unwrap();
+        row.set("binary", &[0x01, 0x02, 0x42, 0x88, 0xf7][..]).unwrap();
+        row.set("string", "foo").unwrap();
+        row.set("nullable_i32", None::<i32>).unwrap();
+        row.set_null("nullable_string").unwrap();
 
         assert_eq!("{key: 42, \
                      bool: true, \
@@ -811,17 +765,17 @@ mod tests {
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
-        row.set::<i32>(0, 12).unwrap();
+        row.set(0, 12i32).unwrap();
         assert!(row.is_set(0).unwrap_or(false));
-        assert_eq!(12, row.get::<i32>(0).unwrap());
+        assert_eq!(12i32, row.get(0).unwrap());
 
         // Test a borrowed string.
         row.set(10, "foo_borrowed").unwrap();
-        assert_eq!("foo_borrowed".to_owned(), row.get::<String>(10).unwrap());
+        assert_eq!("foo_borrowed".to_owned(), row.get::<_, String>(10).unwrap());
 
         // Test an owned string.
         row.set(10, "foo_owned".to_owned()).unwrap();
-        assert_eq!("foo_owned", row.get::<&str>(10).unwrap());
+        assert_eq!("foo_owned", row.get::<_, &str>(10).unwrap());
 
         assert_eq!("{key: 12, string: \"foo_owned\"}",
                    &format!("{:?}", row));
@@ -831,9 +785,9 @@ mod tests {
 
         // Test another borrowed string to ensure the owned string is deallocated.
         row.set(10, "foo_borrowed2").unwrap();
-        assert_eq!("foo_borrowed2", row.get::<&str>(10).unwrap());
+        assert_eq!("foo_borrowed2", row.get::<_, &str>(10).unwrap());
 
-        row.set_null_by_name("nullable_i32").unwrap();
+        row.set_null("nullable_i32").unwrap();
 
         assert_eq!("{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
                    &format!("{:?}", row));

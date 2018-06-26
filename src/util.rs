@@ -79,16 +79,16 @@ pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
     }
 
     match row.schema().columns()[idx].data_type() {
-        DataType::Bool => write!(f, "{}", row.get::<bool>(idx).unwrap()),
-        DataType::Int8 => write!(f, "{}", row.get::<i8>(idx).unwrap()),
-        DataType::Int16 => write!(f, "{}", row.get::<i16>(idx).unwrap()),
-        DataType::Int32 => write!(f, "{}", row.get::<i32>(idx).unwrap()),
-        DataType::Int64 => write!(f, "{}", row.get::<i64>(idx).unwrap()),
-        DataType::Timestamp => fmt_timestamp(f, row.get::<SystemTime>(idx).unwrap()),
-        DataType::Float => write!(f, "{}", row.get::<f32>(idx).unwrap()),
-        DataType::Double => write!(f, "{}", row.get::<f64>(idx).unwrap()),
-        DataType::Binary => fmt_hex(f, row.get::<&[u8]>(idx).unwrap()),
-        DataType::String => write!(f, "{:?}", row.get::<&str>(idx).unwrap()),
+        DataType::Bool => write!(f, "{}", row.get::<_, bool>(idx).unwrap()),
+        DataType::Int8 => write!(f, "{}", row.get::<_, i8>(idx).unwrap()),
+        DataType::Int16 => write!(f, "{}", row.get::<_, i16>(idx).unwrap()),
+        DataType::Int32 => write!(f, "{}", row.get::<_, i32>(idx).unwrap()),
+        DataType::Int64 => write!(f, "{}", row.get::<_, i64>(idx).unwrap()),
+        DataType::Timestamp => fmt_timestamp(f, row.get::<_, SystemTime>(idx).unwrap()),
+        DataType::Float => write!(f, "{}", row.get::<_, f32>(idx).unwrap()),
+        DataType::Double => write!(f, "{}", row.get::<_, f64>(idx).unwrap()),
+        DataType::Binary => fmt_hex(f, row.get::<_, &[u8]>(idx).unwrap()),
+        DataType::String => write!(f, "{:?}", row.get::<_, &str>(idx).unwrap()),
     }
 }
 
@@ -309,11 +309,11 @@ mod tests {
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
-        row.set_by_name("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
+        row.set("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
         assert_eq!("{timestamp: 1969-12-31T23:59:58.766000Z}",
                    &format!("{:?}", row));
 
-        row.set_by_name("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
+        row.set("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
         assert_eq!("{timestamp: 1970-01-01T00:00:01.234000Z}",
                    &format!("{:?}", row));
     }

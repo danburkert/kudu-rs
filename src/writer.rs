@@ -696,27 +696,26 @@ mod test {
         // TODO: remove lazy once apply no longer polls.
         runtime.block_on(future::lazy::<_, Result<(), ()>>(|| {
             // Insert a bunch of values
-            for i in 0..10 {
+            for i in 0..10i32 {
                 let mut insert = table.schema().new_row();
-                insert.set_by_name::<i32>("key", i).unwrap();
-                insert.set_by_name::<i32>("val", i).unwrap();
+                insert.set("key", i).unwrap();
+                insert.set("val", i).unwrap();
                 writer.insert(insert);
             }
 
             // Insert a duplicate value
             {
                 let mut insert = table.schema().new_row();
-                insert.set_by_name::<i32>("key", 1).unwrap();
-                insert.set_by_name::<i32>("val", 1).unwrap();
-
+                insert.set("key", 1i32).unwrap();
+                insert.set("val", 1i32).unwrap();
                 writer.insert(insert);
             }
 
             // Insert a null value
             {
                 let mut insert = table.schema().new_row();
-                insert.set_by_name::<i32>("key", 11).unwrap();
-                insert.set_by_name::<Option<i32>>("val", None).unwrap();
+                insert.set("key", 11i32).unwrap();
+                insert.set("val", None::<i32>).unwrap();
                 writer.insert(insert);
             }
             Ok(())

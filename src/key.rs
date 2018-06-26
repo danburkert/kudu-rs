@@ -95,10 +95,10 @@ where I: Iterator<Item=usize> + ExactSizeIterator {
 
 fn encode_column(row: &Row, idx: usize, is_last: bool, buf: &mut Vec<u8>) -> Result<()> {
     match row.schema().columns()[idx].data_type() {
-        DataType::Int8 => buf.push((row.get::<i8>(idx)? ^ i8::MIN) as u8),
-        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<i16>(idx)? ^ i16::MIN).unwrap(),
-        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<i32>(idx)? ^ i32::MIN).unwrap(),
-        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(row.get::<i64>(idx)? ^ i64::MIN).unwrap(),
+        DataType::Int8 => buf.push((row.get::<_, i8>(idx)? ^ i8::MIN) as u8),
+        DataType::Int16 => buf.write_i16::<BigEndian>(row.get::<_, i16>(idx)? ^ i16::MIN).unwrap(),
+        DataType::Int32 => buf.write_i32::<BigEndian>(row.get::<_, i32>(idx)? ^ i32::MIN).unwrap(),
+        DataType::Int64 | DataType::Timestamp => buf.write_i64::<BigEndian>(row.get::<_, i64>(idx)? ^ i64::MIN).unwrap(),
         DataType::Binary | DataType::String => encode_binary(row.get(idx)?, is_last, buf),
         DataType::Bool | DataType::Float | DataType::Double => {
             panic!("illegal type {:?} in key", row.schema().columns()[idx].data_type());
@@ -236,42 +236,42 @@ fn increment_cell(row: &mut Row, idx: usize) -> bool {
     }
     match row.schema().columns()[idx].data_type() {
         DataType::Bool => {
-            let val = row.get(idx).unwrap();
+            let val: bool = row.get(idx).unwrap();
             if val { return false };
             row.set(idx, true).unwrap();
         },
         DataType::Int8 => {
-            let val = row.get::<i8>(idx).unwrap();
+            let val: i8 = row.get(idx).unwrap();
             if val == i8::MAX { return false; }
             row.set(idx, val + 1).unwrap();
         },
         DataType::Int16 => {
-            let val = row.get::<i16>(idx).unwrap();
+            let val: i16 = row.get(idx).unwrap();
             if val == i16::MAX { return false; }
             row.set(idx, val + 1).unwrap();
         },
         DataType::Int32 => {
-            let val = row.get::<i32>(idx).unwrap();
+            let val: i32 = row.get(idx).unwrap();
             if val == i32::MAX { return false; }
             row.set(idx, val + 1).unwrap();
         },
         DataType::Int64 | DataType::Timestamp =>  {
-            let val = row.get::<i64>(idx).unwrap();
+            let val: i64 = row.get(idx).unwrap();
             if val == i64::MAX { return false; }
             row.set(idx, val + 1).unwrap();
         },
         DataType::Binary | DataType::String => {
-            let mut val = row.get::<Vec<u8>>(idx).unwrap();
+            let mut val: Vec<u8> = row.get(idx).unwrap();
             val.push(0u8);
             row.set(idx, val).unwrap();
         },
         DataType::Float => {
-            let val = row.get::<f32>(idx).unwrap();
+            let val: f32 = row.get(idx).unwrap();
             if val == f32::INFINITY || val.is_nan() { return false; }
             row.set(idx, val.next()).unwrap();
         },
         DataType::Double => {
-            let val = row.get::<f64>(idx).unwrap();
+            let val: f64 = row.get(idx).unwrap();
             if val == f64::INFINITY || val.is_nan() { return false; }
             row.set(idx, val.next()).unwrap();
         },
@@ -289,7 +289,7 @@ fn is_cell_equal(a: &Row, b: &Row, idx: usize) -> bool {
     }
 
     fn cmp<'a, T>(a: &'a Row, b: &'a Row, idx: usize) -> bool where T: Value<'a> + PartialEq {
-        a.get::<T>(idx).unwrap() == b.get::<T>(idx).unwrap()
+        a.get::<_,T>(idx).unwrap() == b.get::<_, T>(idx).unwrap()
     }
 
     match a.schema().columns()[idx].data_type() {
@@ -315,43 +315,45 @@ fn is_cell_incremented(lower: &Row, upper: &Row, idx: usize) -> bool {
 
     match lower.schema().columns()[idx].data_type() {
         DataType::Bool => {
-            !lower.get::<bool>(idx).unwrap() && upper.get::<bool>(idx).unwrap()
+            let lower: bool = lower.get(idx).unwrap();
+            let upper: bool = upper.get(idx).unwrap();
+            !lower && upper
         },
         DataType::Int8 => {
-            let lower = lower.get::<i8>(idx).unwrap();
-            let upper = upper.get::<i8>(idx).unwrap();
+            let lower: i8 = lower.get(idx).unwrap();
+            let upper: i8 = upper.get(idx).unwrap();
             lower < i8::MAX && lower + 1 == upper
         },
         DataType::Int16 => {
-            let lower = lower.get::<i16>(idx).unwrap();
-            let upper = upper.get::<i16>(idx).unwrap();
+            let lower: i16 = lower.get(idx).unwrap();
+            let upper: i16 = upper.get(idx).unwrap();
             lower < i16::MAX && lower + 1 == upper
         },
         DataType::Int32 => {
-            let lower = lower.get::<i32>(idx).unwrap();
-            let upper = upper.get::<i32>(idx).unwrap();
+            let lower: i32 = lower.get(idx).unwrap();
+            let upper: i32 = upper.get(idx).unwrap();
             lower < i32::MAX && lower + 1 == upper
         },
         DataType::Int64 | DataType::Timestamp => {
-            let lower = lower.get::<i8>(idx).unwrap();
-            let upper = upper.get::<i8>(idx).unwrap();
-            lower < i8::MAX && lower + 1 == upper
+            let lower: i64 = lower.get(idx).unwrap();
+            let upper: i64 = upper.get(idx).unwrap();
+            lower < i64::MAX && lower + 1 == upper
         },
         DataType::Binary | DataType::String => {
-            let lower = lower.get::<&[u8]>(idx).unwrap();
-            let upper = upper.get::<&[u8]>(idx).unwrap();
+            let lower: &[u8] = lower.get(idx).unwrap();
+            let upper: &[u8] = upper.get(idx).unwrap();
             lower.len() + 1 == upper.len() &&
                 lower == &upper[..lower.len()] &&
                 upper[upper.len() - 1] == 0
         },
         DataType::Float => {
-            let lower = lower.get::<f32>(idx).unwrap();
-            let upper = upper.get::<f32>(idx).unwrap();
+            let lower: f32 = lower.get(idx).unwrap();
+            let upper: f32 = upper.get(idx).unwrap();
             lower != f32::INFINITY && lower.next() == upper
         },
         DataType::Double => {
-            let lower = lower.get::<f64>(idx).unwrap();
-            let upper = upper.get::<f64>(idx).unwrap();
+            let lower: f64 = lower.get(idx).unwrap();
+            let upper: f64 = upper.get(idx).unwrap();
             lower != f64::INFINITY && lower.next() == upper
         },
     }

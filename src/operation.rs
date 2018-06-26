@@ -116,7 +116,7 @@ impl OperationEncoder {
                 }
                 let data_type = column.data_type();
                 if data_type.is_var_len() {
-                    let data = row.get::<&[u8]>(idx).unwrap();
+                    let data: &[u8] = row.get(idx).unwrap();
                     let mut buf = [0u8; 16];
                     LittleEndian::write_u64(&mut buf[..], self.indirect_data.len() as u64);
                     LittleEndian::write_u64(&mut buf[8..], data.len() as u64);
@@ -151,7 +151,7 @@ impl OperationEncoder {
 
             len += column.data_type().size();
             if column.data_type().is_var_len() {
-                len += row.get::<&[u8]>(idx).unwrap().len();
+                len += row.get::<_, &[u8]>(idx).unwrap().len();
             }
         }
 

@@ -155,6 +155,24 @@ struct Inner {
     has_nullable_columns: bool,
 }
 
+pub trait ColumnSelector {
+    fn column_index(self, schema: &Schema) -> Result<usize>;
+}
+
+impl ColumnSelector for usize {
+    #[inline]
+    fn column_index(self, schema: &Schema) -> Result<usize> {
+        schema.check_index(self).map(|_| self)
+    }
+}
+
+impl <'a> ColumnSelector for &'a str {
+    fn column_index(self, schema: &Schema) -> Result<usize> {
+        schema.column_index(self)
+              .ok_or_else(|| Error::InvalidArgument(format!("unknown column {}", self)))
+    }
+}
+
 #[derive(Clone)]
 pub struct Schema {
     inner: Arc<Inner>,

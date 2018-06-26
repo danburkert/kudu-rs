@@ -381,8 +381,8 @@ mod tests {
         let mut lower_bound = schema.new_row();
         let mut upper_bound = schema.new_row();
 
-        lower_bound.set_by_name("key", "a").unwrap();
-        upper_bound.set_by_name("key", "z").unwrap();
+        lower_bound.set("key", "a").unwrap();
+        upper_bound.set("key", "z").unwrap();
 
         let mut alter_builder = AlterTableBuilder::new();
         alter_builder.add_range_partition(&RangePartitionBound::Inclusive(lower_bound),

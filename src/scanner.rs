@@ -17,6 +17,7 @@ use futures::{
 };
 
 use Column;
+use ColumnSelector;
 use Error;
 use Result;
 use Row;
@@ -74,28 +75,13 @@ impl ScanBuilder {
         }
     }
 
-    pub fn projected_columns<I>(mut self, column_indexes: I) -> Result<ScanBuilder>
-        where I: IntoIterator<Item=usize>
+    pub fn projected_columns<I, C>(mut self, column_selectors: I) -> Result<ScanBuilder>
+        where I: IntoIterator<Item=C>,
+              C: ColumnSelector
     {
         self.projected_columns.clear();
-        self.projected_columns.extend(column_indexes);
-        for &idx in &self.projected_columns {
-            self.table_schema.check_index(idx)?;
-        }
-        Ok(self)
-    }
-
-    pub fn projected_column_names<N, I>(mut self, column_names: I) -> Result<ScanBuilder>
-        where N: AsRef<str>,
-              I: IntoIterator<Item=N>
-    {
-        self.projected_columns.clear();
-        for column in column_names {
-            let column = column.as_ref();
-            match self.table_schema.column_index(column) {
-                Some(idx) => self.projected_columns.push(idx),
-                None => return Err(Error::InvalidArgument(format!("unknown column {}", column))),
-            }
+        for column_selector in column_selectors {
+            self.projected_columns.push(column_selector.column_index(&self.table_schema)?);
         }
         Ok(self)
     }
@@ -469,15 +455,15 @@ mod test {
 
         let mut writer = table.new_writer(WriterConfig::default());
 
-        let num_rows = 100;
+        let num_rows = 100i32;
 
         // TODO: remove lazy once apply no longer polls.
         runtime.block_on(future::lazy::<_, Result<()>>(|| {
             // Insert a bunch of values
             for i in 0..num_rows {
                 let mut insert = table.schema().new_row();
-                insert.set_by_name::<i32>("key", i).unwrap();
-                insert.set_by_name::<i32>("val", i).unwrap();
+                insert.set("key", i).unwrap();
+                insert.set("val", i).unwrap();
                 writer.insert(insert);
             }
             Ok(())
@@ -486,7 +472,7 @@ mod test {
         runtime.block_on(future::poll_fn(|| writer.poll_flush())).unwrap();
 
         let scan: Scan = runtime.block_on(::futures::future::lazy::<_, Result<Scan>>(|| {
-            Ok(table.scan_builder().projected_columns(iter::empty())?.build())
+            Ok(table.scan_builder().projected_columns(iter::empty::<usize>())?.build())
         })).unwrap();
 
         let batches: Vec<RowBatch> = runtime.block_on(::futures::future::lazy(|| scan.collect())).unwrap();
@@ -518,15 +504,15 @@ mod test {
         let table_id = runtime.block_on(client.create_table(table_builder)).unwrap();
         let table = runtime.block_on(client.open_table_by_id(table_id)).unwrap();
         let mut writer = table.new_writer(WriterConfig::default());
-        let num_rows = 10;
+        let num_rows = 10i32;
 
         // TODO: remove lazy once apply no longer polls.
         runtime.block_on(future::lazy::<_, Result<()>>(|| {
             // Insert a bunch of values
             for i in 0..num_rows {
                 let mut insert = table.schema().new_row();
-                insert.set_by_name::<i32>("key", i).unwrap();
-                insert.set_by_name::<i32>("val", i).unwrap();
+                insert.set("key", i).unwrap();
+                insert.set("val", i).unwrap();
                 writer.insert(insert);
             }
             Ok(())
@@ -542,8 +528,8 @@ mod test {
         let mut rows = Vec::new();
         for batch in batches {
             for row in batch.into_iter() {
-                rows.push((row.get_by_name::<i32>("key").unwrap(),
-                           row.get_by_name::<i32>("val").unwrap()));
+                rows.push((row.get::<_, i32>("key").unwrap(),
+                           row.get::<_, i32>("val").unwrap()));
             }
         }
 
