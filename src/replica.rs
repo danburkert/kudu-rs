@@ -1,43 +1,31 @@
 #![allow(unused_imports)]
 
-use std::collections::{
-    VecDeque,
-    HashMap,
-};
 use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::slice;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
-use futures::{
-    Async,
-    Future,
-    Poll,
-    Stream,
-};
 use futures::stream::FuturesUnordered;
-use krpc::{
-    Call,
-    Proxy,
-    RpcFuture,
-};
+use futures::{Async, Future, Poll, Stream};
+use krpc::{Call, Proxy, RpcFuture};
 use prost::Message;
 use tokio_timer::Delay;
 
+use backoff::Backoff;
+use retry::Retriable;
+use util::ContextFuture;
 use Error;
 use MasterError;
 use MasterErrorCode;
 use TabletServerError;
 use TabletServerErrorCode;
-use backoff::Backoff;
-use retry::Retriable;
-use util::ContextFuture;
 
 /// The strategy for speculative execution.
 pub enum Speculation {
@@ -53,9 +41,11 @@ pub(crate) enum Selection {
 }
 
 impl Selection {
-
     /// Sorts a set of replicas into a prioritized queue of offsets.
-    fn prioritize<R>(&self, replicas: &[R], backoff: Backoff) -> VecDeque<ReplicaState> where R: Replica {
+    fn prioritize<R>(&self, replicas: &[R], backoff: Backoff) -> VecDeque<ReplicaState>
+    where
+        R: Replica,
+    {
         let mut queue = VecDeque::with_capacity(replicas.len());
         match self {
             Selection::Leader => for (idx, replica) in replicas.iter().enumerate() {
@@ -81,7 +71,6 @@ impl Selection {
 }
 
 pub(crate) trait Replica {
-
     /// Returns a KRPC proxy to the tablet server hosting the replica.
     fn proxy(&self) -> Proxy;
 
@@ -117,7 +106,12 @@ struct ReplicaState {
 
 impl ReplicaState {
     fn new(index: usize, backoff: Backoff, proxy: Proxy) -> ReplicaState {
-        ReplicaState { index, backoff, proxy, failure: None }
+        ReplicaState {
+            index,
+            backoff,
+            proxy,
+            failure: None,
+        }
     }
 }
 
@@ -133,9 +127,11 @@ impl fmt::Debug for ReplicaState {
 
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct ReplicaRpc<Set, Req, Resp>
-where Set: ReplicaSet,
-      Req: Message + 'static,
-      Resp: Retriable {
+where
+    Set: ReplicaSet,
+    Req: Message + 'static,
+    Resp: Retriable,
+{
     replica_set: Set,
     call: Call<Req, Resp>,
     speculation: Speculation,
@@ -157,18 +153,19 @@ where Set: ReplicaSet,
     failures: Vec<ReplicaState>,
 }
 
-impl <Set, Req, Resp> ReplicaRpc<Set, Req, Resp>
-where Set: ReplicaSet,
-      Req: Message + 'static,
-      Resp: Retriable {
-
-    pub(crate) fn new(replica_set: Set,
-                      call: Call<Req, Resp>,
-                      speculation: Speculation,
-                      selection: Selection,
-                      backoff: Backoff)
-                      -> ReplicaRpc<Set, Req, Resp> {
-
+impl<Set, Req, Resp> ReplicaRpc<Set, Req, Resp>
+where
+    Set: ReplicaSet,
+    Req: Message + 'static,
+    Resp: Retriable,
+{
+    pub(crate) fn new(
+        replica_set: Set,
+        call: Call<Req, Resp>,
+        speculation: Speculation,
+        selection: Selection,
+        backoff: Backoff,
+    ) -> ReplicaRpc<Set, Req, Resp> {
         let queue = selection.prioritize(replica_set.replicas(), backoff);
         ReplicaRpc {
             replica_set,
@@ -184,9 +181,9 @@ where Set: ReplicaSet,
     }
 
     fn speculation_timer_is_ready(&mut self) -> bool {
-        self.speculative_timer.as_mut().map_or(true, |sleep| {
-            sleep.poll().expect("timer failed").is_ready()
-        })
+        self.speculative_timer
+            .as_mut()
+            .map_or(true, |sleep| sleep.poll().expect("timer failed").is_ready())
     }
 
     fn reset_speculation_timer(&mut self, duration: Duration) {
@@ -217,7 +214,7 @@ where Set: ReplicaSet,
                         self.in_flight.push(context);
                         self.reset_speculation_timer(duration);
                     }
-                },
+                }
             }
         }
 
@@ -236,7 +233,7 @@ where Set: ReplicaSet,
                 Ok(Async::Ready(Some(((resp, sidecars), replica)))) => {
                     let response = resp.into_result().map(|resp| (resp, sidecars));
                     (response, replica)
-                },
+                }
                 Err((error, replica)) => (Err(error.into()), replica),
             };
 
@@ -245,11 +242,21 @@ where Set: ReplicaSet,
                     if self.selection == Selection::Leader {
                         self.replica_set.replicas()[replica.index].mark_leader();
                     }
-                    return Ok(Async::Ready((replica.proxy, response, sidecars)))
-                },
+                    return Ok(Async::Ready((replica.proxy, response, sidecars)));
+                }
 
-                | Err(error@Error::TabletServer(TabletServerError { code: TabletServerErrorCode::TabletNotFound, .. }))
-                | Err(error@Error::TabletServer(TabletServerError { code: TabletServerErrorCode::TabletFailed, .. })) => {
+                | Err(
+                    error @ Error::TabletServer(TabletServerError {
+                        code: TabletServerErrorCode::TabletNotFound,
+                        ..
+                    }),
+                )
+                | Err(
+                    error @ Error::TabletServer(TabletServerError {
+                        code: TabletServerErrorCode::TabletFailed,
+                        ..
+                    }),
+                ) => {
                     self.replica_set.replicas()[replica.index].mark_stale();
                     match self.selection {
                         Selection::Leader => {
@@ -261,7 +268,7 @@ where Set: ReplicaSet,
                             //
                             // TODO: implement the higher level retry mechanism mentioned above.
                             return Err(error);
-                        },
+                        }
                         Selection::Closest => {
                             // If we aren't relying on finding the leader then we can continue
                             // trying the RPC at other replicas.
@@ -269,13 +276,32 @@ where Set: ReplicaSet,
                             self.failures.push(replica);
                         }
                     }
-                },
+                }
 
-                | Err(error@Error::Master(MasterError { code: MasterErrorCode::NotTheLeader, .. }))
-                | Err(error@Error::Master(MasterError { code: MasterErrorCode::CatalogManagerNotInitialized, .. }))
-                | Err(error@Error::TabletServer(TabletServerError { code: TabletServerErrorCode::NotTheLeader, .. }))
-                | Err(error@Error::TabletServer(TabletServerError { code: TabletServerErrorCode::TabletNotRunning, .. }))
-                => {
+                | Err(
+                    error @ Error::Master(MasterError {
+                        code: MasterErrorCode::NotTheLeader,
+                        ..
+                    }),
+                )
+                | Err(
+                    error @ Error::Master(MasterError {
+                        code: MasterErrorCode::CatalogManagerNotInitialized,
+                        ..
+                    }),
+                )
+                | Err(
+                    error @ Error::TabletServer(TabletServerError {
+                        code: TabletServerErrorCode::NotTheLeader,
+                        ..
+                    }),
+                )
+                | Err(
+                    error @ Error::TabletServer(TabletServerError {
+                        code: TabletServerErrorCode::TabletNotRunning,
+                        ..
+                    }),
+                ) => {
                     self.replica_set.replicas()[replica.index].mark_follower();
                     // Retry the RPC after a backoff period.
                     replica.failure = Some(error);
@@ -284,11 +310,11 @@ where Set: ReplicaSet,
                     self.backoff.push(context);
                 }
 
-                | Err(error@Error::Io(..)) => {
+                | Err(error @ Error::Io(..)) => {
                     // IO errors are non-retriable, however they are not fatal.
                     replica.failure = Some(error);
                     self.failures.push(replica);
-                },
+                }
 
                 // TODO: handle timed out error.  Probably by gathering up all of the errors that
                 // have been encountered and creating a compound error.
@@ -300,11 +326,12 @@ where Set: ReplicaSet,
     }
 }
 
-impl <Set, Req, Resp> Future for ReplicaRpc<Set, Req, Resp>
-where Set: ReplicaSet,
-      Req: Message + 'static,
-      Resp: Retriable {
-
+impl<Set, Req, Resp> Future for ReplicaRpc<Set, Req, Resp>
+where
+    Set: ReplicaSet,
+    Req: Message + 'static,
+    Resp: Retriable,
+{
     type Item = (Proxy, Resp, Vec<BytesMut>);
     type Error = Error;
 
@@ -329,10 +356,11 @@ where Set: ReplicaSet,
                     return Err(self.failures.pop().unwrap().failure.unwrap());
                 }
 
-                let errors = self.failures
-                                 .iter_mut()
-                                 .map(|failure| failure.failure.take().unwrap())
-                                 .collect::<Vec<_>>();
+                let errors = self
+                    .failures
+                    .iter_mut()
+                    .map(|failure| failure.failure.take().unwrap())
+                    .collect::<Vec<_>>();
 
                 return Err(Error::Compound("failed replicated RPC".to_string(), errors));
             }
@@ -349,9 +377,7 @@ impl ReplicaSet for Proxy {
     type Replica = Proxy;
     fn replicas(&self) -> &[Proxy] {
         // TODO(rust-lang/rust#45703): replace with slice::from_ref.
-        unsafe {
-            slice::from_raw_parts(self, 1)
-        }
+        unsafe { slice::from_raw_parts(self, 1) }
     }
 }
 

@@ -7,12 +7,11 @@ use threadpool;
 
 use pb::rpc::ErrorStatusPb;
 
-pub use pb::rpc::error_status_pb::{RpcErrorCodePb as RpcErrorCode};
+pub use pb::rpc::error_status_pb::RpcErrorCodePb as RpcErrorCode;
 
 /// An RPC error.
 #[derive(Debug)]
 pub enum Error {
-
     /// A Kudu RPC error.
     Rpc(RpcError),
 
@@ -51,7 +50,7 @@ impl Clone for Error {
                     // TODO: this is not a full copy in all cases.
                     None => Error::Io(io::Error::from(error.kind())),
                 }
-            },
+            }
             Error::Serialization(ref error) => Error::Serialization(error.clone()),
             Error::TimedOut => Error::TimedOut,
             Error::Negotiation(ref error) => Error::Negotiation(error.clone()),
@@ -125,19 +124,18 @@ pub struct RpcError {
 }
 
 impl RpcError {
-
     /// Returns `true` if the error is fatal.
     ///
     /// Fatal errors cause the connection to the server to be reset.
     pub fn is_fatal(&self) -> bool {
         match self.code {
-            RpcErrorCode::FatalDeserializingRequest |
-            RpcErrorCode::FatalInvalidAuthenticationToken |
-            RpcErrorCode::FatalInvalidRpcHeader |
-            RpcErrorCode::FatalServerShuttingDown |
-            RpcErrorCode::FatalUnauthorized |
-            RpcErrorCode::FatalUnknown |
-            RpcErrorCode::FatalVersionMismatch  => true,
+            RpcErrorCode::FatalDeserializingRequest
+            | RpcErrorCode::FatalInvalidAuthenticationToken
+            | RpcErrorCode::FatalInvalidRpcHeader
+            | RpcErrorCode::FatalServerShuttingDown
+            | RpcErrorCode::FatalUnauthorized
+            | RpcErrorCode::FatalUnknown
+            | RpcErrorCode::FatalVersionMismatch => true,
             _ => false,
         }
     }

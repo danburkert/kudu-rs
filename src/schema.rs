@@ -4,15 +4,16 @@ use std::fmt;
 use std::sync::Arc;
 
 use pb::{ColumnSchemaPb, SchemaPb};
-#[cfg(any(feature="quickcheck", test))] use quickcheck;
+#[cfg(any(feature = "quickcheck", test))]
+use quickcheck;
 
+use bitmap;
 use CompressionType;
 use DataType;
 use EncodingType;
 use Error;
 use Result;
 use Row;
-use bitmap;
 
 /// `Column` instances hold metadata information about columns in a Kudu table.
 ///
@@ -29,7 +30,6 @@ pub struct Column {
 }
 
 impl Column {
-
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -59,7 +59,10 @@ impl Column {
     }
 
     /// Returns a new column builder.
-    pub fn builder<S>(name: S, data_type: DataType) -> Column where S: Into<String> {
+    pub fn builder<S>(name: S, data_type: DataType) -> Column
+    where
+        S: Into<String>,
+    {
         Column {
             name: name.into(),
             data_type: data_type,
@@ -166,10 +169,11 @@ impl ColumnSelector for usize {
     }
 }
 
-impl <'a> ColumnSelector for &'a str {
+impl<'a> ColumnSelector for &'a str {
     fn column_index(self, schema: &Schema) -> Result<usize> {
-        schema.column_index(self)
-              .ok_or_else(|| Error::InvalidArgument(format!("unknown column {}", self)))
+        schema
+            .column_index(self)
+            .ok_or_else(|| Error::InvalidArgument(format!("unknown column {}", self)))
     }
 }
 
@@ -179,7 +183,6 @@ pub struct Schema {
 }
 
 impl Schema {
-
     pub(crate) fn new(columns: Vec<Column>, num_primary_key_columns: usize) -> Schema {
         let mut columns_by_name = HashMap::with_capacity(columns.len());
         let mut column_offsets = Vec::with_capacity(columns.len());
@@ -205,7 +208,7 @@ impl Schema {
                 num_primary_key_columns,
                 row_len,
                 has_nullable_columns,
-            })
+            }),
         }
     }
 
@@ -234,12 +237,18 @@ impl Schema {
     }
 
     pub fn primary_key_projection(&self) -> Schema {
-        Schema::new(self.primary_key().to_owned(), self.num_primary_key_columns())
+        Schema::new(
+            self.primary_key().to_owned(),
+            self.num_primary_key_columns(),
+        )
     }
 
     pub(crate) fn check_index(&self, idx: usize) -> Result<()> {
         if idx >= self.columns().len() {
-            Err(Error::InvalidArgument(format!("index {} is invalid for schema {:?}", idx, self)))
+            Err(Error::InvalidArgument(format!(
+                "index {} is invalid for schema {:?}",
+                idx, self
+            )))
         } else {
             Ok(())
         }
@@ -288,7 +297,8 @@ impl Schema {
     pub(crate) fn as_pb(&self) -> SchemaPb {
         let mut pb = SchemaPb::default();
         for (idx, column) in self.inner.columns.iter().enumerate() {
-            pb.columns.push(column.to_pb(idx < self.inner.num_primary_key_columns));
+            pb.columns
+                .push(column.to_pb(idx < self.inner.num_primary_key_columns));
         }
         pb
     }
@@ -297,7 +307,9 @@ impl Schema {
         let mut num_primary_key_columns = 0;
         let mut columns = Vec::with_capacity(pb.columns.len());
         for column in pb.columns {
-            if column.is_key() { num_primary_key_columns += 1 }
+            if column.is_key() {
+                num_primary_key_columns += 1
+            }
             columns.push(try!(Column::from_pb(column)))
         }
         Ok(Schema::new(columns, num_primary_key_columns))
@@ -306,13 +318,13 @@ impl Schema {
 
 impl cmp::PartialEq for Schema {
     fn eq(&self, other: &Schema) -> bool {
-        self.ref_eq(other) ||
-            (self.inner.num_primary_key_columns == other.inner.num_primary_key_columns &&
-             self.inner.columns == other.inner.columns)
+        self.ref_eq(other)
+            || (self.inner.num_primary_key_columns == other.inner.num_primary_key_columns
+                && self.inner.columns == other.inner.columns)
     }
 }
 
-impl cmp::Eq for Schema { }
+impl cmp::Eq for Schema {}
 
 impl fmt::Debug for Schema {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -340,9 +352,12 @@ impl fmt::Debug for Schema {
     }
 }
 
-#[cfg(any(feature="quickcheck", test))]
+#[cfg(any(feature = "quickcheck", test))]
 impl quickcheck::Arbitrary for Schema {
-    fn arbitrary<G>(g: &mut G) -> Schema where G: quickcheck::Gen {
+    fn arbitrary<G>(g: &mut G) -> Schema
+    where
+        G: quickcheck::Gen,
+    {
         use std::collections::HashSet;
 
         let mut builder = SchemaBuilder::new();
@@ -362,14 +377,19 @@ impl quickcheck::Arbitrary for Schema {
 
         for column in columns {
             let is_pk = primary_key_columns.contains(column);
-            let data_type = if is_pk { DataType::arbitrary_primary_key(g) }
-                                else { DataType::arbitrary(g) };
-
+            let data_type = if is_pk {
+                DataType::arbitrary_primary_key(g)
+            } else {
+                DataType::arbitrary(g)
+            };
 
             let column = Column::builder(column.as_str(), data_type);
 
-            let column = if is_pk || bool::arbitrary(g) { column.set_not_null() }
-            else { column.set_nullable() };
+            let column = if is_pk || bool::arbitrary(g) {
+                column.set_not_null()
+            } else {
+                column.set_nullable()
+            };
 
             let column = column.set_encoding(EncodingType::arbitrary(g, data_type));
             let column = column.set_compression(CompressionType::arbitrary(g));
@@ -385,29 +405,49 @@ impl quickcheck::Arbitrary for Schema {
         let mut primary_key_columns: Vec<String> = primary_key_columns.iter().cloned().collect();
         g.shuffle(&mut primary_key_columns);
 
-        builder.set_primary_key(primary_key_columns).build().unwrap()
+        builder
+            .set_primary_key(primary_key_columns)
+            .build()
+            .unwrap()
     }
 
     /// Returns an iterator containing versions of the schema with columns removed.
-    fn shrink(&self) -> Box<Iterator<Item=Self>> {
-        if self.columns().len() == 1 { return quickcheck::empty_shrinker(); }
+    fn shrink(&self) -> Box<Iterator<Item = Self>> {
+        if self.columns().len() == 1 {
+            return quickcheck::empty_shrinker();
+        }
 
         let mut schemas: Vec<Schema> = Vec::new();
-        let start_idx = if self.num_primary_key_columns() > 1 { 0 } else { 1 };
+        let start_idx = if self.num_primary_key_columns() > 1 {
+            0
+        } else {
+            1
+        };
 
         for idx in (start_idx..self.columns().len()).rev() {
             let mut builder = SchemaBuilder::new();
 
-            for column in self.columns()[..idx].iter().chain(self.columns()[idx+1..].iter()).cloned() {
+            for column in self.columns()[..idx]
+                .iter()
+                .chain(self.columns()[idx + 1..].iter())
+                .cloned()
+            {
                 builder = builder.add_column(column);
             }
 
             let mut primary_key_columns = Vec::new();
             for pk_idx in 0..self.num_primary_key_columns() {
-                if idx == pk_idx { continue; }
+                if idx == pk_idx {
+                    continue;
+                }
                 primary_key_columns.push(self.columns()[pk_idx].name().to_owned());
             }
-            schemas.push(builder.set_primary_key(primary_key_columns).build().unwrap());
+            schemas.push(
+                builder
+                    .set_primary_key(primary_key_columns)
+                    .build()
+                    .unwrap(),
+            );
         }
 
         Box::new(schemas.into_iter())
@@ -422,7 +462,6 @@ pub struct SchemaBuilder {
 }
 
 impl SchemaBuilder {
-
     pub fn new() -> SchemaBuilder {
         SchemaBuilder {
             columns: Vec::new(),
@@ -436,7 +475,10 @@ impl SchemaBuilder {
         self
     }
 
-    pub fn set_primary_key<S>(mut self, columns: Vec<S>) -> SchemaBuilder where S: Into<String> {
+    pub fn set_primary_key<S>(mut self, columns: Vec<S>) -> SchemaBuilder
+    where
+        S: Into<String>,
+    {
         self.primary_key = columns.into_iter().map(Into::into).collect();
         self
     }
@@ -444,19 +486,24 @@ impl SchemaBuilder {
     pub fn build(mut self) -> Result<Schema> {
         if self.primary_key.is_empty() {
             return Err(Error::InvalidArgument(
-                    "primary key must have at least one column".to_owned()));
+                "primary key must have at least one column".to_owned(),
+            ));
         }
 
         let mut columns = Vec::with_capacity(self.columns.len());
 
         for column_name in &self.primary_key {
-            let idx = self.columns.iter().position(|col| col.name() == column_name);
+            let idx = self
+                .columns
+                .iter()
+                .position(|col| col.name() == column_name);
             if let Some(idx) = idx {
                 columns.push(self.columns.remove(idx));
             } else {
-                return Err(Error::InvalidArgument(
-                    format!("primary key column '{}' has no corresponding column",
-                            column_name)))
+                return Err(Error::InvalidArgument(format!(
+                    "primary key column '{}' has no corresponding column",
+                    column_name
+                )));
             }
         }
 

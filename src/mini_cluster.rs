@@ -1,39 +1,22 @@
 use std::env;
 use std::ffi::CString;
-use std::io::{
-    Read,
-    Write,
-    BufRead,
-    BufReader,
-};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 
-use byteorder::{
-    BigEndian,
-    ReadBytesExt,
-    WriteBytesExt,
-};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use prost::Message;
 use tempdir::TempDir;
 
-use HostPort;
-use pb::tools::{
-    ControlShellRequestPb,
-    ControlShellResponsePb,
-    CreateClusterRequestPb,
-    DaemonIdentifierPb,
-    DaemonType,
-    GetMastersRequestPb,
-    GetMastersResponsePb,
-    StartClusterRequestPb,
-    StartDaemonRequestPb,
-    StopClusterRequestPb,
-    StopDaemonRequestPb,
-};
 use pb::tools::control_shell_request_pb::Request;
 use pb::tools::control_shell_response_pb::Response;
+use pb::tools::{
+    ControlShellRequestPb, ControlShellResponsePb, CreateClusterRequestPb, DaemonIdentifierPb,
+    DaemonType, GetMastersRequestPb, GetMastersResponsePb, StartClusterRequestPb,
+    StartDaemonRequestPb, StopClusterRequestPb, StopDaemonRequestPb,
+};
+use HostPort;
 
 pub struct MiniCluster {
     data_root: TempDir,
@@ -45,14 +28,14 @@ impl MiniCluster {
     pub fn new(conf: &MiniClusterConfig) -> MiniCluster {
         let data_root = TempDir::new("kudu-mini-cluster").unwrap();
         let mut process = Command::new(&get_executable_path("kudu"))
-                                  .arg("test")
-                                  .arg("mini_cluster")
-                                  .arg("--serialization=pb")
-                                  .stdin(Stdio::piped())
-                                  .stdout(Stdio::piped())
-                                  .stderr(Stdio::piped())
-                                  .spawn()
-                                  .unwrap();
+            .arg("test")
+            .arg("mini_cluster")
+            .arg("--serialization=pb")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
 
         let stderr = process.stderr.take().unwrap();
         let logger = thread::spawn(move || {
@@ -88,7 +71,10 @@ impl MiniCluster {
         let response = self.send_request(Request::GetMasters(GetMastersRequestPb::default()));
 
         if let Some(Response::GetMasters(GetMastersResponsePb { masters })) = response {
-            masters.into_iter().map(|master| master.bound_rpc_address.unwrap().into()).collect()
+            masters
+                .into_iter()
+                .map(|master| master.bound_rpc_address.unwrap().into())
+                .collect()
         } else {
             panic!("unexpected response: {:?}", response)
         }
@@ -98,25 +84,23 @@ impl MiniCluster {
         let mut id = DaemonIdentifierPb::default();
         id.set_type_(DaemonType::Master);
         id.index = Some(index);
-        self.send_request(Request::StopDaemon(StopDaemonRequestPb {
-            id: Some(id),
-        }));
+        self.send_request(Request::StopDaemon(StopDaemonRequestPb { id: Some(id) }));
     }
 
     pub fn start_master(&mut self, index: u32) {
         let mut id = DaemonIdentifierPb::default();
         id.set_type_(DaemonType::Master);
         id.index = Some(index);
-        self.send_request(Request::StartDaemon(StartDaemonRequestPb {
-            id: Some(id),
-        }));
+        self.send_request(Request::StartDaemon(StartDaemonRequestPb { id: Some(id) }));
     }
 
     fn send_request(&mut self, request: Request) -> Option<Response> {
         let stdin = self.process.stdin.as_mut().expect("stdin");
         let stdout = self.process.stdout.as_mut().expect("stdout");
 
-        let request = ControlShellRequestPb { request: Some(request) };
+        let request = ControlShellRequestPb {
+            request: Some(request),
+        };
         let len = request.encoded_len();
 
         let mut buf = Vec::with_capacity(len);
@@ -145,7 +129,6 @@ impl Drop for MiniCluster {
     }
 }
 
-
 impl Default for MiniCluster {
     fn default() -> MiniCluster {
         MiniCluster::new(&MiniClusterConfig::default())
@@ -166,15 +149,16 @@ fn get_executable_path(executable: &str) -> PathBuf {
     }
 
     let path_bytes = Command::new("which")
-                             .arg(executable)
-                             .output()
-                             .unwrap()
-                             .stdout;
+        .arg(executable)
+        .output()
+        .unwrap()
+        .stdout;
     let path = CString::new(path_bytes).unwrap().into_string().unwrap();
 
-    PathBuf::from(path.lines().next().expect(
-            &format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
-                     executable)))
+    PathBuf::from(path.lines().next().expect(&format!(
+        "unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
+        executable
+    )))
 }
 
 /// Mini cluster configuration options. Unless otherwise specified, the defaults match the master
@@ -185,7 +169,6 @@ pub struct MiniClusterConfig {
 }
 
 impl MiniClusterConfig {
-
     pub fn num_masters(&mut self, num_masters: u32) -> &mut MiniClusterConfig {
         self.pb.num_masters = Some(num_masters as i32);
         self
@@ -214,8 +197,10 @@ impl MiniClusterConfig {
     }
 
     pub fn get_table_locations_delay(&mut self, millis: i32) -> &mut MiniClusterConfig {
-        self.pb.extra_master_flags.push(format!("--master-inject-latency-on-tablet-lookup-ms={}",
-                                                millis));
+        self.pb.extra_master_flags.push(format!(
+            "--master-inject-latency-on-tablet-lookup-ms={}",
+            millis
+        ));
         self
     }
 

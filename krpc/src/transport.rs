@@ -1,50 +1,20 @@
-use std::io::{
-    self,
-    Read,
-    Write,
-};
-use std::net::{
-    Shutdown,
-    SocketAddr,
-};
-use std::time::{
-    Duration,
-};
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr};
+use std::time::Duration;
 use std::u32;
 
 use byteorder::{BigEndian, ByteOrder};
-use bytes::{
-    BufMut,
-    Bytes,
-    BytesMut,
-    IntoBuf,
-};
-use futures::{
-    Async,
-    Future,
-    Poll,
-};
-use prost::{
-    Message,
-    decode_length_delimiter,
-    length_delimiter_len,
-};
-use tokio::net::{
-    ConnectFuture,
-    TcpStream,
-};
+use bytes::{BufMut, Bytes, BytesMut, IntoBuf};
+use futures::{Async, Future, Poll};
+use prost::{decode_length_delimiter, length_delimiter_len, Message};
+use tokio::net::{ConnectFuture, TcpStream};
 
-use Options;
+use pb::rpc::{ErrorStatusPb, RemoteMethodPb, RequestHeader, ResponseHeader};
 use Error;
+use Options;
 use RequestBody;
 use RpcError;
 use RpcErrorCode;
-use pb::rpc::{
-    ErrorStatusPb,
-    RemoteMethodPb,
-    RequestHeader,
-    ResponseHeader,
-};
 
 const INITIAL_CAPACITY: usize = 8 * 1024;
 const BACKPRESSURE_BOUNDARY: usize = INITIAL_CAPACITY;
@@ -70,7 +40,6 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-
     /// Returns a future which will yield a new transport.
     pub fn connect(addr: SocketAddr, options: Options) -> TransportNew {
         let connect = TcpStream::connect(&addr);
@@ -112,18 +81,23 @@ impl Transport {
     ///
     /// If a fatal error is returned the transport is shut down. If a non-fatal error is returned,
     /// the RPC should be failed.
-    pub fn send(&mut self,
-                call_id: i32,
-                service: &str,
-                method: &str,
-                required_feature_flags: &[u32],
-                body: &RequestBody,
-                timeout: Option<Duration>) -> Result<(), Error> {
+    pub fn send(
+        &mut self,
+        call_id: i32,
+        service: &str,
+        method: &str,
+        required_feature_flags: &[u32],
+        body: &RequestBody,
+        timeout: Option<Duration>,
+    ) -> Result<(), Error> {
         let result = || -> Result<(), Error> {
             // Set the header fields.
             self.request_header.call_id = call_id;
             {
-                let remote_method = self.request_header.remote_method.get_or_insert(RemoteMethodPb::default());
+                let remote_method = self
+                    .request_header
+                    .remote_method
+                    .get_or_insert(RemoteMethodPb::default());
                 remote_method.clear();
                 remote_method.service_name.push_str(service);
                 remote_method.method_name.push_str(method);
@@ -132,20 +106,24 @@ impl Transport {
                 self.request_header.timeout_millis = Some(duration_to_ms(timeout));
             }
             self.request_header.required_feature_flags.clear();
-            self.request_header.required_feature_flags.extend_from_slice(required_feature_flags);
+            self.request_header
+                .required_feature_flags
+                .extend_from_slice(required_feature_flags);
 
             let header_len = Message::encoded_len(&self.request_header);
             let body_len = body.encoded_len();
             let len = length_delimiter_len(header_len)
-                    + length_delimiter_len(body_len)
-                    + header_len
-                    + body_len;
+                + length_delimiter_len(body_len)
+                + header_len
+                + body_len;
 
             if len > self.options.max_message_length as usize {
                 return Err(RpcError {
                     code: RpcErrorCode::ErrorInvalidRequest,
-                    message: format!("RPC request exceeds maximum length ({}/{})",
-                    len, self.options.max_message_length),
+                    message: format!(
+                        "RPC request exceeds maximum length ({}/{})",
+                        len, self.options.max_message_length
+                    ),
                     unsupported_feature_flags: Vec::new(),
                 }.into());
             }
@@ -183,8 +161,9 @@ impl Transport {
             let msg_len = BigEndian::read_u32(&self.recv_buf[..4]) as usize;
             if msg_len > self.options.max_message_length as usize {
                 return Err(Error::Serialization(format!(
-                        "RPC response exceeds maximum length ({}/{})",
-                        msg_len, self.options.max_message_length)));
+                    "RPC response exceeds maximum length ({}/{})",
+                    msg_len, self.options.max_message_length
+                )));
             }
             if self.recv_buf.len() - 4 < msg_len {
                 let needed = msg_len + 4 - self.recv_buf.len();
@@ -348,9 +327,10 @@ impl Future for TransportNew {
 
 /// Converts a duration to milliseconds.
 fn duration_to_ms(duration: Duration) -> u32 {
-    let millis = duration.as_secs()
-                         .saturating_mul(1000)
-                         .saturating_add(duration.subsec_nanos() as u64 / 1000_000);
+    let millis = duration
+        .as_secs()
+        .saturating_mul(1000)
+        .saturating_add(duration.subsec_nanos() as u64 / 1000_000);
     if millis > u32::MAX as u64 {
         u32::MAX
     } else {

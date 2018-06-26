@@ -1,10 +1,6 @@
 use std::fmt;
 use std::io;
-use std::net::{
-    IpAddr,
-    SocketAddr,
-    ToSocketAddrs,
-};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::vec;
 
@@ -50,7 +46,6 @@ impl From<(String, u16)> for HostPort {
 }
 
 impl HostPort {
-
     pub fn parse(hostport: &str, default_port: u16) -> io::Result<HostPort> {
         let hostport = hostport.trim();
 
@@ -70,11 +65,16 @@ impl HostPort {
         // Otherwise it is a hostname which needs to be split into (host, port) pair and resolved.
         let mut parts = hostport.splitn(2, ':');
         let host = parts.next().unwrap().to_owned();
-        let port = parts.next()
-                        .map(u16::from_str)
-                        .unwrap_or(Ok(default_port))
-                        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput,
-                                                    format!("invalid hostport: {:?}", hostport)))?;
+        let port = parts
+            .next()
+            .map(u16::from_str)
+            .unwrap_or(Ok(default_port))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid hostport: {:?}", hostport),
+                )
+            })?;
         Ok(HostPort::new(host, port))
     }
 }
@@ -105,7 +105,6 @@ mod tests {
 
     #[test]
     fn hostport_parse() {
-
         let hostport = HostPort {
             host: "host01.example.com".to_string().into_boxed_str(),
             port: 80,
@@ -113,8 +112,14 @@ mod tests {
 
         let addr = HostPort::from(SocketAddr::from_str("127.0.0.1:80").unwrap());
 
-        assert_eq!(hostport, HostPort::parse("host01.example.com:80  ", 42).unwrap());
-        assert_eq!(hostport, HostPort::parse("  host01.example.com", 80).unwrap());
+        assert_eq!(
+            hostport,
+            HostPort::parse("host01.example.com:80  ", 42).unwrap()
+        );
+        assert_eq!(
+            hostport,
+            HostPort::parse("  host01.example.com", 80).unwrap()
+        );
 
         assert_eq!(addr, HostPort::parse("127.0.0.1:80", 42).unwrap());
         assert_eq!(addr, HostPort::parse("127.0.0.1", 80).unwrap());

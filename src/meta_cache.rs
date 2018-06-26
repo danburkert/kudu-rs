@@ -1,30 +1,31 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, Bound, HashMap};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use std::collections::{
-    BTreeMap,
-    Bound,
-    HashMap,
-};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{
-    Async,
-    Future,
-    Poll,
-    Stream,
-    stream,
-};
 use futures::sync::{mpsc, oneshot};
+use futures::{stream, Async, Future, Poll, Stream};
+use krpc;
 use parking_lot::Mutex;
 use prost;
-use krpc;
 use tokio;
 
 use backoff::Backoff;
+use partition::{IntoPartitionKey, PartitionKey};
+use pb::master::{
+    GetTableLocationsRequestPb, GetTableLocationsResponsePb, GetTableSchemaRequestPb,
+    MasterFeatures, MasterService, TableIdentifierPb, TabletLocationsPb,
+};
+use pb::ExpectField;
+use replica::{Replica, ReplicaRpc, ReplicaSet, Selection, Speculation};
+use retry::Retriable;
+use table::Table;
+use tablet::{Tablet, TabletReplica};
 use Error;
 use HostPort;
+use Options;
 use PartitionSchema;
 use RaftRole;
 use Result;
@@ -32,31 +33,6 @@ use Schema;
 use TableId;
 use TabletId;
 use TabletServerId;
-use pb::ExpectField;
-use pb::master::{
-    GetTableLocationsRequestPb,
-    GetTableLocationsResponsePb,
-    GetTableSchemaRequestPb,
-    MasterFeatures,
-    MasterService,
-    TableIdentifierPb,
-    TabletLocationsPb,
-};
-use table::Table;
-use tablet::{Tablet, TabletReplica};
-use partition::{
-    IntoPartitionKey,
-    PartitionKey,
-};
-use Options;
-use replica::{
-    Replica,
-    ReplicaRpc,
-    ReplicaSet,
-    Selection,
-    Speculation,
-};
-use retry::Retriable;
 
 const MAX_RETURNED_TABLE_LOCATIONS: u32 = 10;
 
@@ -67,14 +43,15 @@ pub(crate) enum Entry {
         lower_bound: PartitionKey,
         upper_bound: PartitionKey,
         deadline: Instant,
-    }
+    },
 }
 
 impl Entry {
-
-    fn non_covered_range(lower_bound: PartitionKey,
-                         upper_bound: PartitionKey,
-                         deadline: Instant) -> Entry {
+    fn non_covered_range(
+        lower_bound: PartitionKey,
+        upper_bound: PartitionKey,
+        deadline: Instant,
+    ) -> Entry {
         Entry::NonCoveredRange {
             lower_bound,
             upper_bound,
@@ -92,14 +69,18 @@ impl Entry {
     pub fn lower_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.lower_bound(),
-            Entry::NonCoveredRange { ref lower_bound, .. } => lower_bound,
+            Entry::NonCoveredRange {
+                ref lower_bound, ..
+            } => lower_bound,
         }
     }
 
     pub fn upper_bound(&self) -> &[u8] {
         match *self {
             Entry::Tablet(ref tablet) => tablet.upper_bound(),
-            Entry::NonCoveredRange { ref upper_bound, .. } => upper_bound,
+            Entry::NonCoveredRange {
+                ref upper_bound, ..
+            } => upper_bound,
         }
     }
 
@@ -112,11 +93,9 @@ impl Entry {
     /// Returns `Ordering::Equal` if the entries intersect, `Ordering::Less` if this entry falls
     /// before the other entry, or `Ordering::Greater` if this entry falls after the other entry.
     fn cmp_entry(&self, other: &Entry) -> Ordering {
-        if !self.upper_bound().is_empty() &&
-            self.upper_bound() <= other.lower_bound() {
+        if !self.upper_bound().is_empty() && self.upper_bound() <= other.lower_bound() {
             Ordering::Less
-        } else if !other.upper_bound().is_empty() &&
-                   other.upper_bound() <= self.lower_bound() {
+        } else if !other.upper_bound().is_empty() && other.upper_bound() <= self.lower_bound() {
             Ordering::Greater
         } else {
             Ordering::Equal
@@ -130,17 +109,25 @@ impl Entry {
             (&Entry::Tablet(ref a), &Entry::Tablet(ref b)) => {
                 // Sanity check that if the tablet IDs match, the ranges also match. If this fails,
                 // something is very wrong (possibly in the server).
-                debug_assert!(a.id() != b.id() ||
-                              (a.lower_bound() == b.lower_bound() &&
-                               a.upper_bound() == b.upper_bound()));
+                debug_assert!(
+                    a.id() != b.id()
+                        || (a.lower_bound() == b.lower_bound()
+                            && a.upper_bound() == b.upper_bound())
+                );
                 a.id() == b.id()
-            },
-            (&Entry::NonCoveredRange { lower_bound: ref a_lower,
-                                       upper_bound: ref a_upper, .. },
-             &Entry::NonCoveredRange { lower_bound: ref b_lower,
-                                       upper_bound: ref b_upper, .. }) => {
-                a_lower == b_lower && a_upper == b_upper
-            },
+            }
+            (
+                &Entry::NonCoveredRange {
+                    lower_bound: ref a_lower,
+                    upper_bound: ref a_upper,
+                    ..
+                },
+                &Entry::NonCoveredRange {
+                    lower_bound: ref b_lower,
+                    upper_bound: ref b_upper,
+                    ..
+                },
+            ) => a_lower == b_lower && a_upper == b_upper,
             _ => false,
         }
     }
@@ -162,22 +149,23 @@ pub(crate) struct MasterReplica {
 }
 
 impl MasterReplica {
-
-    pub(crate) fn new(hostport: HostPort, options: &Options) -> impl Future<Item=MasterReplica, Error=Error> {
-        krpc::Proxy::new(vec![hostport.clone()].into_boxed_slice(), options.rpc.clone())
-            .map(move |proxy| {
-                MasterReplica {
-                    hostport,
-                    proxy,
-                    is_leader: AtomicBool::new(false),
-                }
-            })
+    pub(crate) fn new(
+        hostport: HostPort,
+        options: &Options,
+    ) -> impl Future<Item = MasterReplica, Error = Error> {
+        krpc::Proxy::new(
+            vec![hostport.clone()].into_boxed_slice(),
+            options.rpc.clone(),
+        ).map(move |proxy| MasterReplica {
+            hostport,
+            proxy,
+            is_leader: AtomicBool::new(false),
+        })
             .map_err(Error::from)
     }
 }
 
 impl Replica for MasterReplica {
-
     fn proxy(&self) -> krpc::Proxy {
         self.proxy.clone()
     }
@@ -207,7 +195,14 @@ impl fmt::Debug for MasterReplica {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("MasterReplica")
             .field("addr", &self.hostport)
-            .field("role", if self.is_leader() { &RaftRole::Leader } else { &RaftRole::Follower })
+            .field(
+                "role",
+                if self.is_leader() {
+                    &RaftRole::Leader
+                } else {
+                    &RaftRole::Follower
+                },
+            )
             .finish()
     }
 }
@@ -220,16 +215,15 @@ impl ReplicaSet for Arc<Box<[MasterReplica]>> {
 }
 
 impl MetaCache {
-
-    pub(crate) fn new(master_addrs: Vec<HostPort>,
-                      options: Options) -> impl Future<Item=MetaCache, Error=Error> {
-        connect_to_cluster(master_addrs, &options).map(|master_replicas| {
-            MetaCache {
-                tables: Arc::new(Mutex::new(HashMap::new())),
-                tablet_servers: Arc::new(Mutex::new(HashMap::new())),
-                masters: master_replicas,
-                options,
-            }
+    pub(crate) fn new(
+        master_addrs: Vec<HostPort>,
+        options: Options,
+    ) -> impl Future<Item = MetaCache, Error = Error> {
+        connect_to_cluster(master_addrs, &options).map(|master_replicas| MetaCache {
+            tables: Arc::new(Mutex::new(HashMap::new())),
+            tablet_servers: Arc::new(Mutex::new(HashMap::new())),
+            masters: master_replicas,
+            options,
         })
     }
 
@@ -237,57 +231,78 @@ impl MetaCache {
         &self.options
     }
 
-    pub(crate) fn master_rpc<Req, Resp>(&self, call: krpc::Call<Req, Resp>) -> impl Future<Item=Resp, Error=Error>
-    where Req: prost::Message + 'static,
-          Resp: Retriable {
-        ReplicaRpc::new(self.masters.clone(),
-                        call,
-                        Speculation::Staggered(Duration::from_millis(32)),
-                        Selection::Leader,
-                        Backoff::with_duration_range(32, 2048))
-            .map(|(_, resp, _)| resp)
+    pub(crate) fn master_rpc<Req, Resp>(
+        &self,
+        call: krpc::Call<Req, Resp>,
+    ) -> impl Future<Item = Resp, Error = Error>
+    where
+        Req: prost::Message + 'static,
+        Resp: Retriable,
+    {
+        ReplicaRpc::new(
+            self.masters.clone(),
+            call,
+            Speculation::Staggered(Duration::from_millis(32)),
+            Selection::Leader,
+            Backoff::with_duration_range(32, 2048),
+        ).map(|(_, resp, _)| resp)
     }
 
-    pub(crate) fn open_table(&self, table: TableIdentifierPb, deadline: Instant) -> impl Future<Item=Table, Error=Error> {
-        let call = MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }), deadline);
+    pub(crate) fn open_table(
+        &self,
+        table: TableIdentifierPb,
+        deadline: Instant,
+    ) -> impl Future<Item = Table, Error = Error> {
+        let call =
+            MasterService::get_table_schema(Arc::new(GetTableSchemaRequestPb { table }), deadline);
 
         let tables = self.tables.clone();
         let tablet_servers = self.tablet_servers.clone();
         let options = self.options.clone();
         let masters = self.masters.clone();
 
-        self.master_rpc(call).and_then(move |resp| -> Result<Table> {
-            static MESSAGE: &'static str = "GetTableSchemaResponsePb";
+        self.master_rpc(call)
+            .and_then(move |resp| -> Result<Table> {
+                static MESSAGE: &'static str = "GetTableSchemaResponsePb";
 
-            let num_replicas = resp.num_replicas() as u32;
-            let name = resp.table_name.expect_field(MESSAGE, "table_name")?;
+                let num_replicas = resp.num_replicas() as u32;
+                let name = resp.table_name.expect_field(MESSAGE, "table_name")?;
 
-            let id = TableId::parse_bytes(&resp.table_id.expect_field(MESSAGE, "table_id")?)?;
+                let id = TableId::parse_bytes(&resp.table_id.expect_field(MESSAGE, "table_id")?)?;
 
-            let schema = resp.schema.expect_field(MESSAGE, "schema")?;
-            let partition_schema = PartitionSchema::from_pb(
-                &resp.partition_schema.expect_field(MESSAGE, "partition_schema")?,
-                &schema);
-            let schema = Schema::from_pb(schema)?;
+                let schema = resp.schema.expect_field(MESSAGE, "schema")?;
+                let partition_schema = PartitionSchema::from_pb(
+                    &resp
+                        .partition_schema
+                        .expect_field(MESSAGE, "partition_schema")?,
+                    &schema,
+                );
+                let schema = Schema::from_pb(schema)?;
 
-            let table_locations = tables
-                .lock()
-                .entry(id)
-                .or_insert_with(|| TableLocations::new(options,
-                                                       id,
-                                                       schema.primary_key_projection(),
-                                                       partition_schema.clone(),
-                                                       masters,
-                                                       tablet_servers))
-                .clone();
+                let table_locations = tables
+                    .lock()
+                    .entry(id)
+                    .or_insert_with(|| {
+                        TableLocations::new(
+                            options,
+                            id,
+                            schema.primary_key_projection(),
+                            partition_schema.clone(),
+                            masters,
+                            tablet_servers,
+                        )
+                    })
+                    .clone();
 
-            Ok(Table::new(name,
-                          id,
-                          schema,
-                          partition_schema,
-                          num_replicas,
-                          table_locations))
-        })
+                Ok(Table::new(
+                    name,
+                    id,
+                    schema,
+                    partition_schema,
+                    num_replicas,
+                    table_locations,
+                ))
+            })
     }
 }
 
@@ -301,14 +316,14 @@ pub(crate) struct TableLocations {
 }
 
 impl TableLocations {
-    pub(crate) fn new(options: Options,
-                      table_id: TableId,
-                      primary_key_schema: Schema,
-                      partition_schema: PartitionSchema,
-                      masters: Arc<Box<[MasterReplica]>>,
-                      tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>)
-                      -> TableLocations {
-
+    pub(crate) fn new(
+        options: Options,
+        table_id: TableId,
+        primary_key_schema: Schema,
+        partition_schema: PartitionSchema,
+        masters: Arc<Box<[MasterReplica]>>,
+        tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
+    ) -> TableLocations {
         let (sender, receiver) = mpsc::unbounded();
         let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -354,7 +369,9 @@ impl TableLocations {
         } else {
             let partition_key = partition_key.into_partition_key();
             let (send, recv) = oneshot::channel();
-            self.sender.unbounded_send((partition_key, send)).expect("TableLocationsTask finished");
+            self.sender
+                .unbounded_send((partition_key, send))
+                .expect("TableLocationsTask finished");
             Lookup::Miss { recv, extractor }
         }
     }
@@ -372,27 +389,33 @@ pub(crate) enum Lookup<T> {
     },
 }
 
-impl <T> Future for Lookup<T> {
+impl<T> Future for Lookup<T> {
     type Item = T;
     type Error = Error;
     fn poll(&mut self) -> Poll<T, Error> {
         match self {
             Lookup::Hit(ref mut item) => Ok(Async::Ready(item.take().unwrap())),
-            Lookup::Miss { ref mut recv, extractor } => {
-                match recv.poll() {
-                    Ok(Async::Ready(entry)) => Ok(Async::Ready(extractor(&entry?))),
-                    Ok(Async::NotReady) => Ok(Async::NotReady),
-                    Err(error) => unreachable!("TableLocationsTask finished: {}", error),
-                }
+            Lookup::Miss {
+                ref mut recv,
+                extractor,
+            } => match recv.poll() {
+                Ok(Async::Ready(entry)) => Ok(Async::Ready(extractor(&entry?))),
+                Ok(Async::NotReady) => Ok(Async::NotReady),
+                Err(error) => unreachable!("TableLocationsTask finished: {}", error),
             },
         }
     }
 }
 
-fn get_entry<'a, 'b>(entries: &'a BTreeMap<PartitionKey, Entry>,
-                     partition_key: &'b [u8]) -> Option<&'a Entry> {
+fn get_entry<'a, 'b>(
+    entries: &'a BTreeMap<PartitionKey, Entry>,
+    partition_key: &'b [u8],
+) -> Option<&'a Entry> {
     // TODO: filter stale entries.
-    match entries.range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key))).next_back() {
+    match entries
+        .range::<[u8], _>((Bound::Unbounded, Bound::Included(partition_key)))
+        .next_back()
+    {
         Some((_, ref entry)) if entry.contains_partition_key(partition_key) => Some(entry),
         _ => None,
     }
@@ -422,11 +445,18 @@ struct TableLocationsTask {
     /// Collection of outstanding entry requests, ordered by partition key.
     requests: BTreeMap<PartitionKey, Vec<oneshot::Sender<Result<Entry>>>>,
 
-    in_flight: Option<(PartitionKey, Instant, ReplicaRpc<Arc<Box<[MasterReplica]>>, GetTableLocationsRequestPb, GetTableLocationsResponsePb>)>,
+    in_flight: Option<(
+        PartitionKey,
+        Instant,
+        ReplicaRpc<
+            Arc<Box<[MasterReplica]>>,
+            GetTableLocationsRequestPb,
+            GetTableLocationsResponsePb,
+        >,
+    )>,
 }
 
 impl TableLocationsTask {
-
     fn splice_entries(&self, entries: Vec<Entry>) {
         let mut left = self.entries.lock();
 
@@ -455,69 +485,89 @@ impl TableLocationsTask {
     /// entries are guaranteed to be contiguous in the partition key space. The partition key must
     /// match the partition key of the get table locations request. The request must not have an
     /// end key.
-    fn tablet_locations_to_entries(&self,
-                                   partition_key: &[u8],
-                                   tablets: Vec<TabletLocationsPb>,
-                                   deadline: Instant)
-                                   -> Result<Vec<Entry>> {
+    fn tablet_locations_to_entries(
+        &self,
+        partition_key: &[u8],
+        tablets: Vec<TabletLocationsPb>,
+        deadline: Instant,
+    ) -> Result<Vec<Entry>> {
         if tablets.is_empty() {
             // If there are no tablets in the response, then the table is empty. If
             // there were any tablets in the table they would have been returned, since
             // the master guarantees that the if the partition key falls in a
             // non-covered range, the previous tablet will be returned, and we did not
             // set an upper bound partition key on the request.
-            return Ok(vec![Entry::non_covered_range(PartitionKey::empty(),
-                                                    PartitionKey::empty(),
-                                                    deadline)]);
+            return Ok(vec![Entry::non_covered_range(
+                PartitionKey::empty(),
+                PartitionKey::empty(),
+                deadline,
+            )]);
         }
 
         let tablet_count = tablets.len();
         let mut entries = Vec::with_capacity(tablet_count);
-        let mut last_upper_bound = tablets[0].partition
-                                             .as_ref()
-                                             .expect_field("TabletLocationsPb", "partition")?
-                                             .partition_key_start()
-                                             .into_partition_key();
+        let mut last_upper_bound = tablets[0]
+            .partition
+            .as_ref()
+            .expect_field("TabletLocationsPb", "partition")?
+            .partition_key_start()
+            .into_partition_key();
 
         if partition_key < &*last_upper_bound {
             // If the first tablet is past the requested partition key, then the partition key fell
             // in an initial non-covered range.
-            entries.push(Entry::non_covered_range(PartitionKey::empty(),
-                                                  last_upper_bound.clone(),
-                                                  deadline));
+            entries.push(Entry::non_covered_range(
+                PartitionKey::empty(),
+                last_upper_bound.clone(),
+                deadline,
+            ));
         }
 
         for pb in tablets {
             let id = TabletId::parse_bytes(&pb.tablet_id)?;
 
             let partition = pb.partition.expect_field("TabletLocationsPB", "partition")?;
-            let lower_bound = partition.partition_key_start.expect_field("PartitionPb", "partition_key_start")?.into_partition_key();
-            let upper_bound = partition.partition_key_end.expect_field("PartitionPb", "partition_key_end")?.into_partition_key();
+            let lower_bound = partition
+                .partition_key_start
+                .expect_field("PartitionPb", "partition_key_start")?
+                .into_partition_key();
+            let upper_bound = partition
+                .partition_key_end
+                .expect_field("PartitionPb", "partition_key_end")?
+                .into_partition_key();
 
-            let replicas = pb.replicas.into_iter().map(move |pb| {
-                let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-                let is_leader = pb.role() == RaftRole::Leader;
-                let rpc_addrs = pb.ts_info
-                                  .rpc_addresses
-                                  .into_iter()
-                                  .map(HostPort::from)
-                                  .collect::<Vec<_>>()
-                                  .into_boxed_slice();
+            let replicas = pb
+                .replicas
+                .into_iter()
+                .map(move |pb| {
+                    let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
+                    let is_leader = pb.role() == RaftRole::Leader;
+                    let rpc_addrs = pb
+                        .ts_info
+                        .rpc_addresses
+                        .into_iter()
+                        .map(HostPort::from)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
 
-                let proxy = self.tablet_servers
-                                .lock()
-                                .entry(id)
-                                .or_insert_with(|| krpc::Proxy::spawn(rpc_addrs.clone(), self.options.rpc.clone()))
-                                .clone();
+                    let proxy = self
+                        .tablet_servers
+                        .lock()
+                        .entry(id)
+                        .or_insert_with(|| {
+                            krpc::Proxy::spawn(rpc_addrs.clone(), self.options.rpc.clone())
+                        })
+                        .clone();
 
-                Ok(TabletReplica {
-                    id,
-                    rpc_addrs,
-                    proxy,
-                    is_stale: AtomicBool::new(false),
-                    is_leader: AtomicBool::new(is_leader)
+                    Ok(TabletReplica {
+                        id,
+                        rpc_addrs,
+                        proxy,
+                        is_stale: AtomicBool::new(false),
+                        is_leader: AtomicBool::new(is_leader),
+                    })
                 })
-            }).collect::<Result<Vec<TabletReplica>>>()?;
+                .collect::<Result<Vec<TabletReplica>>>()?;
 
             let tablet = Arc::new(Tablet {
                 id,
@@ -527,18 +577,22 @@ impl TableLocationsTask {
             });
 
             if tablet.lower_bound() > &last_upper_bound {
-                entries.push(Entry::non_covered_range(last_upper_bound,
-                                                      tablet.lower_bound().into_partition_key(),
-                                                      deadline));
+                entries.push(Entry::non_covered_range(
+                    last_upper_bound,
+                    tablet.lower_bound().into_partition_key(),
+                    deadline,
+                ));
             }
             last_upper_bound = tablet.upper_bound().into_partition_key();
             entries.push(Entry::Tablet(tablet));
         }
 
         if !last_upper_bound.is_empty() && tablet_count < MAX_RETURNED_TABLE_LOCATIONS as usize {
-            entries.push(Entry::non_covered_range(last_upper_bound,
-                                                  PartitionKey::empty(),
-                                                  deadline));
+            entries.push(Entry::non_covered_range(
+                last_upper_bound,
+                PartitionKey::empty(),
+                deadline,
+            ));
         }
 
         Ok(entries)
@@ -569,7 +623,7 @@ impl Future for TableLocationsTask {
                                 .or_insert_with(Vec::new)
                                 .push(sender);
                         }
-                    },
+                    }
                     // There are no more handles to the TableLocations instance, so shutdown.
                     None => return Ok(Async::Ready(())),
                 }
@@ -584,12 +638,15 @@ impl Future for TableLocationsTask {
                         let ttl = Duration::from_millis(u64::from(response.ttl_millis()));
                         let deadline = now + ttl;
                         let num_tablets = response.tablet_locations.len();
-                        let entries = self.tablet_locations_to_entries(&*partition_key,
-                                                                       response.tablet_locations,
-                                                                       deadline)
-                                          .unwrap();
+                        let entries =
+                            self.tablet_locations_to_entries(
+                                &*partition_key,
+                                response.tablet_locations,
+                                deadline,
+                            ).unwrap();
                         let mut requests = self.requests.split_off(entries[0].lower_bound());
-                        { // NLL hack
+                        {
+                            // NLL hack
                             let upper_bound = entries[entries.len() - 1].upper_bound();
                             if !upper_bound.is_empty() {
                                 self.requests.extend(requests.split_off(upper_bound));
@@ -597,7 +654,9 @@ impl Future for TableLocationsTask {
                         }
 
                         for (partition_key, senders) in requests {
-                            let index = match entries.binary_search_by_key(&&*partition_key, |entry| entry.lower_bound()) {
+                            let index = match entries
+                                .binary_search_by_key(&&*partition_key, |entry| entry.lower_bound())
+                            {
                                 Ok(index) => index,
                                 Err(index) => index - 1,
                             };
@@ -616,12 +675,12 @@ impl Future for TableLocationsTask {
                     Ok(Async::NotReady) => {
                         self.in_flight = Some((partition_key, start, in_flight));
                         return Ok(Async::NotReady);
-                    },
+                    }
                     Err(error) => {
                         for sender in self.requests.remove(&partition_key).unwrap_or_default() {
                             let _ = sender.send(Err(error.clone()));
                         }
-                    },
+                    }
                 }
             }
 
@@ -635,48 +694,61 @@ impl Future for TableLocationsTask {
                         max_returned_locations: Some(MAX_RETURNED_TABLE_LOCATIONS),
                         replica_type_filter: None,
                     });
-                    let call = MasterService::get_table_locations(request, Instant::now() + self.options.admin_timeout);
+                    let call = MasterService::get_table_locations(
+                        request,
+                        Instant::now() + self.options.admin_timeout,
+                    );
 
-                    let resp = ReplicaRpc::new(self.masters.clone(),
-                                               call,
-                                               Speculation::Staggered(Duration::from_millis(100)),
-                                               Selection::Leader,
-                                               Backoff::with_duration_range(250, u32::max_value()));
+                    let resp = ReplicaRpc::new(
+                        self.masters.clone(),
+                        call,
+                        Speculation::Staggered(Duration::from_millis(100)),
+                        Selection::Leader,
+                        Backoff::with_duration_range(250, u32::max_value()),
+                    );
 
                     self.in_flight = Some((partition_key.clone(), Instant::now(), resp));
-                },
+                }
                 None => return Ok(Async::NotReady),
             }
         }
     }
 }
 
-pub(crate) fn connect_to_cluster(master_addrs: Vec<HostPort>,
-                                 options: &Options)
-                                 -> impl Future<Item=Arc<Box<[MasterReplica]>>, Error=Error> {
+pub(crate) fn connect_to_cluster(
+    master_addrs: Vec<HostPort>,
+    options: &Options,
+) -> impl Future<Item = Arc<Box<[MasterReplica]>>, Error = Error> {
     let admin_timeout = options.admin_timeout;
     let start = Instant::now();
-    stream::futures_unordered(master_addrs.into_iter()
-                                          .map(|hostport| MasterReplica::new(hostport, options)))
-           .collect()
-           .and_then(move |replicas: Vec<MasterReplica>| {
-               let replica_set = Arc::new(replicas.into_boxed_slice());
-               let mut call = MasterService::connect_to_master(Default::default(),
-                                                               Instant::now() + admin_timeout);
-               call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
+    stream::futures_unordered(
+        master_addrs
+            .into_iter()
+            .map(|hostport| MasterReplica::new(hostport, options)),
+    ).collect()
+        .and_then(move |replicas: Vec<MasterReplica>| {
+            let replica_set = Arc::new(replicas.into_boxed_slice());
+            let mut call = MasterService::connect_to_master(
+                Default::default(),
+                Instant::now() + admin_timeout,
+            );
+            call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
 
-               ReplicaRpc::new(replica_set.clone(),
-                               call,
-                               Speculation::Full,
-                               Selection::Leader,
-                               Backoff::with_duration_range(250, u32::max_value()))
-                   .map(move |_| replica_set)
-           })
-           .inspect(move |masters| {
-               info!("(re)connected to cluster; duration: {:?}, masters: {:?}",
-                     Instant::now() - start,
-                     masters);
-           })
+            ReplicaRpc::new(
+                replica_set.clone(),
+                call,
+                Speculation::Full,
+                Selection::Leader,
+                Backoff::with_duration_range(250, u32::max_value()),
+            ).map(move |_| replica_set)
+        })
+        .inspect(move |masters| {
+            info!(
+                "(re)connected to cluster; duration: {:?}, masters: {:?}",
+                Instant::now() - start,
+                masters
+            );
+        })
 }
 
 #[cfg(test)]
@@ -686,13 +758,13 @@ mod tests {
     use env_logger;
     use tokio::runtime::current_thread::Runtime;
 
-    use Client;
-    use RangePartitionBound;
-    use TableBuilder;
+    use super::*;
     use mini_cluster::{MiniCluster, MiniClusterConfig};
     use replica::Replica;
     use schema::tests::simple_schema;
-    use super::*;
+    use Client;
+    use RangePartitionBound;
+    use TableBuilder;
 
     // TODO(tests):
     //  - Shutdown single master and ensure ConnectToCluster immediately fails.
@@ -707,17 +779,25 @@ mod tests {
     fn test_connect_to_cluster() {
         let _ = env_logger::try_init();
         let run = |num_masters: u32| {
-            let mut cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                                .num_masters(num_masters)
-                                                                .num_tservers(0));
+            let mut cluster = MiniCluster::new(
+                MiniClusterConfig::default()
+                    .num_masters(num_masters)
+                    .num_tservers(0),
+            );
             let mut runtime = Runtime::new().unwrap();
 
-            let masters = runtime.block_on(connect_to_cluster(cluster.master_addrs(),
-                                                              &Options::default()))
-                                 .unwrap();
+            let masters = runtime
+                .block_on(connect_to_cluster(
+                    cluster.master_addrs(),
+                    &Options::default(),
+                ))
+                .unwrap();
 
             assert_eq!(masters.len(), num_masters as usize);
-            assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
+            assert_eq!(
+                1,
+                masters.iter().filter(|master| master.is_leader()).count()
+            );
         };
 
         run(1);
@@ -732,12 +812,19 @@ mod tests {
             let mut runtime = Runtime::new().unwrap();
 
             let hostports = {
-                let listeners = (0..num_masters).map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
-                                                .collect::<Vec<_>>();
-                listeners.iter().flat_map(TcpListener::local_addr).map(HostPort::from).collect::<Vec<HostPort>>()
+                let listeners = (0..num_masters)
+                    .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+                    .collect::<Vec<_>>();
+                listeners
+                    .iter()
+                    .flat_map(TcpListener::local_addr)
+                    .map(HostPort::from)
+                    .collect::<Vec<HostPort>>()
             };
 
-            runtime.block_on(connect_to_cluster(hostports, &Options::default())).unwrap_err()
+            runtime
+                .block_on(connect_to_cluster(hostports, &Options::default()))
+                .unwrap_err()
         };
 
         match run(1) {
@@ -756,17 +843,22 @@ mod tests {
     #[test]
     fn test_connect_to_cluster_failover() {
         let _ = env_logger::try_init();
-        let mut cluster = MiniCluster::new(MiniClusterConfig::default()
-                                                             .num_masters(3)
-                                                             .num_tservers(0));
+        let mut cluster =
+            MiniCluster::new(MiniClusterConfig::default().num_masters(3).num_tservers(0));
         let mut runtime = Runtime::new().unwrap();
 
-        let masters = runtime.block_on(connect_to_cluster(cluster.master_addrs(),
-                                                            &Options::default()))
-                                .unwrap();
+        let masters = runtime
+            .block_on(connect_to_cluster(
+                cluster.master_addrs(),
+                &Options::default(),
+            ))
+            .unwrap();
 
         assert_eq!(3, cluster.master_addrs().len());
-        assert_eq!(1, masters.iter().filter(|master| master.is_leader()).count());
+        assert_eq!(
+            1,
+            masters.iter().filter(|master| master.is_leader()).count()
+        );
     }
 
     /*
@@ -837,16 +929,21 @@ mod tests {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = simple_schema();
 
         let mut table = TableBuilder::new("unpartitioned", schema.clone());
         table.set_num_replicas(1);
-        let table_id = runtime.block_on(client.create_table(table)).expect("create_table");
+        let table_id = runtime
+            .block_on(client.create_table(table))
+            .expect("create_table");
 
-        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let table = runtime
+            .block_on(client.open_table_by_id(table_id))
+            .expect("open_table");
         let locations = table.table_locations().clone();
 
         {
@@ -868,7 +965,9 @@ mod tests {
 
         locations.clear();
         {
-            let entry = runtime.block_on(locations.entry(b"some-key")).expect("entry");
+            let entry = runtime
+                .block_on(locations.entry(b"some-key"))
+                .expect("entry");
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
             assert_eq!(b"", entry.upper_bound());
@@ -881,8 +980,9 @@ mod tests {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = simple_schema();
 
@@ -890,9 +990,13 @@ mod tests {
         table_builder.set_range_partition_columns(vec!["key".to_owned()]);
         table_builder.set_num_replicas(1);
 
-        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .expect("create_table");
 
-        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let table = runtime
+            .block_on(client.open_table_by_id(table_id))
+            .expect("open_table");
         let locations = table.table_locations().clone();
 
         {
@@ -914,7 +1018,9 @@ mod tests {
 
         locations.clear();
         {
-            let entry = runtime.block_on(locations.entry(b"some-key")).expect("entry");
+            let entry = runtime
+                .block_on(locations.entry(b"some-key"))
+                .expect("entry");
             assert!(entry.is_tablet());
             assert_eq!(b"", entry.lower_bound());
             assert_eq!(b"", entry.upper_bound());
@@ -927,8 +1033,9 @@ mod tests {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = simple_schema();
 
@@ -936,12 +1043,18 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .expect("create_table");
 
-        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let table = runtime
+            .block_on(client.open_table_by_id(table_id))
+            .expect("open_table");
         let cache = table.table_locations().clone();
 
-        let first = runtime.block_on(cache.entry(&[0, 0, 0, 0, 1])).expect("entry");
+        let first = runtime
+            .block_on(cache.entry(&[0, 0, 0, 0, 1]))
+            .expect("entry");
 
         assert!(first.is_tablet());
         assert_eq!(b"", first.lower_bound());
@@ -957,7 +1070,9 @@ mod tests {
         assert!(cache.cached_entry(&vec![0, 0, 0, 10]).is_none());
         */
 
-        let last = runtime.block_on(cache.entry(&[0, 0, 0, 11])).expect("entry");
+        let last = runtime
+            .block_on(cache.entry(&[0, 0, 0, 11]))
+            .expect("entry");
 
         let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
 
@@ -973,7 +1088,9 @@ mod tests {
         runtime.block_on(cache.entry(&[0, 0, 0, 9])).expect("entry");
         assert_eq!(11, cache.entries.lock().len());
 
-        runtime.block_on(cache.entry(&[0, 0, 0, 10])).expect("entry");
+        runtime
+            .block_on(cache.entry(&[0, 0, 0, 10]))
+            .expect("entry");
         assert_eq!(12, cache.entries.lock().len());
     }
 
@@ -983,8 +1100,9 @@ mod tests {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = simple_schema();
 
@@ -992,13 +1110,18 @@ mod tests {
         table_builder.add_hash_partitions(vec!["key"], 12);
         table_builder.set_num_replicas(1);
 
-        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .expect("create_table");
 
-        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let table = runtime
+            .block_on(client.open_table_by_id(table_id))
+            .expect("open_table");
         let cache = table.table_locations().clone();
 
-        runtime.block_on(cache.entry(&[0, 0, 0, 0]).join(cache.entry(&[0, 0, 0, 9])))
-               .expect("entry");
+        runtime
+            .block_on(cache.entry(&[0, 0, 0, 0]).join(cache.entry(&[0, 0, 0, 9])))
+            .expect("entry");
         let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
         assert_eq!(entries.len(), 10);
     }
@@ -1009,8 +1132,9 @@ mod tests {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = simple_schema();
 
@@ -1022,37 +1146,47 @@ mod tests {
 
         let mut upper_bound1 = schema.new_row();
         upper_bound1.set(0, "m").unwrap();
-        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound1),
-                                          RangePartitionBound::Exclusive(upper_bound1));
+        table_builder.add_range_partition(
+            RangePartitionBound::Inclusive(lower_bound1),
+            RangePartitionBound::Exclusive(upper_bound1),
+        );
 
         let mut lower_bound2 = schema.new_row();
         lower_bound2.set(0, "p").unwrap();
 
         let mut upper_bound2 = schema.new_row();
         upper_bound2.set(0, "s").unwrap();
-        table_builder.add_range_partition(RangePartitionBound::Inclusive(lower_bound2),
-                                          RangePartitionBound::Exclusive(upper_bound2));
+        table_builder.add_range_partition(
+            RangePartitionBound::Inclusive(lower_bound2),
+            RangePartitionBound::Exclusive(upper_bound2),
+        );
         table_builder.set_num_replicas(1);
 
         let mut split = schema.new_row();
         split.set(0, "c").unwrap();
         table_builder.add_range_partition_split(split);
 
-        let table_id = runtime.block_on(client.create_table(table_builder)).expect("create_table");
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .expect("create_table");
 
-        let table = runtime.block_on(client.open_table_by_id(table_id)).expect("open_table");
+        let table = runtime
+            .block_on(client.open_table_by_id(table_id))
+            .expect("open_table");
         let cache = table.table_locations().clone();
 
         runtime.block_on(cache.entry(&[0])).expect("entry");
         let entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
         assert_eq!(6, entries.len());
 
-        let expected: Vec<(&[u8], &[u8], bool)> = vec![ (b"",  b"a", false),
-                                                        (b"a", b"c",  true),
-                                                        (b"c", b"m",  true),
-                                                        (b"m", b"p", false),
-                                                        (b"p", b"s",  true),
-                                                        (b"s", b"",  false) ];
+        let expected: Vec<(&[u8], &[u8], bool)> = vec![
+            (b"", b"a", false),
+            (b"a", b"c", true),
+            (b"c", b"m", true),
+            (b"m", b"p", false),
+            (b"p", b"s", true),
+            (b"s", b"", false),
+        ];
 
         for (entry, &(lower, upper, covered)) in entries.iter().zip(expected.iter()) {
             assert_eq!(lower, entry.lower_bound());
@@ -1060,22 +1194,43 @@ mod tests {
             assert_eq!(covered, entry.is_tablet());
         }
 
-        let cases: Vec<(&[u8], usize)> = vec![(b"", 6), (b"\0", 6), (b"`", 6),
-                                              (b"a", 5), (b"a\0", 5), (b"b", 5),
-                                              (b"c", 4), (b"d", 4), (b"l", 4),
-                                              (b"m", 4), (b"n", 4), (b"o", 4),
-                                              (b"p", 2), (b"q", 2), (b"r", 2),
-                                              (b"s", 2), (b"z", 2), (b"zzz", 2)];
+        let cases: Vec<(&[u8], usize)> = vec![
+            (b"", 6),
+            (b"\0", 6),
+            (b"`", 6),
+            (b"a", 5),
+            (b"a\0", 5),
+            (b"b", 5),
+            (b"c", 4),
+            (b"d", 4),
+            (b"l", 4),
+            (b"m", 4),
+            (b"n", 4),
+            (b"o", 4),
+            (b"p", 2),
+            (b"q", 2),
+            (b"r", 2),
+            (b"s", 2),
+            (b"z", 2),
+            (b"zzz", 2),
+        ];
 
         for (key, expected_entries) in cases {
             cache.clear();
             runtime.block_on(cache.entry(key)).expect("entry");
 
             let new_entries: Vec<Entry> = cache.entries.lock().values().cloned().collect();
-            for (expected_entry, new_entry) in entries[6 - expected_entries..].iter().zip(new_entries.iter()) {
-                assert!(expected_entry.equiv(new_entry),
-                       "key: {:?}, expected entry: {:?}, new entry: {:?}",
-                       key, expected_entry, new_entry);
+            for (expected_entry, new_entry) in entries[6 - expected_entries..]
+                .iter()
+                .zip(new_entries.iter())
+            {
+                assert!(
+                    expected_entry.equiv(new_entry),
+                    "key: {:?}, expected entry: {:?}, new entry: {:?}",
+                    key,
+                    expected_entry,
+                    new_entry
+                );
             }
         }
     }

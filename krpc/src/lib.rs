@@ -7,10 +7,14 @@ extern crate prost_types;
 extern crate tokio;
 extern crate tokio_threadpool as threadpool;
 
-#[macro_use] extern crate futures;
-#[macro_use] extern crate log;
-#[macro_use] extern crate prost_derive;
-#[macro_use] extern crate tokio_io;
+#[macro_use]
+extern crate futures;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate prost_derive;
+#[macro_use]
+extern crate tokio_io;
 
 mod call;
 mod connection;
@@ -25,22 +29,15 @@ mod transport;
 
 use std::marker;
 
-use bytes::{
-    Bytes,
-    BytesMut,
-};
+use bytes::{Bytes, BytesMut};
 use futures::sync::oneshot;
-use futures::{
-    Future,
-    Async,
-    Poll,
-};
+use futures::{Async, Future, Poll};
 use prost::Message;
 
 pub use call::Call;
 pub use error::{Error, RpcError, RpcErrorCode};
 pub use hostport::HostPort;
-pub use pb::rpc::{RequestIdPb as RequestId};
+pub use pb::rpc::RequestIdPb as RequestId;
 pub use proxy::Proxy;
 use rpc::Rpc;
 
@@ -49,7 +46,10 @@ trait RequestBody: Send + Sync {
     fn encode_length_delimited(&self, dst: &mut BytesMut);
 }
 
-impl <M> RequestBody for M where M: Message {
+impl<M> RequestBody for M
+where
+    M: Message,
+{
     fn encoded_len(&self) -> usize {
         Message::encoded_len(self)
     }
@@ -61,12 +61,18 @@ impl <M> RequestBody for M where M: Message {
 type RpcResult = Result<(Bytes, Vec<BytesMut>), Error>;
 
 #[must_use = "futures do nothing unless polled"]
-pub struct RpcFuture<Resp> where Resp: Message + Default {
+pub struct RpcFuture<Resp>
+where
+    Resp: Message + Default,
+{
     receiver: oneshot::Receiver<RpcResult>,
     _marker: marker::PhantomData<Resp>,
 }
 
-impl <Resp> RpcFuture<Resp> where Resp: Message + Default {
+impl<Resp> RpcFuture<Resp>
+where
+    Resp: Message + Default,
+{
     /// Returns a new `RpcFuture` wrapping the provided oneshot receiver.
     fn new(receiver: oneshot::Receiver<RpcResult>) -> RpcFuture<Resp> {
         RpcFuture {
@@ -76,12 +82,17 @@ impl <Resp> RpcFuture<Resp> where Resp: Message + Default {
     }
 }
 
-impl <Resp> Future for RpcFuture<Resp> where Resp: Message + Default {
+impl<Resp> Future for RpcFuture<Resp>
+where
+    Resp: Message + Default,
+{
     type Item = (Resp, Vec<BytesMut>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (bytes, sidecars) = try_ready!(self.receiver.poll().map_err(|_| -> Error { unreachable!("RPC dropped"); }))?;
+        let (bytes, sidecars) = try_ready!(self.receiver.poll().map_err(|_| -> Error {
+            unreachable!("RPC dropped");
+        }))?;
         let body = Resp::decode(&bytes).expect("poll");
 
         trace!("RpcFuture complete: {:?}", body);

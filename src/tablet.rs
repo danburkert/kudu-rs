@@ -1,9 +1,13 @@
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 
 use krpc;
 
+use partition::PartitionKey;
+use pb::master::{tablet_locations_pb::ReplicaPb, TabletLocationsPb};
+use pb::ExpectField;
+use replica::{Replica, ReplicaSet};
 use HostPort;
 use Partition;
 use PartitionSchema;
@@ -12,16 +16,11 @@ use Result;
 use Schema;
 use TabletId;
 use TabletServerId;
-use partition::PartitionKey;
-use pb::ExpectField;
-use pb::master::{TabletLocationsPb, tablet_locations_pb::ReplicaPb as ReplicaPb};
-use replica::{Replica, ReplicaSet};
 
 /// Metadata pertaining to a Kudu tablet.
 // TODO: when replacing a tablet in the table locations map, carry through the leader flag.
 #[derive(Debug)]
 pub(crate) struct Tablet {
-
     /// The tablet ID.
     pub id: TabletId,
 
@@ -36,7 +35,6 @@ pub(crate) struct Tablet {
 }
 
 impl Tablet {
-
     /// Returns the unique tablet ID.
     pub fn id(&self) -> TabletId {
         self.id
@@ -50,21 +48,30 @@ impl Tablet {
         &self.upper_bound
     }
 
-    pub(crate) fn info(&self,
-                       primary_key_schema: &Schema,
-                       partition_schema: PartitionSchema) -> Result<TabletInfo> {
+    pub(crate) fn info(
+        &self,
+        primary_key_schema: &Schema,
+        partition_schema: PartitionSchema,
+    ) -> Result<TabletInfo> {
         let id = self.id;
-        let partition = Partition::from_bounds(primary_key_schema,
-                                               partition_schema,
-                                               self.lower_bound.clone(),
-                                               self.upper_bound.clone())?;
+        let partition = Partition::from_bounds(
+            primary_key_schema,
+            partition_schema,
+            self.lower_bound.clone(),
+            self.upper_bound.clone(),
+        )?;
 
-        let replicas = self.replicas
-                           .iter()
-                           .map(TabletReplica::info)
-                           .collect::<Vec<_>>()
-                           .into_boxed_slice();
-        Ok(TabletInfo { id, partition, replicas })
+        let replicas = self
+            .replicas
+            .iter()
+            .map(TabletReplica::info)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(TabletInfo {
+            id,
+            partition,
+            replicas,
+        })
     }
 }
 
@@ -87,15 +94,22 @@ pub(crate) struct TabletReplica {
 
 impl TabletReplica {
     fn info(&self) -> ReplicaInfo {
-        let role = if self.is_leader() { RaftRole::Leader } else { RaftRole::Follower };
+        let role = if self.is_leader() {
+            RaftRole::Leader
+        } else {
+            RaftRole::Follower
+        };
         let id = self.id;
         let rpc_addrs = self.rpc_addrs.clone();
-        ReplicaInfo { id, rpc_addrs, role }
+        ReplicaInfo {
+            id,
+            rpc_addrs,
+            role,
+        }
     }
 }
 
 impl Replica for TabletReplica {
-
     fn proxy(&self) -> krpc::Proxy {
         self.proxy.clone()
     }
@@ -132,13 +146,11 @@ impl fmt::Debug for TabletReplica {
 }
 
 impl TabletReplica {
-
     /// Returns the ID of the tablet server which owns this replica.
     pub fn id(&self) -> TabletServerId {
         self.id
     }
 }
-
 
 /// Information about a Kudu tablet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,7 +161,6 @@ pub struct TabletInfo {
 }
 
 impl TabletInfo {
-
     pub fn id(&self) -> TabletId {
         self.id
     }
@@ -163,21 +174,28 @@ impl TabletInfo {
     }
 
     /// Creates a new `TabletInfo` from a tablet locations protobuf message.
-    pub(crate) fn from_pb(primary_key_schema: &Schema,
-                          partition_schema: PartitionSchema,
-                          pb: TabletLocationsPb)
-                          -> Result<TabletInfo> {
+    pub(crate) fn from_pb(
+        primary_key_schema: &Schema,
+        partition_schema: PartitionSchema,
+        pb: TabletLocationsPb,
+    ) -> Result<TabletInfo> {
         let id = TabletId::parse_bytes(&pb.tablet_id)?;
-        let partition = Partition::from_pb(primary_key_schema,
-                                           partition_schema,
-                                           pb.partition.expect_field("TabletLocationsPb",
-                                                                     "partition")?)?;
-        let replicas = pb.replicas
-                         .into_iter()
-                         .map(ReplicaInfo::from_pb)
-                         .collect::<Result<Vec<_>>>()?
-                         .into_boxed_slice();
-        Ok(TabletInfo { id, partition, replicas })
+        let partition = Partition::from_pb(
+            primary_key_schema,
+            partition_schema,
+            pb.partition.expect_field("TabletLocationsPb", "partition")?,
+        )?;
+        let replicas = pb
+            .replicas
+            .into_iter()
+            .map(ReplicaInfo::from_pb)
+            .collect::<Result<Vec<_>>>()?
+            .into_boxed_slice();
+        Ok(TabletInfo {
+            id,
+            partition,
+            replicas,
+        })
     }
 }
 
@@ -190,7 +208,6 @@ pub struct ReplicaInfo {
 }
 
 impl ReplicaInfo {
-
     /// Returns the ID of the tablet server which owns this replica.
     pub fn id(&self) -> &TabletServerId {
         &self.id
@@ -210,12 +227,17 @@ impl ReplicaInfo {
     pub(crate) fn from_pb(pb: ReplicaPb) -> Result<ReplicaInfo> {
         let role = pb.role();
         let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-        let rpc_addrs = pb.ts_info
-                          .rpc_addresses
-                          .into_iter()
-                          .map(HostPort::from)
-                          .collect::<Vec<_>>()
-                          .into_boxed_slice();
-        Ok(ReplicaInfo { id, rpc_addrs, role })
+        let rpc_addrs = pb
+            .ts_info
+            .rpc_addresses
+            .into_iter()
+            .map(HostPort::from)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(ReplicaInfo {
+            id,
+            rpc_addrs,
+            role,
+        })
     }
 }

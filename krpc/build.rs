@@ -23,20 +23,21 @@ fn main() {
     let kudu_home = match env::var("KUDU_HOME") {
         Ok(kudu_home) => PathBuf::from(kudu_home),
         Err(_) => {
-            let kudu_home =
-                PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR environment variable not set"))
-                        .join(format!("apache-kudu-{}", VERSION));
+            let kudu_home = PathBuf::from(
+                env::var("OUT_DIR").expect("OUT_DIR environment variable not set"),
+            ).join(format!("apache-kudu-{}", VERSION));
 
             if !kudu_home.exists() {
                 download_protos(&kudu_home);
             }
             kudu_home
-        },
+        }
     };
 
-    let protos = PROTOS.iter()
-                       .map(|proto| kudu_home.join("src").join("kudu").join(proto))
-                       .collect::<Vec<_>>();
+    let protos = PROTOS
+        .iter()
+        .map(|proto| kudu_home.join("src").join("kudu").join(proto))
+        .collect::<Vec<_>>();
 
     prost_build::compile_protos(&protos, &[kudu_home.join("src")]).unwrap();
 }
@@ -57,23 +58,34 @@ fn download_protos(target: &Path) {
 
         let mut handle = Easy::new();
 
-        handle.url(&format!("{url_base}/{version}/src/kudu/{proto}",
-                            url_base=URL_BASE,
-                            version=VERSION,
-                            proto=proto))
-              .expect("failed to configure Kudu URL");
-        handle.follow_location(true)
-              .expect("failed to configure follow location");
+        handle
+            .url(&format!(
+                "{url_base}/{version}/src/kudu/{proto}",
+                url_base = URL_BASE,
+                version = VERSION,
+                proto = proto
+            ))
+            .expect("failed to configure Kudu URL");
+        handle
+            .follow_location(true)
+            .expect("failed to configure follow location");
         {
             let mut transfer = handle.transfer();
-            transfer.write_function(|new_data| {
-                data.extend_from_slice(new_data);
-                Ok(new_data.len())
-            }).expect("failed to write download data");
-            transfer.perform().expect("failed to download Kudu source tarball");
+            transfer
+                .write_function(|new_data| {
+                    data.extend_from_slice(new_data);
+                    Ok(new_data.len())
+                })
+                .expect("failed to write download data");
+            transfer
+                .perform()
+                .expect("failed to download Kudu source tarball");
         }
 
-        fs::File::create(proto_path).unwrap().write_all(&data).unwrap();
+        fs::File::create(proto_path)
+            .unwrap()
+            .write_all(&data)
+            .unwrap();
     }
 
     fs::rename(&tempdir.into_path(), target).expect("unable to move temporary directory");

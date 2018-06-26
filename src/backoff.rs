@@ -10,7 +10,6 @@ use rand::{self, Rng};
 /// [1]: http://dthain.blogspot.com/2009/02/exponential-backoff-in-distributed.html
 #[derive(Clone, Debug)]
 pub struct Backoff {
-
     /// Initial backoff duration.
     initial: u32,
 
@@ -22,7 +21,6 @@ pub struct Backoff {
 }
 
 impl Backoff {
-
     /// Creates a new exponential backoff policy with the provided initial
     /// and maximum duration in milliseconds.
     ///
@@ -34,7 +32,7 @@ impl Backoff {
         Backoff {
             initial: initial,
             max: max,
-            retries: 0
+            retries: 0,
         }
     }
 
@@ -99,6 +97,6 @@ mod tests {
         backoff.reset();
 
         let g = backoff.next_backoff_ms();
-        assert!(g >= 1 && g <2);
+        assert!(g >= 1 && g < 2);
     }
 }

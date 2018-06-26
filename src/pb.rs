@@ -57,7 +57,9 @@ impl From<String> for master::TableIdentifierPb {
 impl From<String> for partition_schema_pb::ColumnIdentifierPb {
     fn from(column_name: String) -> partition_schema_pb::ColumnIdentifierPb {
         partition_schema_pb::ColumnIdentifierPb {
-            identifier: Some(partition_schema_pb::column_identifier_pb::Identifier::Name(column_name)),
+            identifier: Some(partition_schema_pb::column_identifier_pb::Identifier::Name(
+                column_name,
+            )),
         }
     }
 }
@@ -70,16 +72,19 @@ impl From<HostPortPb> for HostPort {
 
 pub trait ExpectField {
     type Value;
-    fn expect_field(self, message: &'static str, field: &'static str) -> Result<Self::Value, Error>;
+    fn expect_field(self, message: &'static str, field: &'static str)
+        -> Result<Self::Value, Error>;
 }
 
-impl <T> ExpectField for Option<T> {
+impl<T> ExpectField for Option<T> {
     type Value = T;
     fn expect_field(self, message: &'static str, field: &'static str) -> Result<T, Error> {
         match self {
             Some(value) => Ok(value),
-            None => Err(Error::Serialization(format!("required field absent: {}::{}",
-                                                     message, field))),
+            None => Err(Error::Serialization(format!(
+                "required field absent: {}::{}",
+                message, field
+            ))),
         }
     }
 }

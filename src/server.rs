@@ -2,15 +2,15 @@ use std::time::Duration;
 
 use url::Url;
 
+use pb::master::list_tablet_servers_response_pb::Entry as TabletServerEntryPb;
+use pb::ExpectField;
+use pb::ServerEntryPb as MasterEntryPb;
+use util;
 use HostPort;
 use MasterId;
 use RaftRole;
 use Result;
 use TabletServerId;
-use pb::ExpectField;
-use pb::master::list_tablet_servers_response_pb::{Entry as TabletServerEntryPb};
-use pb::{ServerEntryPb as MasterEntryPb};
-use util;
 
 /// Master metadata.
 ///
@@ -27,7 +27,6 @@ pub struct MasterInfo {
 }
 
 impl MasterInfo {
-
     /// The master unique server ID.
     pub fn id(&self) -> &MasterId {
         &self.id
@@ -66,15 +65,17 @@ impl MasterInfo {
         let registration = master.registration.expect_field(ENTRY, "registration")?;
         let https_enabled = registration.https_enabled();
 
-        let rpc_addrs = registration.rpc_addresses
-                                    .into_iter()
-                                    .map(HostPort::from)
-                                    .collect::<Vec<_>>();
+        let rpc_addrs = registration
+            .rpc_addresses
+            .into_iter()
+            .map(HostPort::from)
+            .collect::<Vec<_>>();
 
         let http_addrs = util::urls_from_pb(&registration.http_addresses, https_enabled)?;
 
-        let software_version = registration.software_version
-                                           .expect_field(ENTRY, "software_version")?;
+        let software_version = registration
+            .software_version
+            .expect_field(ENTRY, "software_version")?;
 
         Ok(MasterInfo {
             id,
@@ -102,7 +103,6 @@ pub struct TabletServerInfo {
 }
 
 impl TabletServerInfo {
-
     /// The tablet server unique server ID.
     pub fn id(&self) -> TabletServerId {
         self.id
@@ -140,20 +140,25 @@ impl TabletServerInfo {
         let id = TabletServerId::parse_bytes(&tablet_server.instance_id.permanent_uuid)?;
         let seqno = tablet_server.instance_id.instance_seqno;
 
-        let registration = tablet_server.registration.expect_field(ENTRY, "registration")?;
+        let registration = tablet_server
+            .registration
+            .expect_field(ENTRY, "registration")?;
         let https_enabled = registration.https_enabled();
 
-        let rpc_addrs = registration.rpc_addresses
-                                    .into_iter()
-                                    .map(HostPort::from)
-                                    .collect::<Vec<_>>();
+        let rpc_addrs = registration
+            .rpc_addresses
+            .into_iter()
+            .map(HostPort::from)
+            .collect::<Vec<_>>();
 
         let http_addrs = util::urls_from_pb(&registration.http_addresses, https_enabled)?;
 
-        let software_version = registration.software_version
-                                           .expect_field(ENTRY, "software_version")?;
-        let millis_since_heartbeat = tablet_server.millis_since_heartbeat
-                                                  .expect_field(ENTRY, "millis_since_heartbeat")?;
+        let software_version = registration
+            .software_version
+            .expect_field(ENTRY, "software_version")?;
+        let millis_since_heartbeat = tablet_server
+            .millis_since_heartbeat
+            .expect_field(ENTRY, "millis_since_heartbeat")?;
         Ok(TabletServerInfo {
             id,
             rpc_addrs,

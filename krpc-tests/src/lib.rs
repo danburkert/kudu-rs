@@ -6,23 +6,17 @@ extern crate krpc;
 extern crate tacho;
 extern crate tokio;
 
-#[macro_use] extern crate prost_derive;
+#[macro_use]
+extern crate prost_derive;
 
 mod calculator_server;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use krpc::{
-    Call,
-    Error,
-    Options,
-    Proxy,
-    RpcError,
-    RpcErrorCode,
-};
 use futures::future::lazy;
 use futures::Future;
+use krpc::{Call, Error, Options, Proxy, RpcError, RpcErrorCode};
 use tokio::executor::current_thread::CurrentThread;
 
 use calculator_server::CalculatorServer;
@@ -52,9 +46,17 @@ fn init(mut options: Options) -> (CalculatorServer, Proxy, tacho::Reporter) {
 }
 
 fn proxy_errors(report: &tacho::Report) -> usize {
-    report.counters().iter().map(|(key, count)| -> usize {
-        if key.name() == "proxy_errors" { *count } else { 0 }
-    }).sum()
+    report
+        .counters()
+        .iter()
+        .map(|(key, count)| -> usize {
+            if key.name() == "proxy_errors" {
+                *count
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 #[test]
@@ -62,7 +64,10 @@ fn call() {
     tokio::run(lazy(|| {
         let (_server, mut proxy, reporter) = init(Options::default());
 
-        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }), Instant::now() + Duration::from_secs(10));
+        let call = CalculatorService::add(
+            Arc::new(AddRequestPb { x: 42, y: 18 }),
+            Instant::now() + Duration::from_secs(10),
+        );
 
         let (response, sidecars) = proxy.send(call).wait().expect("add request failed");
         assert_eq!(0, sidecars.len());
@@ -78,10 +83,18 @@ fn invalid_service() {
         let (_server, mut proxy, reporter) = init(Options::default());
 
         let now = Instant::now();
-        let call = Call::<AddRequestPb, AddResponsePb>::new("FooService", "foo", Arc::new(AddRequestPb::default()), now + Duration::from_secs(10));
+        let call = Call::<AddRequestPb, AddResponsePb>::new(
+            "FooService",
+            "foo",
+            Arc::new(AddRequestPb::default()),
+            now + Duration::from_secs(10),
+        );
 
         match proxy.send(call).wait().unwrap_err() {
-            Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchService, .. }) => (),
+            Error::Rpc(RpcError {
+                code: RpcErrorCode::ErrorNoSuchService,
+                ..
+            }) => (),
             error => panic!("unexpected error: {}", error),
         }
         assert_eq!(0, proxy_errors(&reporter.peek()));
@@ -94,13 +107,18 @@ fn invalid_method() {
     tokio::run(lazy(|| {
         let (_server, mut proxy, reporter) = init(Options::default());
 
-
-        let call = Call::<AddRequestPb, AddResponsePb>::new("kudu.rpc_test.CalculatorService", "foo",
-                                                            Arc::new(AddRequestPb::default()),
-                                                            Instant::now() + Duration::from_secs(10));
+        let call = Call::<AddRequestPb, AddResponsePb>::new(
+            "kudu.rpc_test.CalculatorService",
+            "foo",
+            Arc::new(AddRequestPb::default()),
+            Instant::now() + Duration::from_secs(10),
+        );
 
         match proxy.send(call).wait().unwrap_err() {
-            Error::Rpc(RpcError { code: RpcErrorCode::ErrorNoSuchMethod, .. }) => (),
+            Error::Rpc(RpcError {
+                code: RpcErrorCode::ErrorNoSuchMethod,
+                ..
+            }) => (),
             error => panic!("unexpected error: {}", error),
         }
 
@@ -115,7 +133,7 @@ fn timeout() {
         let (_server, mut proxy, reporter) = init(Options::default());
 
         // Timeout expires before the RPC is sent.
-        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }), Instant::now());;
+        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }), Instant::now());
 
         match proxy.send(call).wait().unwrap_err() {
             Error::TimedOut => (),
@@ -133,8 +151,10 @@ fn cancel() {
         let (_server, mut proxy, reporter) = init(Options::default());
 
         // Timeout expires before the RPC is sent.
-        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }),
-                                          Instant::now() + Duration::from_secs(10));
+        let call = CalculatorService::add(
+            Arc::new(AddRequestPb { x: 42, y: 18 }),
+            Instant::now() + Duration::from_secs(10),
+        );
 
         let _ = proxy.send(call);
 
@@ -177,8 +197,10 @@ fn server_shutdown() {
     tokio::run(lazy(|| {
         let (server, mut proxy, _reporter) = init(Options::default());
 
-        let call = CalculatorService::add(Arc::new(AddRequestPb { x: 42, y: 18 }),
-                                          Instant::now() + Duration::from_secs(20));
+        let call = CalculatorService::add(
+            Arc::new(AddRequestPb { x: 42, y: 18 }),
+            Instant::now() + Duration::from_secs(20),
+        );
 
         proxy.send(call.clone()).wait().expect("add request failed");
 

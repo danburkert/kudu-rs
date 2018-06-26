@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-
 #![feature(nll)]
 
 extern crate byteorder;
@@ -18,17 +17,24 @@ extern crate url;
 extern crate uuid;
 extern crate vec_map;
 
-#[macro_use] extern crate prost_derive;
+#[macro_use]
+extern crate prost_derive;
 
-#[cfg(test)] extern crate env_logger;
-#[cfg(test)] extern crate tempdir;
+#[cfg(test)]
+extern crate env_logger;
+#[cfg(test)]
+extern crate tempdir;
 
-#[cfg(any(feature="quickcheck", test))]
-#[macro_use] extern crate quickcheck;
+#[cfg(any(feature = "quickcheck", test))]
+#[macro_use]
+extern crate quickcheck;
 
-#[macro_use] extern crate futures;
-#[macro_use] extern crate lazy_static;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate futures;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate log;
 
 mod backoff;
 mod bitmap;
@@ -88,7 +94,6 @@ pub enum DataType {
 }
 
 impl DataType {
-
     fn is_var_len(self) -> bool {
         match self {
             DataType::String | DataType::Binary => true,
@@ -138,34 +143,40 @@ impl DataType {
         }
     }
 
-    #[cfg(any(feature="quickcheck", test))]
-    pub fn arbitrary_primary_key<G>(g: &mut G) -> DataType where G: quickcheck::Gen {
+    #[cfg(any(feature = "quickcheck", test))]
+    pub fn arbitrary_primary_key<G>(g: &mut G) -> DataType
+    where
+        G: quickcheck::Gen,
+    {
         *g.choose(&[
-                  DataType::Int8,
-                  DataType::Int16,
-                  DataType::Int32,
-                  DataType::Int64,
-                  DataType::Timestamp,
-                  DataType::Binary,
-                  DataType::String,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Timestamp,
+            DataType::Binary,
+            DataType::String,
         ]).unwrap()
     }
 }
 
-#[cfg(any(feature="quickcheck", test))]
+#[cfg(any(feature = "quickcheck", test))]
 impl quickcheck::Arbitrary for DataType {
-    fn arbitrary<G>(g: &mut G) -> DataType where G: quickcheck::Gen {
+    fn arbitrary<G>(g: &mut G) -> DataType
+    where
+        G: quickcheck::Gen,
+    {
         *g.choose(&[
-                  DataType::Bool,
-                  DataType::Int8,
-                  DataType::Int16,
-                  DataType::Int32,
-                  DataType::Int64,
-                  DataType::Timestamp,
-                  DataType::Float,
-                  DataType::Double,
-                  DataType::Binary,
-                  DataType::String,
+            DataType::Bool,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Timestamp,
+            DataType::Float,
+            DataType::Double,
+            DataType::Binary,
+            DataType::String,
         ]).unwrap()
     }
 }
@@ -208,32 +219,46 @@ impl EncodingType {
         }
     }
 
-    #[cfg(any(feature="quickcheck", test))]
-    pub fn arbitrary<G>(g: &mut G, data_type: DataType) -> EncodingType where G: quickcheck::Gen {
+    #[cfg(any(feature = "quickcheck", test))]
+    pub fn arbitrary<G>(g: &mut G, data_type: DataType) -> EncodingType
+    where
+        G: quickcheck::Gen,
+    {
         match data_type {
-            DataType::Bool => *g.choose(&[
-                EncodingType::Auto,
-                EncodingType::Plain,
-                EncodingType::RunLength
-            ]).unwrap(),
-            DataType::Int8 | DataType::Int16 |
-            DataType::Int32 | DataType::Int64 | DataType::Timestamp => *g.choose(&[
-                EncodingType::Auto,
-                EncodingType::Plain,
-                EncodingType::RunLength,
-                EncodingType::BitShuffle
-            ]).unwrap(),
-            DataType::Float | DataType::Double => *g.choose(&[
-                EncodingType::Auto,
-                EncodingType::Plain,
-                EncodingType::BitShuffle
-            ]).unwrap(),
-            DataType::Binary | DataType::String => *g.choose(&[
-                EncodingType::Auto,
-                EncodingType::Plain,
-                EncodingType::Prefix,
-                EncodingType::Dictionary
-            ]).unwrap(),
+            DataType::Bool => {
+                *g.choose(&[
+                    EncodingType::Auto,
+                    EncodingType::Plain,
+                    EncodingType::RunLength,
+                ]).unwrap()
+            }
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Timestamp => {
+                *g.choose(&[
+                    EncodingType::Auto,
+                    EncodingType::Plain,
+                    EncodingType::RunLength,
+                    EncodingType::BitShuffle,
+                ]).unwrap()
+            }
+            DataType::Float | DataType::Double => {
+                *g.choose(&[
+                    EncodingType::Auto,
+                    EncodingType::Plain,
+                    EncodingType::BitShuffle,
+                ]).unwrap()
+            }
+            DataType::Binary | DataType::String => {
+                *g.choose(&[
+                    EncodingType::Auto,
+                    EncodingType::Plain,
+                    EncodingType::Prefix,
+                    EncodingType::Dictionary,
+                ]).unwrap()
+            }
         }
     }
 }
@@ -271,20 +296,23 @@ impl CompressionType {
     }
 }
 
-#[cfg(any(feature="quickcheck", test))]
+#[cfg(any(feature = "quickcheck", test))]
 impl quickcheck::Arbitrary for CompressionType {
-    fn arbitrary<G>(g: &mut G) -> CompressionType where G: quickcheck::Gen {
+    fn arbitrary<G>(g: &mut G) -> CompressionType
+    where
+        G: quickcheck::Gen,
+    {
         *g.choose(&[
-                  CompressionType::Default,
-                  CompressionType::None,
-                  CompressionType::Snappy,
-                  CompressionType::Lz4,
-                  CompressionType::Zlib,
+            CompressionType::Default,
+            CompressionType::None,
+            CompressionType::Snappy,
+            CompressionType::Lz4,
+            CompressionType::Zlib,
         ]).unwrap()
     }
 }
 
-pub use pb::consensus::raft_peer_pb::{Role as RaftRole};
+pub use pb::consensus::raft_peer_pb::Role as RaftRole;
 
 macro_rules! id {
     ($id:ident) => {
@@ -300,8 +328,8 @@ macro_rules! id {
 
             fn parse(input: &str) -> Result<$id> {
                 ::uuid::Uuid::parse_str(input)
-                             .map_err(|error| Error::Serialization(format!("{}", error)))
-                             .map(|id| $id { id: id })
+                    .map_err(|error| Error::Serialization(format!("{}", error)))
+                    .map(|id| $id { id: id })
             }
 
             fn parse_bytes(input: &[u8]) -> Result<$id> {
@@ -322,7 +350,7 @@ macro_rules! id {
                 write!(f, "{}", self.id.simple())
             }
         }
-    }
+    };
 }
 
 id!(MasterId);
@@ -368,7 +396,7 @@ impl IntoMasterAddrs for Vec<String> {
     }
 }
 
-impl <'a> IntoMasterAddrs for &'a str {
+impl<'a> IntoMasterAddrs for &'a str {
     fn into_master_addrs(self) -> Result<Vec<HostPort>> {
         let mut master_addrs = Vec::new();
         for master_addr in self.split(',') {

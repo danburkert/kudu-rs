@@ -1,20 +1,9 @@
 use std::env;
 use std::ffi::CString;
-use std::net::{
-    Ipv4Addr,
-    SocketAddr,
-    SocketAddrV4,
-};
-use std::io::{
-    BufReader,
-    BufRead,
-};
+use std::io::{BufRead, BufReader};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
-use std::process::{
-    Child,
-    Command,
-    Stdio,
-};
+use std::process::{Child, Command, Stdio};
 
 #[must_use]
 pub struct CalculatorServer {
@@ -37,10 +26,7 @@ impl CalculatorServer {
         let port: u16 = port.trim().parse().unwrap();
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
 
-        CalculatorServer {
-            process,
-            addr,
-        }
+        CalculatorServer { process, addr }
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -68,13 +54,17 @@ fn get_executable_path(executable: &str) -> PathBuf {
     }
 
     let path_bytes = Command::new("which")
-                             .arg(executable)
-                             .output()
-                             .expect("which")
-                             .stdout;
-    let path = CString::new(path_bytes).expect("cstring").into_string().expect("into_string");
+        .arg(executable)
+        .output()
+        .expect("which")
+        .stdout;
+    let path = CString::new(path_bytes)
+        .expect("cstring")
+        .into_string()
+        .expect("into_string");
 
-    PathBuf::from(path.lines().next().expect(
-            &format!("unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
-                     executable)))
+    PathBuf::from(path.lines().next().expect(&format!(
+        "unable to find the {} executable. Set $KUDU_HOME or add it to $PATH",
+        executable
+    )))
 }

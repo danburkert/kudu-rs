@@ -3,16 +3,16 @@ use std::slice;
 
 use byteorder::{ByteOrder, LittleEndian};
 
+use bitmap;
+use pb::row_operations_pb::Type as OperationTypePb;
+use pb::RowOperationsPb;
+use value::read_var_len_value;
 use DataType;
 use Error;
 use RangePartitionBound;
 use Row;
 use Schema;
 use Value;
-use bitmap;
-use pb::RowOperationsPb;
-use pb::row_operations_pb::{Type as OperationTypePb};
-use value::read_var_len_value;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OperationKind {
@@ -39,7 +39,7 @@ pub struct Operation<'data> {
     pub kind: OperationKind,
 }
 
-impl <'data> Operation<'data> {
+impl<'data> Operation<'data> {
     pub fn into_owned(self) -> Operation<'static> {
         Operation {
             row: self.row.into_owned(),
@@ -54,14 +54,12 @@ pub struct OperationError {
     pub error: Error,
 }
 
-
 pub(crate) struct OperationEncoder {
     pub(crate) data: Vec<u8>,
     pub(crate) indirect_data: Vec<u8>,
 }
 
 impl OperationEncoder {
-
     pub fn new() -> OperationEncoder {
         OperationEncoder {
             data: Vec::new(),
@@ -73,13 +71,21 @@ impl OperationEncoder {
         self.encode_row(OperationTypePb::SplitRow, row);
     }
 
-    pub fn encode_range_partition(&mut self, lower: &RangePartitionBound, upper: &RangePartitionBound) {
+    pub fn encode_range_partition(
+        &mut self,
+        lower: &RangePartitionBound,
+        upper: &RangePartitionBound,
+    ) {
         let (lower_bound, lower_bound_type) = match *lower {
             RangePartitionBound::Inclusive(ref row) => (row, OperationTypePb::RangeLowerBound),
-            RangePartitionBound::Exclusive(ref row) => (row, OperationTypePb::ExclusiveRangeLowerBound),
+            RangePartitionBound::Exclusive(ref row) => {
+                (row, OperationTypePb::ExclusiveRangeLowerBound)
+            }
         };
         let (upper_bound, upper_bound_type) = match *upper {
-            RangePartitionBound::Inclusive(ref row) => (row, OperationTypePb::InclusiveRangeUpperBound),
+            RangePartitionBound::Inclusive(ref row) => {
+                (row, OperationTypePb::InclusiveRangeUpperBound)
+            }
             RangePartitionBound::Exclusive(ref row) => (row, OperationTypePb::RangeUpperBound),
         };
 
@@ -94,9 +100,8 @@ impl OperationEncoder {
     pub fn encode_row(&mut self, op_type: OperationTypePb, row: &Row) {
         let schema = row.schema();
         let bitmap_len = schema.bitmap_len();
-        self.data.reserve(1
-                          + schema.row_len()
-                          + schema.has_nullable_columns() as usize * bitmap_len);
+        self.data
+            .reserve(1 + schema.row_len() + schema.has_nullable_columns() as usize * bitmap_len);
 
         self.data.push(op_type as u8);
 
@@ -105,13 +110,15 @@ impl OperationEncoder {
             None => {
                 let len = self.data.len() + schema.bitmap_len();
                 self.data.resize(len, 0xFF);
-            },
+            }
         }
         self.data.extend_from_slice(row.is_null_bitmap());
 
         unsafe {
             for (idx, column) in row.schema().columns().iter().enumerate() {
-                if !row.is_set_unchecked(idx) || (column.is_nullable() && row.is_null_unchecked(idx)) {
+                if !row.is_set_unchecked(idx)
+                    || (column.is_nullable() && row.is_null_unchecked(idx))
+                {
                     continue;
                 }
                 let data_type = column.data_type();
@@ -124,7 +131,8 @@ impl OperationEncoder {
                     self.indirect_data.extend_from_slice(data);
                 } else {
                     let column_offset = row.schema().column_offsets()[idx] as isize;
-                    let data = slice::from_raw_parts(row.data().offset(column_offset), data_type.size());
+                    let data =
+                        slice::from_raw_parts(row.data().offset(column_offset), data_type.size());
                     self.data.extend_from_slice(data);
                 }
             }
@@ -144,7 +152,9 @@ impl OperationEncoder {
 
         for (idx, column) in row.schema().columns().iter().enumerate() {
             unsafe {
-                if !row.is_set_unchecked(idx) || (column.is_nullable() && row.is_null_unchecked(idx)) {
+                if !row.is_set_unchecked(idx)
+                    || (column.is_nullable() && row.is_null_unchecked(idx))
+                {
                     continue;
                 }
             }
@@ -186,11 +196,16 @@ pub(crate) struct OperationDecoder<'a> {
     offset: usize,
 }
 
-impl <'a> Iterator for OperationDecoder<'a> {
+impl<'a> Iterator for OperationDecoder<'a> {
     type Item = Operation<'a>;
 
     fn next(&mut self) -> Option<Operation<'a>> {
-        let Self { schema, data, ref mut offset, .. } = *self;
+        let Self {
+            schema,
+            data,
+            ref mut offset,
+            ..
+        } = *self;
 
         if *offset >= data.len() {
             return None;
@@ -211,7 +226,9 @@ impl <'a> Iterator for OperationDecoder<'a> {
         }
 
         for (idx, column) in self.schema.columns().iter().enumerate() {
-            if !bitmap::get(is_set, idx) { continue; }
+            if !bitmap::get(is_set, idx) {
+                continue;
+            }
             if column.is_nullable() && bitmap::get(is_null, idx) {
                 // TODO: set_null_unchecked
                 row.set_null(idx).unwrap();
@@ -223,29 +240,29 @@ impl <'a> Iterator for OperationDecoder<'a> {
                 match column.data_type() {
                     DataType::Bool => {
                         row.set_unchecked(idx, bool::read(data).unwrap());
-                    },
+                    }
                     DataType::Int8 => {
                         row.set_unchecked(idx, i8::read(data).unwrap());
-                    },
+                    }
                     DataType::Int16 => {
                         row.set_unchecked(idx, i16::read(data).unwrap());
-                    },
+                    }
                     DataType::Int32 => {
                         row.set_unchecked(idx, i32::read(data).unwrap());
-                    },
+                    }
                     DataType::Int64 | DataType::Timestamp => {
                         row.set_unchecked(idx, i64::read(data).unwrap());
-                    },
+                    }
                     DataType::Float => {
                         row.set_unchecked(idx, f32::read(data).unwrap());
-                    },
+                    }
                     DataType::Double => {
                         row.set_unchecked(idx, f64::read(data).unwrap());
-                    },
+                    }
                     DataType::Binary | DataType::String => {
                         let (ptr, len, _) = read_var_len_value(data);
                         row.set_unchecked(idx, slice::from_raw_parts(ptr, len));
-                    },
+                    }
                 }
             }
             *offset += column.data_type().size();
@@ -263,8 +280,12 @@ impl <'a> Iterator for OperationDecoder<'a> {
     }
 }
 
-impl <'a> OperationDecoder<'a> {
-    pub(crate) fn new(schema: &'a Schema, data: &'a [u8], indirect_data: &'a [u8]) -> OperationDecoder<'a> {
+impl<'a> OperationDecoder<'a> {
+    pub(crate) fn new(
+        schema: &'a Schema,
+        data: &'a [u8],
+        indirect_data: &'a [u8],
+    ) -> OperationDecoder<'a> {
         OperationDecoder {
             schema,
             data,
@@ -274,7 +295,7 @@ impl <'a> OperationDecoder<'a> {
     }
 }
 
-impl <'a> fmt::Debug for OperationDecoder<'a> {
+impl<'a> fmt::Debug for OperationDecoder<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("OperationDecoder")
             .field("schema", self.schema)

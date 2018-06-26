@@ -1,70 +1,36 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
-use std::collections::{
-    HashMap,
-    VecDeque,
-};
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::mem;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{
-    Async,
-    Future,
-    Poll,
-    Sink,
-    Stream,
-    future,
-};
-use futures::stream::{
-    FuturesOrdered,
-    FuturesUnordered,
-};
-use futures::sync::mpsc::{
-    self,
-    UnboundedReceiver,
-    UnboundedSender,
-};
+use futures::stream::{FuturesOrdered, FuturesUnordered};
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{future, Async, Future, Poll, Sink, Stream};
 use krpc::Call;
 
+use backoff::Backoff;
+use key;
+use operation::{Operation, OperationDecoder, OperationEncoder, OperationError, OperationKind};
+use partition::PartitionKey;
+use pb::tserver::{TabletServerService, WriteRequestPb, WriteResponsePb};
+use replica::{Replica, ReplicaRpc, ReplicaSet, Selection, Speculation};
+use tablet::Tablet;
+use tokio_timer::Delay;
 use Client;
 use Error;
 use PartitionSchema;
+use Row;
 use Schema;
 use Table;
 use TabletId;
-use Row;
-use backoff::Backoff;
-use key;
-use operation::{
-    Operation,
-    OperationDecoder,
-    OperationEncoder,
-    OperationError,
-    OperationKind,
-};
-use partition::PartitionKey;
-use pb::tserver::{
-    TabletServerService,
-    WriteRequestPb,
-    WriteResponsePb,
-};
-use replica::{
-    Replica,
-    ReplicaRpc,
-    ReplicaSet,
-    Selection,
-    Speculation,
-};
-use tablet::Tablet;
-use tokio_timer::Delay;
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
-
     /// Maximum amount of time to wait for a batch of write operations to be sent to a tablet
     /// server. If the timeout expires before the batch completes, the operations will fail with
     /// `Error::TimedOut`.
@@ -112,8 +78,15 @@ impl Default for WriterConfig {
 }
 
 pub struct Writer {
-    operations_in_lookup: FuturesOrdered<Box<Future<Item=(Option<Arc<Tablet>>, Operation<'static>, usize),
-                                                    Error=(Operation<'static>, Error)> + Send>>,
+    operations_in_lookup: FuturesOrdered<
+        Box<
+            Future<
+                    Item = (Option<Arc<Tablet>>, Operation<'static>, usize),
+                    Error = (Operation<'static>, Error),
+                >
+                + Send,
+        >,
+    >,
 
     /// Batchers; one per tablet server.
     batchers: HashMap<TabletId, TabletBatcher>,
@@ -131,14 +104,13 @@ struct Common {
     config: WriterConfig,
     table: Table,
 
-    batches_in_flight: FuturesUnordered<Box<Future<Item=BatchStats, Error=BatchError> + Send>>,
+    batches_in_flight: FuturesUnordered<Box<Future<Item = BatchStats, Error = BatchError> + Send>>,
 
     error_sender: UnboundedSender<OperationError>,
     error_receiver: UnboundedReceiver<OperationError>,
 }
 
 impl Writer {
-
     pub(crate) fn new(table: Table, config: WriterConfig) -> Writer {
         let (error_sender, error_receiver) = mpsc::unbounded();
         Writer {
@@ -182,7 +154,10 @@ impl Writer {
         self.poll_batches_in_flight(true)?;
 
         if self.buffered_data == 0 {
-            Ok(Async::Ready(mem::replace(&mut self.flush_stats, FlushStats::new())))
+            Ok(Async::Ready(mem::replace(
+                &mut self.flush_stats,
+                FlushStats::new(),
+            )))
         } else {
             Ok(Async::NotReady)
         }
@@ -194,8 +169,12 @@ impl Writer {
 
     pub fn apply(&mut self, op: Operation) {
         if op.row.schema() != self.common.table.schema() {
-            self.fail_operation(op, Error::InvalidArgument(
-                    "row operation schema does not match the writer schema".to_owned()));
+            self.fail_operation(
+                op,
+                Error::InvalidArgument(
+                    "row operation schema does not match the writer schema".to_owned(),
+                ),
+            );
             return;
         }
 
@@ -204,8 +183,12 @@ impl Writer {
         // Sanity check: if the operation is bigger than the max batch data size,
         // then we must reject it.
         if encoded_len > self.common.config.max_data_per_batch {
-            self.fail_operation(op, Error::InvalidArgument(
-                    "row operation size is greater than the max batch size".to_owned()));
+            self.fail_operation(
+                op,
+                Error::InvalidArgument(
+                    "row operation size is greater than the max batch size".to_owned(),
+                ),
+            );
             return;
         }
 
@@ -213,13 +196,14 @@ impl Writer {
 
         // TODO: encode the partition key into a cached buffer in order to avoid allocating for
         // every insert.
-        let partition_key = match key::encode_partition_key(self.common.table.partition_schema(), &op.row) {
-            Ok(partition_key) => partition_key,
-            Err(error) => {
-                self.fail_operation(op, error);
-                return;
-            },
-        };
+        let partition_key =
+            match key::encode_partition_key(self.common.table.partition_schema(), &op.row) {
+                Ok(partition_key) => partition_key,
+                Err(error) => {
+                    self.fail_operation(op, error);
+                    return;
+                }
+            };
 
         let mut tablet = self.common.table.table_locations().tablet(&*partition_key);
         let poll = if self.operations_in_lookup.is_empty() {
@@ -238,68 +222,85 @@ impl Writer {
                     Err(error) => Err((op, error)),
                 }));
                 self.operations_in_lookup.push(operation_in_lookup);
-            },
+            }
             Err(error) => self.fail_operation(op, error),
         }
     }
 
     pub fn apply_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
-        where I: IntoIterator<Item=Operation<'data>>
+    where
+        I: IntoIterator<Item = Operation<'data>>,
     {
         WriteAll {
             items: rows.into_iter(),
             f: Writer::apply,
-            writer: Some(self)
+            writer: Some(self),
         }
     }
 
     pub fn insert(&mut self, row: Row) {
-        self.apply(Operation { row, kind: OperationKind::Insert })
+        self.apply(Operation {
+            row,
+            kind: OperationKind::Insert,
+        })
     }
 
     pub fn insert_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
-        where I: IntoIterator<Item=Row<'data>>
+    where
+        I: IntoIterator<Item = Row<'data>>,
     {
         WriteAll {
             items: rows.into_iter(),
             f: Writer::insert,
-            writer: Some(self)
+            writer: Some(self),
         }
     }
 
     pub fn update(&mut self, row: Row) {
-        self.apply(Operation { row, kind: OperationKind::Update })
+        self.apply(Operation {
+            row,
+            kind: OperationKind::Update,
+        })
     }
 
     pub fn update_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
-        where I: IntoIterator<Item=Row<'data>>
+    where
+        I: IntoIterator<Item = Row<'data>>,
     {
         WriteAll {
             items: rows.into_iter(),
             f: Writer::update,
-            writer: Some(self)
+            writer: Some(self),
         }
     }
 
     pub fn delete(&mut self, row: Row) {
-        self.apply(Operation { row, kind: OperationKind::Delete })
+        self.apply(Operation {
+            row,
+            kind: OperationKind::Delete,
+        })
     }
 
     pub fn delete_all<'data, I>(self, rows: I) -> WriteAll<I::IntoIter>
-        where I: IntoIterator<Item=Row<'data>>
+    where
+        I: IntoIterator<Item = Row<'data>>,
     {
         WriteAll {
             items: rows.into_iter(),
             f: Writer::delete,
-            writer: Some(self)
+            writer: Some(self),
         }
     }
 
     fn poll_operations_in_lookup(&mut self) -> Poll<(), Error> {
         loop {
             match self.operations_in_lookup.poll() {
-                Ok(Async::Ready(Some((Some(tablet), op, encoded_len)))) => self.buffer_operation(tablet, op, encoded_len),
-                Ok(Async::Ready(Some((None, op, _)))) => self.fail_operation(op, Error::NoRangePartition),
+                Ok(Async::Ready(Some((Some(tablet), op, encoded_len)))) => {
+                    self.buffer_operation(tablet, op, encoded_len)
+                }
+                Ok(Async::Ready(Some((None, op, _)))) => {
+                    self.fail_operation(op, Error::NoRangePartition)
+                }
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(None)) => return Ok(Async::Ready(())),
                 Err((op, error)) => self.fail_operation(op, error),
@@ -308,7 +309,11 @@ impl Writer {
     }
 
     fn poll_batches_in_flight(&mut self, flush_batches: bool) -> Poll<(), Error> {
-        trace!("{:?}: poll_batches_in_flight; flush_batches: {}", self, flush_batches);
+        trace!(
+            "{:?}: poll_batches_in_flight; flush_batches: {}",
+            self,
+            flush_batches
+        );
         loop {
             match self.common.batches_in_flight.poll() {
                 Ok(Async::Ready(Some(stats))) => {
@@ -323,10 +328,10 @@ impl Writer {
                             } else {
                                 entry.get_mut().send_batches(&mut self.common);
                             }
-                        },
+                        }
                         Entry::Vacant(..) => unreachable!("unknown batch tablet"),
                     }
-                },
+                }
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(None)) => return Ok(Async::Ready(())),
                 Err(BatchError { call, stats, error }) => {
@@ -334,15 +339,24 @@ impl Writer {
                     self.buffered_data -= stats.data;
                     self.flush_stats.failed_batches += 1;
                     return Err(error);
-                },
+                }
             };
         }
     }
 
     /// Applies an operation to the appropriate tablet batch.
     fn buffer_operation(&mut self, tablet: Arc<Tablet>, op: Operation, encoded_len: usize) {
-        trace!("{:?}: buffer_operation; tablet: {:?}, op: {:?}, len: {:?}", self, tablet, op, encoded_len);
-        let batcher = self.batchers.entry(tablet.id()).or_insert_with(|| TabletBatcher::new(tablet.clone()));
+        trace!(
+            "{:?}: buffer_operation; tablet: {:?}, op: {:?}, len: {:?}",
+            self,
+            tablet,
+            op,
+            encoded_len
+        );
+        let batcher = self
+            .batchers
+            .entry(tablet.id())
+            .or_insert_with(|| TabletBatcher::new(tablet.clone()));
 
         // Overwrite the tablet in case it's been updated.
         batcher.tablet = tablet;
@@ -390,14 +404,18 @@ impl Future for Flush {
 }
 
 pub struct WriteAll<Iter>
-where Iter: Iterator {
+where
+    Iter: Iterator,
+{
     items: Iter,
     f: fn(&mut Writer, Iter::Item),
     writer: Option<Writer>,
 }
 
-impl <Iter> Future for WriteAll<Iter>
-where Iter: Iterator {
+impl<Iter> Future for WriteAll<Iter>
+where
+    Iter: Iterator,
+{
     type Item = Writer;
     type Error = Error;
     fn poll(&mut self) -> Poll<Writer, Error> {
@@ -417,7 +435,6 @@ pub(crate) struct ErrorCollector {
 }
 
 struct TabletBatcher {
-
     /// The lower-bound partition key of the tablet.
     tablet: Arc<Tablet>,
 
@@ -434,7 +451,6 @@ struct TabletBatcher {
 }
 
 impl TabletBatcher {
-
     /// Creates a new empty tablet batcher.
     fn new(tablet: Arc<Tablet>) -> TabletBatcher {
         TabletBatcher {
@@ -449,8 +465,9 @@ impl TabletBatcher {
     /// batches in-flight limit has not been reached for the tablet.
     fn flush(&mut self, common: &mut Common, force: bool) {
         trace!("{:?}: flush; force: {}", self, force);
-        if !self.batch.is_empty() &&
-           (force || self.batches_in_flight < common.config.max_batches_per_tablet) {
+        if !self.batch.is_empty()
+            && (force || self.batches_in_flight < common.config.max_batches_per_tablet)
+        {
             let batch = mem::replace(&mut self.batch, Batch::new());
             self.batch_queue.push_back(batch);
         }
@@ -483,7 +500,6 @@ impl fmt::Debug for TabletBatcher {
     }
 }
 
-
 struct Batch {
     encoder: OperationEncoder,
     operations: usize,
@@ -514,35 +530,42 @@ impl Batch {
         request.schema = Some(common.table.schema().as_pb());
         //request.propagated_timestamp = Some(self.client().latest_observed_timestamp());
         request.row_operations = Some(self.encoder.into_pb());
-        let call1 = TabletServerService::write(Arc::new(request),
-                                               Instant::now() + common.config.flush_timeout);
+        let call1 = TabletServerService::write(
+            Arc::new(request),
+            Instant::now() + common.config.flush_timeout,
+        );
         let call2 = call1.clone();
         let call3 = call1.clone();
 
         let schema = common.table.schema().clone();
         let error_sender = common.error_sender.clone();
 
-        common.batches_in_flight.push(
-            Box::new(ReplicaRpc::new(tablet,
-                        call1,
-                        Speculation::Staggered(Duration::from_millis(100)),
-                        Selection::Leader,
-                        Backoff::default())
-            .and_then(move |(_, response, _)| {
+        common.batches_in_flight.push(Box::new(
+            ReplicaRpc::new(
+                tablet,
+                call1,
+                Speculation::Staggered(Duration::from_millis(100)),
+                Selection::Leader,
+                Backoff::default(),
+            ).and_then(move |(_, response, _)| {
                 assert!(response.error.is_none());
                 let row_errors = response.per_row_errors.len();
                 if row_errors != 0 {
                     debug!("row_errors: {:?}", response.per_row_errors);
                     let row_operations = call2.request.row_operations.as_ref().unwrap();
-                    let mut decoder = OperationDecoder::new(&schema,
-                                                            row_operations.rows(),
-                                                            row_operations.indirect_data());
+                    let mut decoder = OperationDecoder::new(
+                        &schema,
+                        row_operations.rows(),
+                        row_operations.indirect_data(),
+                    );
                     let mut decoder_idx = 0;
 
                     for error in response.per_row_errors {
                         if error.row_index < 0 || error.row_index as usize >= stats.operations {
-                            return Err(Error::Serialization(
-                                    format!("row error contains invalid index: {:?}", error)));
+                            return Err(Error::Serialization(format!(
+                                "row error contains invalid index: {:?}",
+                                error
+                            )));
                         }
                         let error_idx = error.row_index as usize;
                         if error_idx < decoder_idx {
@@ -567,13 +590,13 @@ impl Batch {
 
                 stats.row_errors = row_errors;
                 Ok(stats)
-            }).map_err(move |error| {
-                BatchError {
+            })
+                .map_err(move |error| BatchError {
                     call: call3,
                     stats,
                     error: error.into(),
-                }
-            })));
+                }),
+        ));
     }
 }
 
@@ -653,14 +676,14 @@ mod test {
 
     use std::time::{Duration, Instant};
 
+    use super::*;
+    use mini_cluster::{MiniCluster, MiniClusterConfig};
     use Client;
     use Column;
     use DataType;
     use Options;
     use SchemaBuilder;
     use TableBuilder;
-    use mini_cluster::{MiniCluster, MiniClusterConfig};
-    use super::*;
 
     use env_logger;
     use futures::future;
@@ -672,8 +695,9 @@ mod test {
         let mut cluster = MiniCluster::default();
         let mut runtime = Runtime::new().unwrap();
 
-        let mut client = runtime.block_on(Client::new(cluster.master_addrs(), Options::default()))
-                                .expect("client");
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
 
         let schema = SchemaBuilder::new()
             .add_column(Column::builder("key", DataType::Int32).set_not_null())
@@ -687,41 +711,47 @@ mod test {
         table_builder.set_num_replicas(1);
 
         // TODO: don't wait for table creation in order to test retry logic.
-        let table_id = runtime.block_on(client.create_table(table_builder)).unwrap();
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .unwrap();
 
         let table = runtime.block_on(client.open_table_by_id(table_id)).unwrap();
 
         let mut writer = table.new_writer(WriterConfig::default());
 
         // TODO: remove lazy once apply no longer polls.
-        runtime.block_on(future::lazy::<_, Result<(), ()>>(|| {
-            // Insert a bunch of values
-            for i in 0..10i32 {
-                let mut insert = table.schema().new_row();
-                insert.set("key", i).unwrap();
-                insert.set("val", i).unwrap();
-                writer.insert(insert);
-            }
+        runtime
+            .block_on(future::lazy::<_, Result<(), ()>>(|| {
+                // Insert a bunch of values
+                for i in 0..10i32 {
+                    let mut insert = table.schema().new_row();
+                    insert.set("key", i).unwrap();
+                    insert.set("val", i).unwrap();
+                    writer.insert(insert);
+                }
 
-            // Insert a duplicate value
-            {
-                let mut insert = table.schema().new_row();
-                insert.set("key", 1i32).unwrap();
-                insert.set("val", 1i32).unwrap();
-                writer.insert(insert);
-            }
+                // Insert a duplicate value
+                {
+                    let mut insert = table.schema().new_row();
+                    insert.set("key", 1i32).unwrap();
+                    insert.set("val", 1i32).unwrap();
+                    writer.insert(insert);
+                }
 
-            // Insert a null value
-            {
-                let mut insert = table.schema().new_row();
-                insert.set("key", 11i32).unwrap();
-                insert.set("val", None::<i32>).unwrap();
-                writer.insert(insert);
-            }
-            Ok(())
-        })).unwrap();
+                // Insert a null value
+                {
+                    let mut insert = table.schema().new_row();
+                    insert.set("key", 11i32).unwrap();
+                    insert.set("val", None::<i32>).unwrap();
+                    writer.insert(insert);
+                }
+                Ok(())
+            }))
+            .unwrap();
 
-        let stats = runtime.block_on(future::poll_fn(|| writer.poll_flush())).unwrap();
+        let stats = runtime
+            .block_on(future::poll_fn(|| writer.poll_flush()))
+            .unwrap();
         assert_eq!(stats.successful_batches, 4);
         assert_eq!(stats.failed_batches, 0);
         assert_eq!(stats.operations, 12);

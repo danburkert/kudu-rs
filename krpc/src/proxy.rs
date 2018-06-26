@@ -2,28 +2,21 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::time::Instant;
 
-use futures::{
-    Async,
-    AsyncSink,
-    Future,
-    Poll,
-    Sink,
-    Stream,
-};
 use futures::future;
 use futures::sync::{mpsc, oneshot};
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use itertools::Itertools;
 use prost::Message;
 use tokio;
 
+use connection::Connection;
+use connector::Connector;
 use Call;
 use Error;
 use HostPort;
 use Options;
 use Rpc;
 use RpcFuture;
-use connection::Connection;
-use connector::Connector;
 
 /// `Proxy` is a handle to a remote server which allows clients to send and receive RPCs.
 #[derive(Clone)]
@@ -32,8 +25,10 @@ pub struct Proxy {
 }
 
 impl Proxy {
-
-    pub fn new(hostports: Box<[HostPort]>, options: Options) -> impl Future<Item=Proxy, Error=Error> {
+    pub fn new(
+        hostports: Box<[HostPort]>,
+        options: Options,
+    ) -> impl Future<Item = Proxy, Error = Error> {
         future::lazy(|| Ok(Proxy::spawn(hostports, options)))
     }
 
@@ -68,9 +63,10 @@ impl Proxy {
     /// Typically users will not call this directly, but rather through a generated service trait
     /// implemented by `Proxy`.
     pub fn send<Req, Resp>(&mut self, call: Call<Req, Resp>) -> RpcFuture<Resp>
-    where Req: Message + 'static,
-          Resp: Message + Default {
-
+    where
+        Req: Message + 'static,
+        Resp: Message + Default,
+    {
         let (completer, receiver) = oneshot::channel();
         let rpc = Rpc {
             service: call.service,
@@ -186,11 +182,13 @@ impl Future for ProxyTask {
         let now = Instant::now();
 
         // NLL hack.
-        let ProxyTask { ref hostports,
-                        ref options,
-                        ref mut receiver,
-                        ref mut connection_state,
-                        ref mut buffer } = *self;
+        let ProxyTask {
+            ref hostports,
+            ref options,
+            ref mut receiver,
+            ref mut connection_state,
+            ref mut buffer,
+        } = *self;
 
         use self::ConnectionState::*;
         loop {
@@ -206,7 +204,7 @@ impl Future for ProxyTask {
                     }
 
                     Connecting(Connector::connect(hostports, options.clone()))
-                },
+                }
                 Connecting(ref mut connector) => {
                     match connector.poll() {
                         Ok(Async::Ready(connection)) => Connected(connection),
@@ -223,22 +221,20 @@ impl Future for ProxyTask {
                             Quiesced
                         }
                     }
-                },
+                }
                 Connected(ref mut conn) => {
-
                     // Send all buffered and queued RPCs. The result of the loop is ok if either
                     // the connection has no more send capacity, or there are no more messages to
                     // send.  If any message fails to send, the result of the loop is the error.
                     let send_result: Result<(), ()> = loop {
                         match conn.poll_ready(now) {
-
                             // The connection has capacity to send an RPC.
                             Ok(Async::Ready(_)) => {
-
                                 // Take an RPC from the buffer or queue.
-                                let rpc = buffer.pop_front()
-                                                .map(|rpc| Ok(Async::Ready(Some(rpc))))
-                                                .unwrap_or_else(|| receiver.poll())?;
+                                let rpc = buffer
+                                    .pop_front()
+                                    .map(|rpc| Ok(Async::Ready(Some(rpc))))
+                                    .unwrap_or_else(|| receiver.poll())?;
 
                                 match rpc {
                                     // Attempt to send the RPC.
@@ -257,7 +253,7 @@ impl Future for ProxyTask {
                                     // No messages to send.
                                     Async::NotReady => break Ok(()),
                                 }
-                            },
+                            }
 
                             // The connection has no remaining capacity.
                             Ok(Async::NotReady) => break Ok(()),
@@ -284,11 +280,12 @@ impl Future for ProxyTask {
                                         } else {
                                             Some(rpc)
                                         }
-                                    }));
+                                    }),
+                            );
                             ConnectionState::Quiesced
-                        },
+                        }
                     }
-                },
+                }
             };
             *connection_state = state;
         }
@@ -298,7 +295,10 @@ impl Future for ProxyTask {
 impl fmt::Debug for ProxyTask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut debug = f.debug_struct("ProxyTask");
-        debug.field("hostports", &format_args!("{:?}", &self.hostports.iter().format(",")));
+        debug.field(
+            "hostports",
+            &format_args!("{:?}", &self.hostports.iter().format(",")),
+        );
         match self.connection_state {
             ConnectionState::Quiesced => debug.field("state", &self.connection_state),
             ConnectionState::Connecting(_) => debug.field("state", &self.connection_state),

@@ -2,40 +2,37 @@ use std::mem;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use futures::{
-    Async,
-    Future,
-    Poll,
-};
-use krpc::{
-    Call,
-    Proxy,
-    RpcFuture,
-};
+use futures::{Async, Future, Poll};
+use krpc::{Call, Proxy, RpcFuture};
 use prost::Message;
 use tokio_timer::Delay;
 
+use backoff::Backoff;
+use pb::{master, tserver};
 use Error;
 use MasterError;
 use TabletServerError;
-use backoff::Backoff;
-use pb::{master, tserver};
 
 /// TODO: rename to KuduResponse.
-pub(crate) trait Retriable : Message + Default {
-    fn into_result(self) -> Result<Self, Error> where Self: Sized;
+pub(crate) trait Retriable: Message + Default {
+    fn into_result(self) -> Result<Self, Error>
+    where
+        Self: Sized;
 }
 
 pub(crate) trait RetryProxy {
     fn send_retriable<Req, Resp>(self, call: Call<Req, Resp>) -> RetryFuture<Req, Resp>
-    where Req: Message + 'static,
-          Resp: Retriable;
+    where
+        Req: Message + 'static,
+        Resp: Retriable;
 }
 
 impl RetryProxy for Proxy {
     fn send_retriable<Req, Resp>(mut self, call: Call<Req, Resp>) -> RetryFuture<Req, Resp>
-    where Req: Message + 'static,
-          Resp: Retriable {
+    where
+        Req: Message + 'static,
+        Resp: Retriable,
+    {
         let mut backoff = Backoff::default();
         let sleep = Delay::new(Instant::now() + backoff.next_backoff());
         let state = State::InFlight(self.send(call.clone()));
@@ -51,7 +48,10 @@ impl RetryProxy for Proxy {
     }
 }
 
-enum State<Resp> where Resp: Retriable {
+enum State<Resp>
+where
+    Resp: Retriable,
+{
     InFlight(RpcFuture<Resp>),
     Waiting,
 }
@@ -59,7 +59,11 @@ enum State<Resp> where Resp: Retriable {
 /// A future which wraps an in-flight Kudu RPC, and retries it after a backoff period if it fails
 /// with a retriable error.
 #[must_use = "futures do nothing unless polled"]
-pub(crate) struct RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
+pub(crate) struct RetryFuture<Req, Resp>
+where
+    Req: Message + 'static,
+    Resp: Retriable,
+{
     backoff: Backoff,
     proxy: Proxy,
     call: Call<Req, Resp>,
@@ -69,14 +73,20 @@ pub(crate) struct RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Ret
 }
 
 fn fail<Req, Resp>(errors: &mut Vec<Error>, call: &Call<Req, Resp>) -> Result<(), Error>
-where Req: Message + 'static,
-      Resp: Retriable {
+where
+    Req: Message + 'static,
+    Resp: Retriable,
+{
     let errors = mem::replace(errors, Vec::new());
     let description = format!("RPC failed: {:?}", call);
     Err(Error::Compound(description, errors))
 }
 
-impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static, Resp: Retriable {
+impl<Req, Resp> Future for RetryFuture<Req, Resp>
+where
+    Req: Message + 'static,
+    Resp: Retriable,
+{
     type Item = (Resp, Vec<BytesMut>);
     type Error = Error;
 
@@ -102,8 +112,8 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
                         fail(&mut self.errors, &self.call)?;
                     }
                     State::Waiting
-                },
-                State::Waiting =>  {
+                }
+                State::Waiting => {
                     try_ready!(self.sleep.poll().map_err(|_| -> Error { unreachable!() }));
                     let backoff = Instant::now() + self.backoff.next_backoff();
                     if self.call.deadline() < backoff {
@@ -115,7 +125,7 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
                     let sleep = Delay::new(backoff);
                     self.sleep = sleep;
                     State::InFlight(response)
-                },
+                }
             };
             self.state = state;
         }
@@ -125,7 +135,9 @@ impl <Req, Resp> Future for RetryFuture<Req, Resp> where Req: Message + 'static,
 macro_rules! infallible_response {
     ($type:ty) => {
         impl Retriable for $type {
-            fn into_result(self) -> Result<$type, Error> { Ok(self) }
+            fn into_result(self) -> Result<$type, Error> {
+                Ok(self)
+            }
         }
     };
 }

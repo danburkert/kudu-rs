@@ -10,18 +10,16 @@ use url;
 
 use pb::master::MasterErrorPb;
 use pb::tserver::TabletServerErrorPb;
-use pb::{AppStatusPb as StatusPb};
+use pb::AppStatusPb as StatusPb;
 
-pub use pb::master::master_error_pb::{Code as MasterErrorCode};
-pub use pb::tserver::tablet_server_error_pb::{Code as TabletServerErrorCode};
-pub use pb::app_status_pb::{ErrorCode as StatusCode};
-
+pub use pb::app_status_pb::ErrorCode as StatusCode;
+pub use pb::master::master_error_pb::Code as MasterErrorCode;
+pub use pb::tserver::tablet_server_error_pb::Code as TabletServerErrorCode;
 
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
-
     /// The operation failed because of an invalid argument.
     InvalidArgument(String),
 
@@ -79,7 +77,9 @@ impl Clone for Error {
             Error::TimedOut => Error::TimedOut,
             Error::Negotiation(ref error) => Error::Negotiation(error.clone()),
             Error::NoRangePartition => Error::NoRangePartition,
-            Error::Compound(ref description, ref errors) => Error::Compound(description.clone(), errors.clone()),
+            Error::Compound(ref description, ref errors) => {
+                Error::Compound(description.clone(), errors.clone())
+            }
             Error::RowError(ref status) => Error::RowError(status.clone()),
         }
     }
@@ -99,8 +99,9 @@ impl error::Error for Error {
 
             Error::Negotiation(ref error) => error,
 
-            | Error::Serialization(ref description)
-            | Error::Compound(ref description, _) => description,
+            | Error::Serialization(ref description) | Error::Compound(ref description, _) => {
+                description
+            }
 
             Error::RowError(_) => "row error",
         }
@@ -297,7 +298,7 @@ pub struct MasterError {
 impl MasterError {
     pub fn is_retriable(&self) -> bool {
         match self.code {
-              MasterErrorCode::CatalogManagerNotInitialized
+            MasterErrorCode::CatalogManagerNotInitialized
             | MasterErrorCode::TabletNotRunning
             | MasterErrorCode::NotTheLeader => true,
             _ => false,

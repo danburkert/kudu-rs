@@ -4,17 +4,14 @@ use std::io;
 use std::time::Instant;
 
 use fnv::FnvHashMap;
-use futures::{
-    Async,
-    Poll,
-};
+use futures::{Async, Poll};
 
+use transport::Transport;
 use Error;
 use Options;
 use Rpc;
 use RpcError;
 use RpcErrorCode;
-use transport::Transport;
 
 /// `Connection` manages in-flight RPCs and throttling on a single KRPC connection.
 ///
@@ -22,7 +19,6 @@ use transport::Transport;
 /// longer be used. Connection shutdown is indicated by a fatal error being returned from
 /// `poll_ready()`, `send()`, or `poll()`.
 pub(crate) struct Connection {
-
     /// The transport wraps the underlying TCP stream.
     transport: Transport,
 
@@ -40,7 +36,6 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-
     /// Creates a new connection from the provided transport. Negotiation must already be
     /// complete.
     pub fn new(transport: Transport, options: &Options) -> Connection {
@@ -64,7 +59,10 @@ impl Connection {
     }
 
     fn unthrottle(&mut self) {
-        self.throttle = cmp::min(self.throttle + 1, self.transport.options().max_rpcs_in_flight);
+        self.throttle = cmp::min(
+            self.throttle + 1,
+            self.transport.options().max_rpcs_in_flight,
+        );
     }
 
     fn next_call_id(&mut self) -> i32 {
@@ -78,7 +76,7 @@ impl Connection {
         match error {
             Error::Io(ref error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                 info!("{:?}: shutdown by remote", self);
-            },
+            }
             error => {
                 warn!("{:?}: error: {}", self, error);
             }
@@ -92,7 +90,9 @@ impl Connection {
         trace!("{:?}: poll_ready", self);
 
         // Make sure the transport is ready.
-        try_ready!(self.transport.poll_ready().map_err(|error| { let _ = self.log_error(error); }));
+        try_ready!(self.transport.poll_ready().map_err(|error| {
+            let _ = self.log_error(error);
+        }));
 
         // Check that the connection is not throttled.
         if self.in_flight_rpcs.len() < self.throttle as usize {
@@ -120,13 +120,14 @@ impl Connection {
         }
 
         let call_id = self.next_call_id();
-        let send = self.transport
-                       .send(call_id,
-                             rpc.service,
-                             rpc.method,
-                             rpc.required_feature_flags,
-                             &*rpc.request,
-                             Some(rpc.deadline - now));
+        let send = self.transport.send(
+            call_id,
+            rpc.service,
+            rpc.method,
+            rpc.required_feature_flags,
+            &*rpc.request,
+            Some(rpc.deadline - now),
+        );
 
         // Regardless of the result of the send, add the RPC to the in-flight queue. The upstream
         // Proxy will remove it and retry it if the send failed.
@@ -148,7 +149,7 @@ impl Connection {
                     if let Some(rpc) = self.in_flight_rpcs.remove(&call_id) {
                         rpc.complete(body, sidecars);
                     }
-                },
+                }
                 Ok(Async::Ready((call_id, Err(error)))) => {
                     if let Error::Rpc(RpcError { code, .. }) = error {
                         if code == RpcErrorCode::ErrorServerTooBusy {
@@ -169,7 +170,7 @@ impl Connection {
                     if is_fatal {
                         return Err(());
                     }
-                },
+                }
                 Ok(Async::NotReady) => return Ok(()),
                 Err(error) => return self.log_error(error),
             }
@@ -182,9 +183,14 @@ impl fmt::Debug for Connection {
         let mut debug = f.debug_struct("Connection");
         debug.field("addr", &format_args!("{}", &self.transport.addr()));
         debug.field("in-flight", &self.in_flight_rpcs.len());
-        debug.field("buf (tx/rx)", &format_args!("{}/{}",
-                                                 self.transport.send_buf_len(),
-                                                 self.transport.recv_buf_len()));
+        debug.field(
+            "buf (tx/rx)",
+            &format_args!(
+                "{}/{}",
+                self.transport.send_buf_len(),
+                self.transport.recv_buf_len()
+            ),
+        );
         debug.finish()
     }
 }

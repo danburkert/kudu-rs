@@ -1,14 +1,9 @@
 use std::cmp::Ordering;
-use std::mem;
 use std::collections::HashSet;
 use std::fmt;
+use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::{
-    Duration,
-    Instant,
-    SystemTime,
-    UNIX_EPOCH,
-};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono;
 use futures::{Async, Future, Poll, Stream};
@@ -16,11 +11,11 @@ use ifaces;
 use tokio_timer::Delay;
 use url::Url;
 
+use backoff::Backoff;
+use pb::HostPortPb;
 use DataType;
 use Error;
 use Row;
-use backoff::Backoff;
-use pb::HostPortPb;
 
 pub fn duration_to_ms(duration: &Duration) -> u64 {
     duration.as_secs() * 1000 + u64::from(duration.subsec_nanos()) / 1_000_000
@@ -31,10 +26,10 @@ pub fn time_to_us(time: SystemTime) -> i64 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => {
             (duration.as_secs() * 1_000_000 + u64::from(duration.subsec_nanos()) / 1000) as i64
-        },
+        }
         Err(error) => {
             let duration = error.duration();
-            (- ((duration.as_secs() * 1_000_000 + u64::from(duration.subsec_nanos()) / 1000) as i64))
+            (-((duration.as_secs() * 1_000_000 + u64::from(duration.subsec_nanos()) / 1000) as i64))
         }
     }
 }
@@ -52,7 +47,10 @@ pub fn us_to_time(us: i64) -> SystemTime {
     }
 }
 
-pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result where T: fmt::LowerHex {
+pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result
+where
+    T: fmt::LowerHex,
+{
     write!(f, "0x")?;
     for b in bytes {
         write!(f, "{:02x}", b)?;
@@ -62,11 +60,11 @@ pub fn fmt_hex<T>(f: &mut fmt::Formatter, bytes: &[T]) -> fmt::Result where T: f
 
 fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
     let datetime = if timestamp < UNIX_EPOCH {
-        chrono::NaiveDateTime::from_timestamp(0, 0) -
-            chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
+        chrono::NaiveDateTime::from_timestamp(0, 0)
+            - chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
     } else {
-        chrono::NaiveDateTime::from_timestamp(0, 0) +
-            chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
+        chrono::NaiveDateTime::from_timestamp(0, 0)
+            + chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
     };
 
     write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
@@ -75,7 +73,7 @@ fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
 pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
     debug_assert!(row.is_set(idx).unwrap());
     if row.is_null(idx).unwrap() {
-        return write!(f, "NULL")
+        return write!(f, "NULL");
     }
 
     match row.schema().columns()[idx].data_type() {
@@ -99,22 +97,23 @@ pub fn dummy_addr() -> SocketAddr {
 /// Returns a stream which yields elements according to the backoff policy.
 pub fn backoff_stream(mut backoff: Backoff) -> BackoffStream {
     let sleep = Delay::new(Instant::now() + backoff.next_backoff());
-    BackoffStream {
-        backoff,
-        sleep,
-    }
+    BackoffStream { backoff, sleep }
 }
 /// Stream which yields elements according to a backoff policy.
 #[must_use = "streams do nothing unless polled"]
 pub struct BackoffStream {
     backoff: Backoff,
-    sleep: Delay
+    sleep: Delay,
 }
 impl Stream for BackoffStream {
     type Item = ();
     type Error = ();
     fn poll(&mut self) -> Poll<Option<()>, ()> {
-        try_ready!(self.sleep.poll().map_err(|error| panic!("timer failed: {}", error)));
+        try_ready!(
+            self.sleep
+                .poll()
+                .map_err(|error| panic!("timer failed: {}", error))
+        );
         let backoff = self.backoff.next_backoff();
         self.sleep = Delay::new(Instant::now() + backoff);
         Ok(Async::Ready(Some(())))
@@ -122,8 +121,9 @@ impl Stream for BackoffStream {
 }
 
 pub fn retry_with_backoff<R, F>(mut backoff: Backoff, mut retry: R) -> RetryWithBackoff<R, F>
-where R: FnMut(Instant, RetryCause<F::Error>) -> F,
-      F: Future,
+where
+    R: FnMut(Instant, RetryCause<F::Error>) -> F,
+    F: Future,
 {
     let duration = backoff.next_backoff();
     let deadline = Instant::now() + duration;
@@ -143,12 +143,18 @@ pub enum RetryCause<E> {
     Err(E),
 }
 
-enum Try<F> where F: Future {
+enum Try<F>
+where
+    F: Future,
+{
     Future(F),
     Err(F::Error),
     None,
 }
-impl <F> Try<F> where F: Future {
+impl<F> Try<F>
+where
+    F: Future,
+{
     fn take(&mut self) -> Result<F, F::Error> {
         match mem::replace(self, Try::None) {
             Try::Future(f) => Ok(f),
@@ -160,8 +166,9 @@ impl <F> Try<F> where F: Future {
 
 #[must_use = "futures do nothing unless polled"]
 pub struct RetryWithBackoff<R, F>
-where R: FnMut(Instant, RetryCause<F::Error>) -> F,
-      F: Future,
+where
+    R: FnMut(Instant, RetryCause<F::Error>) -> F,
+    F: Future,
 {
     backoff: Backoff,
     sleep: Delay,
@@ -169,9 +176,10 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
     try: Try<F>,
 }
 
-impl <R, F> Future for RetryWithBackoff<R, F>
-where R: FnMut(Instant, RetryCause<F::Error>) -> F,
-      F: Future,
+impl<R, F> Future for RetryWithBackoff<R, F>
+where
+    R: FnMut(Instant, RetryCause<F::Error>) -> F,
+    F: Future,
 {
     type Item = F::Item;
     type Error = ();
@@ -203,7 +211,7 @@ where R: FnMut(Instant, RetryCause<F::Error>) -> F,
                     let instant = Instant::now() + self.backoff.next_backoff();
                     self.try = Try::Future((self.retry)(instant, cause));
                     self.sleep = Delay::new(instant);
-                },
+                }
                 Async::NotReady => return Ok(Async::NotReady),
             }
         }
@@ -220,7 +228,7 @@ lazy_static! {
                         addrs.insert(addr.ip());
                     }
                 }
-            },
+            }
             Err(error) => warn!("failed to resolve local interface addresses: {}", error),
         }
         addrs
@@ -234,23 +242,32 @@ pub fn is_local_addr(addr: &IpAddr) -> bool {
 
 pub fn cmp_socket_addrs(a: &SocketAddr, b: &SocketAddr) -> Ordering {
     match (a, b) {
-        (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
-        (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => (a.ip(), a.port()).cmp(&(b.ip(), b.port())),
+        (&SocketAddr::V4(ref a), &SocketAddr::V4(ref b)) => {
+            (a.ip(), a.port()).cmp(&(b.ip(), b.port()))
+        }
+        (&SocketAddr::V6(ref a), &SocketAddr::V6(ref b)) => {
+            (a.ip(), a.port()).cmp(&(b.ip(), b.port()))
+        }
         (&SocketAddr::V4(_), &SocketAddr::V6(_)) => Ordering::Less,
         (&SocketAddr::V6(_), &SocketAddr::V4(_)) => Ordering::Greater,
     }
 }
 
-pub(crate) fn urls_from_pb(hostports: &[HostPortPb], https_enabled: bool) -> Result<Vec<Url>, Error> {
-    hostports.iter()
-             .map(|hostport| {
-                Url::parse(&format!("{}://{}:{}",
-                           if https_enabled { "https" } else { "http" },
-                           hostport.host,
-                           hostport.port))
-                    .map_err(From::from)
-             })
-             .collect()
+pub(crate) fn urls_from_pb(
+    hostports: &[HostPortPb],
+    https_enabled: bool,
+) -> Result<Vec<Url>, Error> {
+    hostports
+        .iter()
+        .map(|hostport| {
+            Url::parse(&format!(
+                "{}://{}:{}",
+                if https_enabled { "https" } else { "http" },
+                hostport.host,
+                hostport.port
+            )).map_err(From::from)
+        })
+        .collect()
 }
 
 pub struct ContextFuture<F, C> {
@@ -258,7 +275,7 @@ pub struct ContextFuture<F, C> {
     context: Option<C>,
 }
 
-impl <F, C> ContextFuture<F, C> {
+impl<F, C> ContextFuture<F, C> {
     pub fn new(future: F, context: C) -> ContextFuture<F, C> {
         ContextFuture {
             future,
@@ -267,13 +284,19 @@ impl <F, C> ContextFuture<F, C> {
     }
 }
 
-impl <F, C> Future for ContextFuture<F, C> where F: Future {
+impl<F, C> Future for ContextFuture<F, C>
+where
+    F: Future,
+{
     type Item = (F::Item, C);
     type Error = (F::Error, C);
 
     fn poll(&mut self) -> Poll<(F::Item, C), (F::Error, C)> {
         match self.future.poll() {
-            Ok(Async::Ready(item)) => Ok(Async::Ready((item, self.context.take().expect("future already complete")))),
+            Ok(Async::Ready(item)) => Ok(Async::Ready((
+                item,
+                self.context.take().expect("future already complete"),
+            ))),
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(error) => Err((error, self.context.take().expect("future already complete"))),
         }
@@ -283,14 +306,14 @@ impl <F, C> Future for ContextFuture<F, C> where F: Future {
 #[cfg(test)]
 mod tests {
 
-    use std::time::{Duration, UNIX_EPOCH};
     use std::net::ToSocketAddrs;
+    use std::time::{Duration, UNIX_EPOCH};
 
     use env_logger;
     use quickcheck::{quickcheck, TestResult};
 
-    use schema;
     use super::*;
+    use schema;
 
     #[test]
     fn timestamp_conversion() {
@@ -309,21 +332,37 @@ mod tests {
         let schema = schema::tests::all_types_schema();
         let mut row = schema.new_row();
 
-        row.set("timestamp", UNIX_EPOCH - Duration::from_millis(1234)).unwrap();
-        assert_eq!("{timestamp: 1969-12-31T23:59:58.766000Z}",
-                   &format!("{:?}", row));
+        row.set("timestamp", UNIX_EPOCH - Duration::from_millis(1234))
+            .unwrap();
+        assert_eq!(
+            "{timestamp: 1969-12-31T23:59:58.766000Z}",
+            &format!("{:?}", row)
+        );
 
-        row.set("timestamp", UNIX_EPOCH + Duration::from_millis(1234)).unwrap();
-        assert_eq!("{timestamp: 1970-01-01T00:00:01.234000Z}",
-                   &format!("{:?}", row));
+        row.set("timestamp", UNIX_EPOCH + Duration::from_millis(1234))
+            .unwrap();
+        assert_eq!(
+            "{timestamp: 1970-01-01T00:00:01.234000Z}",
+            &format!("{:?}", row)
+        );
     }
 
     #[test]
     fn test_is_local_addr() {
         let _ = env_logger::try_init();
-        let addr = "127.0.1.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
+        let addr = "127.0.1.1:0"
+            .to_socket_addrs()
+            .unwrap()
+            .next()
+            .unwrap()
+            .ip();
         assert!(is_local_addr(&addr));
-        let addr = "127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap().ip();
+        let addr = "127.0.0.1:0"
+            .to_socket_addrs()
+            .unwrap()
+            .next()
+            .unwrap()
+            .ip();
         assert!(is_local_addr(&addr));
     }
 }

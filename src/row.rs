@@ -5,18 +5,15 @@ use std::mem;
 use std::slice;
 use std::str;
 
-#[cfg(any(feature="quickcheck", test))] use quickcheck;
+#[cfg(any(feature = "quickcheck", test))]
+use quickcheck;
 
+use util;
+use value::{read_var_len_value, write_var_len_value, Value};
 use ColumnSelector;
 use Error;
 use Result;
 use Schema;
-use util;
-use value::{
-    Value,
-    read_var_len_value,
-    write_var_len_value,
-};
 
 /// Returns the size of the data array for a partial row with the given schema.
 fn partial_row_data_len(schema: &Schema) -> usize {
@@ -26,7 +23,6 @@ fn partial_row_data_len(schema: &Schema) -> usize {
 }
 
 pub struct Row<'data> {
-
     /// A pointer to the row data array, plus a 1 bit payload indicating whether this is a mutable
     /// partial row, or a constant contiguous row.
     ///
@@ -44,8 +40,7 @@ pub struct Row<'data> {
 }
 
 // TODO: unset
-impl <'data> Row<'data> {
-
+impl<'data> Row<'data> {
     /// Creates an empty mutable partial row.
     pub(crate) fn partial(schema: Schema) -> Row<'data> {
         let data_len = partial_row_data_len(&schema);
@@ -78,14 +73,13 @@ impl <'data> Row<'data> {
     ///
     /// Returns an error if the column does not exist, or the value's type is wrong.
     pub fn set<C, V>(&mut self, column: C, value: V) -> Result<&mut Self>
-    where C: ColumnSelector,
-          V: Value<'data>
+    where
+        C: ColumnSelector,
+        V: Value<'data>,
     {
         let idx = column.column_index(&self.schema)?;
         self.check_column_for_write::<V>(idx)?;
-        unsafe {
-            Ok(self.set_unchecked(idx, value))
-        }
+        unsafe { Ok(self.set_unchecked(idx, value)) }
     }
 
     /// Sets the value of the column at index `idx` without checking the column's type.
@@ -95,7 +89,8 @@ impl <'data> Row<'data> {
     /// This method may invoke undefined behavior if the column does not exist, or the value type
     /// does not match the column type.
     pub unsafe fn set_unchecked<V>(&mut self, idx: usize, value: V) -> &mut Self
-    where V: Value<'data>
+    where
+        V: Value<'data>,
     {
         if self.is_contiguous_row() {
             self.into_partial_row();
@@ -122,7 +117,8 @@ impl <'data> Row<'data> {
     ///
     /// Returns an error if the column does not exist, or the column is not nullable.
     pub fn set_null<C>(&mut self, column: C) -> Result<&mut Row<'data>>
-    where C: ColumnSelector
+    where
+        C: ColumnSelector,
     {
         let idx = column.column_index(&self.schema)?;
         self.check_column_for_nullability(idx)?;
@@ -145,22 +141,29 @@ impl <'data> Row<'data> {
     /// Returns an error if the column does not exist, the column is unset, the column type
     /// does not match the value type.
     pub fn get<'self_, C, V>(&'self_ self, column: C) -> Result<V>
-    where C: ColumnSelector,
-          V: Value<'self_>
+    where
+        C: ColumnSelector,
+        V: Value<'self_>,
     {
         let idx = column.column_index(&self.schema)?;
         self.check_column_for_read::<V>(idx)?;
 
         unsafe {
             if !self.is_set_unchecked(idx) {
-                Err(Error::InvalidArgument(format!("column {} ({}) is not set",
-                                                   self.schema.columns()[idx].name(), idx)))
+                Err(Error::InvalidArgument(format!(
+                    "column {} ({}) is not set",
+                    self.schema.columns()[idx].name(),
+                    idx
+                )))
             } else if self.is_null_unchecked(idx) {
                 if let Some(null) = V::null() {
                     Ok(null)
                 } else {
-                    Err(Error::InvalidArgument(format!("column {} ({}) is null",
-                                                    self.schema.columns()[idx].name(), idx)))
+                    Err(Error::InvalidArgument(format!(
+                        "column {} ({}) is null",
+                        self.schema.columns()[idx].name(),
+                        idx
+                    )))
                 }
             } else {
                 Ok(V::read(self.data().offset(self.schema.column_offset(idx)))?)
@@ -180,7 +183,10 @@ impl <'data> Row<'data> {
     /// Returns `true` if the column is null.
     ///
     /// Returns an error if the column does not exist.
-    pub fn is_null<C>(&self, column: C) -> Result<bool> where C: ColumnSelector {
+    pub fn is_null<C>(&self, column: C) -> Result<bool>
+    where
+        C: ColumnSelector,
+    {
         let idx = column.column_index(&self.schema)?;
         Ok(unsafe { self.is_null_unchecked(idx) })
     }
@@ -196,7 +202,10 @@ impl <'data> Row<'data> {
     /// Returns `true` if the column is set.
     ///
     /// Returns an error if the column does not exist.
-    pub fn is_set<C>(&self, column: C) -> Result<bool> where C: ColumnSelector {
+    pub fn is_set<C>(&self, column: C) -> Result<bool>
+    where
+        C: ColumnSelector,
+    {
         let idx = column.column_index(&self.schema)?;
         Ok(unsafe { self.is_set_unchecked(idx) })
     }
@@ -216,8 +225,10 @@ impl <'data> Row<'data> {
     pub(crate) fn is_null_bitmap(&self) -> &[u8] {
         if self.schema.has_nullable_columns() {
             unsafe {
-                slice::from_raw_parts(self.data().offset(self.schema.row_len() as isize),
-                                      self.schema.bitmap_len())
+                slice::from_raw_parts(
+                    self.data().offset(self.schema.row_len() as isize),
+                    self.schema.bitmap_len(),
+                )
             }
         } else {
             &[]
@@ -231,7 +242,8 @@ impl <'data> Row<'data> {
     fn is_set_offset(&self) -> isize {
         debug_assert!(self.is_partial_row());
         (self.schema.row_len()
-            + self.schema.has_nullable_columns() as usize * self.schema.bitmap_len()) as isize
+            + self.schema.has_nullable_columns() as usize * self.schema.bitmap_len())
+            as isize
     }
 
     #[inline]
@@ -239,7 +251,12 @@ impl <'data> Row<'data> {
         let len = self.schema.bitmap_len();
         if self.is_partial_row() {
             let offset = self.schema.row_len() + self.schema.has_nullable_columns() as usize * len;
-            unsafe { Some(slice::from_raw_parts(self.data().offset(offset as isize), len)) }
+            unsafe {
+                Some(slice::from_raw_parts(
+                    self.data().offset(offset as isize),
+                    len,
+                ))
+            }
         } else {
             None
         }
@@ -283,7 +300,8 @@ impl <'data> Row<'data> {
             for (idx, column) in self.schema.columns().iter().enumerate() {
                 if !column.data_type().is_var_len()
                     || !self.is_set_unchecked(idx)
-                    || self.is_null_unchecked(idx) {
+                    || self.is_null_unchecked(idx)
+                {
                     continue;
                 }
 
@@ -316,7 +334,8 @@ impl <'data> Row<'data> {
         // Check that the value is set, and that it's variable length.
         if !self.schema.columns()[idx].data_type().is_var_len()
             || !self.is_set_unchecked(idx)
-            || self.is_null_unchecked(idx) {
+            || self.is_null_unchecked(idx)
+        {
             return;
         }
 
@@ -331,17 +350,24 @@ impl <'data> Row<'data> {
     }
 
     /// Checks that the column with the specified index has the expected type.
-    fn check_column_for_write<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
+    fn check_column_for_write<V>(&self, idx: usize) -> Result<()>
+    where
+        V: Value<'data>,
+    {
         self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !V::can_write_to(column.data_type()) {
-            return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
-                                                      V::DATA_TYPE,
-                                                      column)));
+            return Err(Error::InvalidArgument(format!(
+                "type {:?} is invalid for column {:?}",
+                V::DATA_TYPE,
+                column
+            )));
         }
         if V::is_nullable() && !column.is_nullable() {
-            return Err(Error::InvalidArgument(format!("nullable type is invalid for column {:?}",
-                                                      column)));
+            return Err(Error::InvalidArgument(format!(
+                "nullable type is invalid for column {:?}",
+                column
+            )));
         }
         Ok(())
     }
@@ -351,30 +377,43 @@ impl <'data> Row<'data> {
         self.schema.check_index(idx)?;
         let column = &self.schema.columns()[idx];
         if !column.is_nullable() {
-            return Err(Error::InvalidArgument(format!("column {:?} is not nullable", column)));
+            return Err(Error::InvalidArgument(format!(
+                "column {:?} is not nullable",
+                column
+            )));
         }
         Ok(())
     }
 
     /// Checks that the column with the specified index has the expected type.
-    fn check_column_for_read<V>(&self, idx: usize) -> Result<()> where V: Value<'data> {
+    fn check_column_for_read<V>(&self, idx: usize) -> Result<()>
+    where
+        V: Value<'data>,
+    {
         let column = &self.schema.columns()[idx];
         if !V::can_read_from(column.data_type()) {
-            return Err(Error::InvalidArgument(format!("type {:?} is invalid for column {:?}",
-                                                      V::DATA_TYPE,
-                                                      column)));
+            return Err(Error::InvalidArgument(format!(
+                "type {:?} is invalid for column {:?}",
+                V::DATA_TYPE,
+                column
+            )));
         }
         if V::is_nullable() && !column.is_nullable() {
-            return Err(Error::InvalidArgument(format!("nullable type is invalid for column {:?}",
-                                                      column)));
+            return Err(Error::InvalidArgument(format!(
+                "nullable type is invalid for column {:?}",
+                column
+            )));
         }
         Ok(())
     }
 
-    #[cfg(any(feature="quickcheck", test))]
-    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static> where G: quickcheck::Gen {
-        use DataType;
+    #[cfg(any(feature = "quickcheck", test))]
+    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static>
+    where
+        G: quickcheck::Gen,
+    {
         use quickcheck::Arbitrary;
+        use DataType;
         let mut row = schema.new_row();
         for (idx, column) in schema.columns().iter().enumerate() {
             // TODO: set null values.
@@ -398,7 +437,7 @@ impl <'data> Row<'data> {
     }
 }
 
-impl <'data> Clone for Row<'data> {
+impl<'data> Clone for Row<'data> {
     fn clone(&self) -> Row<'data> {
         if self.is_contiguous_row() {
             // A cloned contiguous row can reference the same const data.
@@ -423,7 +462,8 @@ impl <'data> Clone for Row<'data> {
                 for (idx, column) in self.schema.columns().iter().enumerate() {
                     if !column.data_type().is_var_len()
                         || !self.is_set_unchecked(idx)
-                        || self.is_null_unchecked(idx) {
+                        || self.is_null_unchecked(idx)
+                    {
                         continue;
                     }
 
@@ -449,17 +489,17 @@ impl <'data> Clone for Row<'data> {
     }
 }
 
-impl <'data> fmt::Debug for Row<'data> {
+impl<'data> fmt::Debug for Row<'data> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         struct ColumnWrapper<'a>(&'a str);
-        impl <'a> fmt::Debug for ColumnWrapper<'a> {
+        impl<'a> fmt::Debug for ColumnWrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str(self.0)
             }
         }
 
         struct CellWrapper<'a>(&'a Row<'a>, usize);
-        impl <'a> fmt::Debug for CellWrapper<'a> {
+        impl<'a> fmt::Debug for CellWrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 util::fmt_cell(f, self.0, self.1)
             }
@@ -476,7 +516,7 @@ impl <'data> fmt::Debug for Row<'data> {
     }
 }
 
-impl <'data> cmp::PartialEq for Row<'data> {
+impl<'data> cmp::PartialEq for Row<'data> {
     fn eq(&self, other: &Row) -> bool {
         if self.schema != other.schema {
             return false;
@@ -495,7 +535,11 @@ impl <'data> cmp::PartialEq for Row<'data> {
             if self.is_partial_row() {
                 assert!(other.is_partial_row(), "TODO");
                 let is_set_offset = self.is_set_offset();
-                if !bitmap_eq(self.data().offset(is_set_offset), other.data().offset(is_set_offset), num_columns) {
+                if !bitmap_eq(
+                    self.data().offset(is_set_offset),
+                    other.data().offset(is_set_offset),
+                    num_columns,
+                ) {
                     return false;
                 }
             }
@@ -503,12 +547,22 @@ impl <'data> cmp::PartialEq for Row<'data> {
             // Check the is-null bitmap (if there are nullable columns).
             if self.schema.has_nullable_columns() {
                 let offset = self.is_null_offset();
-                if !bitmap_eq(self.data().offset(offset), other.data().offset(offset), num_columns) {
+                if !bitmap_eq(
+                    self.data().offset(offset),
+                    other.data().offset(offset),
+                    num_columns,
+                ) {
                     return false;
                 }
             }
 
-            for (idx, (column, &offset)) in self.schema.columns().iter().zip(self.schema.column_offsets()).enumerate() {
+            for (idx, (column, &offset)) in self
+                .schema
+                .columns()
+                .iter()
+                .zip(self.schema.column_offsets())
+                .enumerate()
+            {
                 // Check if the column is unset or null.
                 if !self.is_set_unchecked(idx) || self.is_null_unchecked(idx) {
                     continue;
@@ -525,7 +579,8 @@ impl <'data> cmp::PartialEq for Row<'data> {
                 }
 
                 if column.data_type().is_var_len()
-                    && <&[u8] as Value>::read(a).unwrap() == <&[u8] as Value>::read(b).unwrap() {
+                    && <&[u8] as Value>::read(a).unwrap() == <&[u8] as Value>::read(b).unwrap()
+                {
                     continue;
                 }
 
@@ -536,11 +591,11 @@ impl <'data> cmp::PartialEq for Row<'data> {
     }
 }
 
-impl <'data> cmp::Eq for Row<'data>  {}
+impl<'data> cmp::Eq for Row<'data> {}
 
 /// `Row`s can be compared based on primary key column values. If the schemas do not match or if
 /// some of the primary key columns are not set, the ordering is not defined.
-impl <'data> cmp::PartialOrd for Row<'data> {
+impl<'data> cmp::PartialOrd for Row<'data> {
     fn partial_cmp(&self, _other: &Row) -> Option<cmp::Ordering> {
         unimplemented!()
         /*
@@ -566,7 +621,7 @@ impl <'data> cmp::PartialOrd for Row<'data> {
     }
 }
 
-impl <'data> Drop for Row<'data> {
+impl<'data> Drop for Row<'data> {
     fn drop(&mut self) {
         if self.is_partial_row() {
             unsafe {
@@ -611,10 +666,10 @@ unsafe fn bitmap_eq(a: *const u8, b: *const u8, bits: usize) -> bool {
 #[cfg(test)]
 mod tests {
 
-    use quickcheck::{quickcheck, TestResult, StdGen};
+    use super::*;
+    use quickcheck::{quickcheck, StdGen, TestResult};
     use rand;
     use schema;
-    use super::*;
 
     #[test]
     fn test_get_set() {
@@ -641,15 +696,33 @@ mod tests {
         // Set/get 'nullable_string'.
         row.set("nullable_string", "bar".to_string()).unwrap();
         assert_eq!("bar", row.get::<_, &str>("nullable_string").unwrap());
-        assert_eq!("bar".to_string(), row.get::<_, String>("nullable_string").unwrap());
-        assert_eq!(Some("bar"), row.get::<_, Option<&str>>("nullable_string").unwrap());
-        assert_eq!(Some("bar".to_string()), row.get::<_, Option<String>>("nullable_string").unwrap());
+        assert_eq!(
+            "bar".to_string(),
+            row.get::<_, String>("nullable_string").unwrap()
+        );
+        assert_eq!(
+            Some("bar"),
+            row.get::<_, Option<&str>>("nullable_string").unwrap()
+        );
+        assert_eq!(
+            Some("bar".to_string()),
+            row.get::<_, Option<String>>("nullable_string").unwrap()
+        );
 
         row.set("nullable_binary", &b""[..]).unwrap();
         assert_eq!(&b""[..], row.get::<_, &[u8]>("nullable_binary").unwrap());
-        assert_eq!(Vec::<u8>::new(), row.get::<_, Vec<u8>>("nullable_binary").unwrap());
-        assert_eq!(Some(&b""[..]), row.get::<_, Option<&[u8]>>("nullable_binary").unwrap());
-        assert_eq!(Some(Vec::new()), row.get::<_, Option<Vec<u8>>>("nullable_binary").unwrap());
+        assert_eq!(
+            Vec::<u8>::new(),
+            row.get::<_, Vec<u8>>("nullable_binary").unwrap()
+        );
+        assert_eq!(
+            Some(&b""[..]),
+            row.get::<_, Option<&[u8]>>("nullable_binary").unwrap()
+        );
+        assert_eq!(
+            Some(Vec::new()),
+            row.get::<_, Option<Vec<u8>>>("nullable_binary").unwrap()
+        );
     }
 
     #[test]
@@ -744,20 +817,23 @@ mod tests {
         row.set("bool", true).unwrap();
         row.set("i64", -123i64).unwrap();
         row.set("timestamp", 1514768523456789i64).unwrap();
-        row.set("binary", &[0x01, 0x02, 0x42, 0x88, 0xf7][..]).unwrap();
+        row.set("binary", &[0x01, 0x02, 0x42, 0x88, 0xf7][..])
+            .unwrap();
         row.set("string", "foo").unwrap();
         row.set("nullable_i32", None::<i32>).unwrap();
         row.set_null("nullable_string").unwrap();
 
-        assert_eq!("{key: 42, \
-                     bool: true, \
-                     i64: -123, \
-                     timestamp: 2018-01-01T01:02:03.456789Z, \
-                     binary: 0x01024288f7, \
-                     string: \"foo\", \
-                     nullable_i32: NULL, \
-                     nullable_string: NULL}",
-                   format!("{:?}", row));
+        assert_eq!(
+            "{key: 42, \
+             bool: true, \
+             i64: -123, \
+             timestamp: 2018-01-01T01:02:03.456789Z, \
+             binary: 0x01024288f7, \
+             string: \"foo\", \
+             nullable_i32: NULL, \
+             nullable_string: NULL}",
+            format!("{:?}", row)
+        );
     }
 
     #[test]
@@ -777,11 +853,12 @@ mod tests {
         row.set(10, "foo_owned".to_owned()).unwrap();
         assert_eq!("foo_owned", row.get::<_, &str>(10).unwrap());
 
-        assert_eq!("{key: 12, string: \"foo_owned\"}",
-                   &format!("{:?}", row));
+        assert_eq!("{key: 12, string: \"foo_owned\"}", &format!("{:?}", row));
 
-        assert_eq!("{key: 12, string: \"foo_owned\"}",
-                   &format!("{:?}", row.clone()));
+        assert_eq!(
+            "{key: 12, string: \"foo_owned\"}",
+            &format!("{:?}", row.clone())
+        );
 
         // Test another borrowed string to ensure the owned string is deallocated.
         row.set(10, "foo_borrowed2").unwrap();
@@ -789,10 +866,14 @@ mod tests {
 
         row.set_null("nullable_i32").unwrap();
 
-        assert_eq!("{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
-                   &format!("{:?}", row));
-        assert_eq!("{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
-                   &format!("{:?}", row.clone()));
+        assert_eq!(
+            "{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
+            &format!("{:?}", row)
+        );
+        assert_eq!(
+            "{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
+            &format!("{:?}", row.clone())
+        );
     }
 
     #[test]
