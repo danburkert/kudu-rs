@@ -109,7 +109,7 @@ impl Scan {
         }
     }
 
-    fn projected_schema(&self) -> &Schema {
+    pub fn projected_schema(&self) -> &Schema {
         &self.projected_schema
     }
 }
