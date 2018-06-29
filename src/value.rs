@@ -2,62 +2,111 @@ use std::mem;
 use std::slice;
 use std::str;
 use std::time::SystemTime;
+use std::{f32, f64};
+
+use ieee754::Ieee754;
 
 use util::{time_to_us, us_to_time};
 use DataType;
+use PhysicalType;
 use Result;
 
 /// Marker trait for types which can be stored in a Kudu column.
+///
+/// Idiomatic Rust types which correspond to the Kudu column types implement `Value`, for example
+/// Kudu's 8 byte integer type maps to a Rust `i64`, Kudu's string type maps to `&str` and
+/// `String`, and Kudu's timestamp type maps to [[SystemTime]].
+///
+/// Inline vs Cell format.
 pub trait Value<'data>: Sized {
     /// The Kudu column type corresponding to the value type.
     const DATA_TYPE: DataType;
+    const PHYSICAL_TYPE: PhysicalType;
 
     /// Returns `true` if the value type can be read from a column of the provided data type.
-    #[doc(hidden)]
+    #[inline]
     fn can_read_from(data_type: DataType) -> bool {
-        data_type == Self::DATA_TYPE
+        Self::PHYSICAL_TYPE == data_type.physical_type()
     }
 
     /// Returns `true` if the value type can be written to a column of the provided data type.
-    #[doc(hidden)]
+    #[inline]
     fn can_write_to(data_type: DataType) -> bool {
-        data_type == Self::DATA_TYPE
+        Self::PHYSICAL_TYPE == data_type.physical_type()
     }
 
     /// Returns `true` if the value type is nullable.
-    #[doc(hidden)]
+    #[inline]
     fn is_nullable() -> bool {
         false
     }
 
     /// Returns `true` if the value is NULL.
-    #[doc(hidden)]
+    #[inline]
     fn is_null(&self) -> bool {
         false
     }
 
-    /// Reads an instance of the value type from the row data array.
-    #[doc(hidden)]
-    unsafe fn read(data: *const u8) -> Result<Self>;
-
-    /// Writes the value to the row data array.
-    #[doc(hidden)]
-    unsafe fn write(self, *mut u8);
+    /// Returns `true` if the value can be compared with other values of the same type according to
+    /// the Kudu value rules.
+    #[inline]
+    fn is_comparable(&self) -> bool {
+        !self.is_null()
+    }
 
     /// Creates a null value, or `None` if the value type is not nullable.
-    #[doc(hidden)]
+    #[inline]
     fn null() -> Option<Self> {
         None
     }
+
+    /// Encodes the value to a buffer.
+    fn encode(self) -> Vec<u8> {
+        let len = mem::size_of::<Self>();
+        let mut buf = Vec::with_capacity(len);
+        unsafe {
+            buf.set_len(len);
+            self.write_cell(buf.as_mut_ptr());
+        }
+        buf
+    }
+
+    /// Encodes the incremented value to a buffer.
+    fn encode_next(self) -> Option<Vec<u8>>;
+
+    /// Decodes an instance of the value from a buffer.
+    ///
+    /// # Unsafety
+    ///
+    /// The data must have been encoded from a value of the same type with [Value::encode] or
+    /// [Value::encode_next].
+    unsafe fn decode(data: &'data [u8]) -> Self {
+        debug_assert_eq!(data.len(), mem::size_of::<Self>());
+        Self::read_cell(data.as_ptr()).unwrap()
+    }
+
+    /// Reads an instance of the value type from a raw row data array.
+    unsafe fn read_cell(data: *const u8) -> Result<Self>;
+
+    /// Writes the value to a raw row data array.
+    unsafe fn write_cell(self, *mut u8);
 }
 
 impl<'data> Value<'data> for bool {
     const DATA_TYPE: DataType = DataType::Bool;
-    unsafe fn read(data: *const u8) -> Result<bool> {
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Bool;
+    unsafe fn read_cell(data: *const u8) -> Result<bool> {
         Ok(*data != 0)
     }
-    unsafe fn write(self, data: *mut u8) {
-        *data = if self { 1 } else { 0 };
+    unsafe fn write_cell(self, data: *mut u8) {
+        *data = self as u8;
+    }
+    fn encode_next(self) -> Option<Vec<u8>> {
+        if self {
+            None
+        } else {
+            Some(true.encode())
+        }
     }
 }
 
@@ -65,13 +114,17 @@ macro_rules! int_value {
     ($ty:ty, $data_type:ident) => {
         impl<'data> Value<'data> for $ty {
             const DATA_TYPE: DataType = DataType::$data_type;
+            const PHYSICAL_TYPE: PhysicalType = PhysicalType::$data_type;
             #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-            unsafe fn read(data: *const u8) -> Result<$ty> {
+            unsafe fn read_cell(data: *const u8) -> Result<$ty> {
                 Ok((data as *const $ty).read_unaligned().to_le())
             }
             #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-            unsafe fn write(self, data: *mut u8) {
+            unsafe fn write_cell(self, data: *mut u8) {
                 (data as *mut $ty).write_unaligned(self.to_le());
+            }
+            fn encode_next(self) -> Option<Vec<u8>> {
+                self.checked_add(1).map(Self::encode)
             }
         }
     };
@@ -79,35 +132,32 @@ macro_rules! int_value {
 int_value!(i8, Int8);
 int_value!(i16, Int16);
 int_value!(i32, Int32);
-
-impl<'data> Value<'data> for i64 {
-    const DATA_TYPE: DataType = DataType::Int64;
-    fn can_write_to(data_type: DataType) -> bool {
-        data_type == DataType::Timestamp || data_type == DataType::Int64
-    }
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-    unsafe fn read(data: *const u8) -> Result<i64> {
-        Ok((data as *const i64).read_unaligned().to_le())
-    }
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-    unsafe fn write(self, data: *mut u8) {
-        (data as *mut i64).write_unaligned(self.to_le());
-    }
-}
+int_value!(i64, Int64);
 
 macro_rules! float_value {
     ($ty:ident, $data_type:ident, $unsigned_ty:ty) => {
         impl<'data> Value<'data> for $ty {
             const DATA_TYPE: DataType = DataType::$data_type;
+            const PHYSICAL_TYPE: PhysicalType = PhysicalType::$data_type;
+            fn is_comparable(&self) -> bool {
+                !self.is_nan()
+            }
             #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-            unsafe fn read(data: *const u8) -> Result<$ty> {
+            unsafe fn read_cell(data: *const u8) -> Result<$ty> {
                 Ok($ty::from_bits(
                     (data as *const $unsigned_ty).read_unaligned().to_le(),
                 ))
             }
             #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-            unsafe fn write(self, data: *mut u8) {
+            unsafe fn write_cell(self, data: *mut u8) {
                 (data as *mut $unsigned_ty).write_unaligned(self.to_bits().to_le());
+            }
+            fn encode_next(self) -> Option<Vec<u8>> {
+                if self == $ty::INFINITY || self.is_nan() {
+                    None
+                } else {
+                    Some(self.next().encode())
+                }
             }
         }
     };
@@ -117,56 +167,65 @@ float_value!(f64, Double, u64);
 
 impl<'data> Value<'data> for SystemTime {
     const DATA_TYPE: DataType = DataType::Timestamp;
-    fn can_read_from(data_type: DataType) -> bool {
-        data_type == DataType::Timestamp || data_type == DataType::Int64
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int64;
+    unsafe fn read_cell(data: *const u8) -> Result<SystemTime> {
+        Ok(us_to_time(i64::read_cell(data)?))
     }
-    fn can_write_to(data_type: DataType) -> bool {
-        data_type == DataType::Timestamp || data_type == DataType::Int64
+    unsafe fn write_cell(self, data: *mut u8) {
+        time_to_us(self).write_cell(data);
     }
-    unsafe fn read(data: *const u8) -> Result<SystemTime> {
-        Ok(us_to_time(i64::read(data)?))
-    }
-    unsafe fn write(self, data: *mut u8) {
-        time_to_us(self).write(data);
+    fn encode_next(self) -> Option<Vec<u8>> {
+        time_to_us(self).encode_next()
     }
 }
 
 impl<'data> Value<'data> for &'data [u8] {
     const DATA_TYPE: DataType = DataType::Binary;
-    fn can_read_from(data_type: DataType) -> bool {
-        data_type == DataType::Binary || data_type == DataType::String
-    }
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Binary;
+
     fn can_write_to(data_type: DataType) -> bool {
         data_type == DataType::Binary
     }
-
-    unsafe fn read(data: *const u8) -> Result<&'data [u8]> {
+    unsafe fn read_cell(data: *const u8) -> Result<&'data [u8]> {
         let (ptr, len, _) = read_var_len_value(data);
         Ok(slice::from_raw_parts(ptr, len))
     }
 
-    unsafe fn write(self, data: *mut u8) {
+    unsafe fn write_cell(self, data: *mut u8) {
         assert!(
             self.len() <= u32::max_value() as usize,
             "value length must not exceed u32::max_value()"
         );
         write_var_len_value(data, self.as_ptr(), self.len(), 0);
     }
+
+    fn encode(self) -> Vec<u8> {
+        self.to_owned()
+    }
+
+    fn encode_next(self) -> Option<Vec<u8>> {
+        let mut buf = Vec::with_capacity(self.len() + 1);
+        buf.extend_from_slice(self);
+        buf.push(0);
+        Some(buf)
+    }
+
+    unsafe fn decode(data: &'data [u8]) -> &[u8] {
+        data
+    }
 }
 
 impl<'data> Value<'data> for Vec<u8> {
     const DATA_TYPE: DataType = DataType::Binary;
-    fn can_read_from(data_type: DataType) -> bool {
-        data_type == DataType::Binary || data_type == DataType::String
-    }
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Binary;
+
     fn can_write_to(data_type: DataType) -> bool {
         data_type == DataType::Binary
     }
-
-    unsafe fn read(data: *const u8) -> Result<Vec<u8>> {
-        Ok(<&[u8] as Value>::read(data)?.to_owned())
+    unsafe fn read_cell(data: *const u8) -> Result<Vec<u8>> {
+        Ok(<&[u8] as Value>::read_cell(data)?.to_owned())
     }
-    unsafe fn write(self, data: *mut u8) {
+    unsafe fn write_cell(self, data: *mut u8) {
         assert!(
             self.capacity() <= u32::max_value() as usize,
             "owned value capacity must not exceed u32::max_value()"
@@ -174,37 +233,66 @@ impl<'data> Value<'data> for Vec<u8> {
         write_var_len_value(data, self.as_ptr(), self.len(), self.capacity());
         mem::forget(self);
     }
+
+    fn encode(self) -> Vec<u8> {
+        self
+    }
+
+    fn encode_next(mut self) -> Option<Vec<u8>> {
+        self.reserve_exact(1);
+        self.push(0);
+        Some(self)
+    }
+
+    unsafe fn decode(data: &'data [u8]) -> Vec<u8> {
+        data.to_owned()
+    }
 }
 
 impl<'data> Value<'data> for &'data str {
     const DATA_TYPE: DataType = DataType::String;
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Binary;
     fn can_read_from(data_type: DataType) -> bool {
         data_type == DataType::String
     }
-    fn can_write_to(data_type: DataType) -> bool {
-        data_type == DataType::String || data_type == DataType::Binary
+    unsafe fn read_cell(data: *const u8) -> Result<&'data str> {
+        Ok(str::from_utf8(<&[u8] as Value>::read_cell(data)?)?)
     }
-    unsafe fn read(data: *const u8) -> Result<&'data str> {
-        Ok(str::from_utf8(<&[u8] as Value>::read(data)?)?)
+    unsafe fn write_cell(self, data: *mut u8) {
+        self.as_bytes().write_cell(data)
     }
-    unsafe fn write(self, data: *mut u8) {
-        self.as_bytes().write(data)
+    fn encode(self) -> Vec<u8> {
+        self.as_bytes().encode()
+    }
+    fn encode_next(self) -> Option<Vec<u8>> {
+        self.as_bytes().encode_next()
+    }
+
+    unsafe fn decode(data: &'data [u8]) -> &'data str {
+        str::from_utf8_unchecked(data)
     }
 }
 
 impl<'data> Value<'data> for String {
     const DATA_TYPE: DataType = DataType::String;
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Binary;
     fn can_read_from(data_type: DataType) -> bool {
         data_type == DataType::String
     }
-    fn can_write_to(data_type: DataType) -> bool {
-        data_type == DataType::String || data_type == DataType::Binary
+    unsafe fn read_cell(data: *const u8) -> Result<String> {
+        Ok(<&str as Value>::read_cell(data)?.to_owned())
     }
-    unsafe fn read(data: *const u8) -> Result<String> {
-        Ok(<&str as Value>::read(data)?.to_owned())
+    unsafe fn write_cell(self, data: *mut u8) {
+        self.into_bytes().write_cell(data)
     }
-    unsafe fn write(self, data: *mut u8) {
-        self.into_bytes().write(data)
+    fn encode(self) -> Vec<u8> {
+        self.into_bytes().encode()
+    }
+    fn encode_next(self) -> Option<Vec<u8>> {
+        self.into_bytes().encode_next()
+    }
+    unsafe fn decode(data: &'data [u8]) -> String {
+        <&str as Value>::decode(data).to_owned()
     }
 }
 
@@ -213,6 +301,7 @@ where
     V: Value<'data>,
 {
     const DATA_TYPE: DataType = V::DATA_TYPE;
+    const PHYSICAL_TYPE: PhysicalType = V::PHYSICAL_TYPE;
     fn can_read_from(data_type: DataType) -> bool {
         V::can_read_from(data_type)
     }
@@ -225,16 +314,28 @@ where
     fn is_null(&self) -> bool {
         self.is_none()
     }
-    unsafe fn read(data: *const u8) -> Result<Option<V>> {
-        Ok(Some(V::read(data)?))
+    fn is_comparable(&self) -> bool {
+        self.as_ref().map_or(false, V::is_comparable)
     }
-    unsafe fn write(self, data: *mut u8) {
+    unsafe fn read_cell(data: *const u8) -> Result<Option<V>> {
+        Ok(Some(V::read_cell(data)?))
+    }
+    unsafe fn write_cell(self, data: *mut u8) {
         if let Some(value) = self {
-            value.write(data);
+            value.write_cell(data);
         }
     }
     fn null() -> Option<Self> {
         Some(None)
+    }
+    fn encode(self) -> Vec<u8> {
+        self.unwrap().encode()
+    }
+    fn encode_next(self) -> Option<Vec<u8>> {
+        self.unwrap().encode_next()
+    }
+    unsafe fn decode(data: &'data [u8]) -> Option<V> {
+        Some(V::decode(data))
     }
 }
 

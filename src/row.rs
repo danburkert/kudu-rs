@@ -105,7 +105,7 @@ impl<'data> Row<'data> {
                 bitmap_clear(data.offset(self.is_null_offset()), idx);
             }
 
-            value.write(data.offset(self.schema.column_offset(idx)));
+            value.write_cell(data.offset(self.schema.column_offset(idx)));
         }
         self
     }
@@ -163,7 +163,9 @@ impl<'data> Row<'data> {
                     )))
                 }
             } else {
-                Ok(V::read(self.data().offset(self.schema.column_offset(idx)))?)
+                Ok(V::read_cell(
+                    self.data().offset(self.schema.column_offset(idx)),
+                )?)
             }
         }
     }
@@ -545,7 +547,8 @@ impl<'data> cmp::PartialEq for Row<'data> {
                 }
 
                 if column.data_type().is_var_len()
-                    && <&[u8] as Value>::read(a).unwrap() == <&[u8] as Value>::read(b).unwrap()
+                    && <&[u8] as Value>::read_cell(a).unwrap()
+                        == <&[u8] as Value>::read_cell(b).unwrap()
                 {
                     continue;
                 }

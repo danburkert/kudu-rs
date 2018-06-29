@@ -34,8 +34,10 @@ extern crate proptest;
 
 mod backoff;
 mod bitmap;
+mod bounds;
 mod client;
 mod error;
+mod filter;
 mod key;
 mod meta_cache;
 mod operation;
@@ -62,6 +64,7 @@ pub mod prop;
 
 pub use client::*;
 pub use error::*;
+pub use filter::*;
 pub use operation::*;
 pub use partition::*;
 pub use row::Row;
@@ -70,8 +73,9 @@ pub use schema::*;
 pub use server::*;
 pub use table::*;
 pub use tablet::*;
-pub use value::Value;
 pub use writer::*;
+
+use value::Value;
 
 use std::fmt;
 use std::str;
@@ -143,42 +147,30 @@ impl DataType {
         }
     }
 
-    #[cfg(any(feature = "quickcheck", test))]
-    pub fn arbitrary_primary_key<G>(g: &mut G) -> DataType
-    where
-        G: quickcheck::Gen,
-    {
-        *g.choose(&[
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Timestamp,
-            DataType::Binary,
-            DataType::String,
-        ]).unwrap()
+    pub(crate) fn physical_type(self) -> PhysicalType {
+        match self {
+            DataType::Bool => PhysicalType::Bool,
+            DataType::Int8 => PhysicalType::Int8,
+            DataType::Int16 => PhysicalType::Int16,
+            DataType::Int32 => PhysicalType::Int32,
+            DataType::Int64 | DataType::Timestamp => PhysicalType::Int64,
+            DataType::Float => PhysicalType::Float,
+            DataType::Double => PhysicalType::Double,
+            DataType::String | DataType::Binary => PhysicalType::Binary,
+        }
     }
 }
 
-#[cfg(any(feature = "quickcheck", test))]
-impl quickcheck::Arbitrary for DataType {
-    fn arbitrary<G>(g: &mut G) -> DataType
-    where
-        G: quickcheck::Gen,
-    {
-        *g.choose(&[
-            DataType::Bool,
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Timestamp,
-            DataType::Float,
-            DataType::Double,
-            DataType::Binary,
-            DataType::String,
-        ]).unwrap()
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhysicalType {
+    Bool,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Float,
+    Double,
+    Binary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -7,16 +7,18 @@ use std::time::{Duration, Instant};
 use bytes::{Bytes, BytesMut};
 use futures::{Async, Future, Poll, Stream};
 use krpc::Proxy;
+use vec_map::{self, VecMap};
 
 use backoff::Backoff;
 use meta_cache::{Entry, Lookup, TableLocations};
 use pb::tserver::{NewScanRequestPb, ScanRequestPb, ScanResponsePb, TabletServerService};
-use pb::{ColumnSchemaPb, ExpectField, RowwiseRowBlockPb};
+use pb::{ColumnPredicatePb, ColumnSchemaPb, ExpectField, RowwiseRowBlockPb};
 use replica::{ReplicaRpc, Selection, Speculation};
 use tablet::Tablet;
 use Column;
 use ColumnSelector;
 use Error;
+use Filter;
 use Result;
 use Row;
 use ScannerId;
@@ -28,6 +30,7 @@ pub struct ScanBuilder {
     table_schema: Schema,
     table_locations: TableLocations,
     projected_columns: Vec<usize>,
+    filters: VecMap<Filter>,
 }
 
 fn column_to_pb(column: &Column) -> ColumnSchemaPb {
@@ -41,38 +44,91 @@ fn column_to_pb(column: &Column) -> ColumnSchemaPb {
 
 impl ScanBuilder {
     pub(crate) fn new(table_schema: Schema, table_locations: TableLocations) -> ScanBuilder {
-        let projected_columns = (0..table_schema.columns().len()).collect::<Vec<_>>();
+        let num_columns = table_schema.columns().len();
+        let projected_columns = (0..num_columns).collect::<Vec<_>>();
         ScanBuilder {
             table_schema,
             table_locations,
             projected_columns,
+            filters: VecMap::new(),
         }
     }
 
-    pub fn projected_columns<I, C>(mut self, column_selectors: I) -> Result<ScanBuilder>
+    pub fn select<I, C>(mut self, projected_columns: I) -> Result<ScanBuilder>
     where
         I: IntoIterator<Item = C>,
         C: ColumnSelector,
     {
         self.projected_columns.clear();
-        for column_selector in column_selectors {
+        for column_selector in projected_columns {
             self.projected_columns
                 .push(column_selector.column_index(&self.table_schema)?);
         }
         Ok(self)
     }
 
+    pub fn count(mut self) -> ScanBuilder {
+        self.projected_columns.clear();
+        self
+    }
+
+    /// Apply a filter to the scan.
+    ///
+    /// When multiple filters are applied to the scan they combine conjunctively, i.e. using `AND`.
+    pub fn filter<C>(mut self, column: C, filter: Filter) -> Result<ScanBuilder>
+    where
+        C: ColumnSelector,
+    {
+        let idx = column.column_index(&self.table_schema)?;
+        let column = &self.table_schema.columns()[idx];
+        filter.check_type(column)?;
+
+        match self.filters.entry(idx) {
+            vec_map::Entry::Occupied(mut occupied) => {
+                let existing = mem::replace(occupied.get_mut(), Filter::none());
+                occupied.insert(existing.and(filter));
+            }
+            vec_map::Entry::Vacant(vacant) => {
+                vacant.insert(filter);
+            }
+        }
+
+        Ok(self)
+    }
+
     pub fn build(self) -> Scan {
+        let ScanBuilder {
+            table_schema,
+            table_locations,
+            projected_columns,
+            filters,
+        } = self;
+
         let mut columns = Vec::new();
-        for idx in self.projected_columns {
-            columns.push(self.table_schema.columns()[idx].clone());
+        for idx in projected_columns {
+            columns.push(table_schema.columns()[idx].clone());
         }
         let projected_schema = Schema::new(columns, 0);
 
-        let state = ScannerState::Lookup(self.table_locations.entry(&[]));
+        let mut short_circuit = false;
+        let mut predicates = Vec::with_capacity(filters.len());
+        for (idx, filter) in filters {
+            if filter == Filter::None {
+                short_circuit = true;
+            } else if filter != Filter::All {
+                predicates.push(filter.into_pb(&table_schema.columns()[idx]));
+            }
+        }
+
+        let state = if short_circuit {
+            ScannerState::Finished
+        } else {
+            ScannerState::Lookup(table_locations.entry(&[]))
+        };
         Scan {
             projected_schema,
-            table_locations: self.table_locations,
+            predicates,
+            table_locations,
             state,
         }
     }
@@ -80,6 +136,7 @@ impl ScanBuilder {
 
 pub struct Scan {
     projected_schema: Schema,
+    predicates: Vec<ColumnPredicatePb>,
     table_locations: TableLocations,
     state: ScannerState,
 }
@@ -95,16 +152,15 @@ enum ScannerState {
 
 impl Scan {
     fn new_scan_request(&self, tablet: TabletId) -> NewScanRequestPb {
-        let projected_columns = self
-            .projected_schema
-            .columns()
-            .iter()
-            .map(column_to_pb)
-            .collect::<Vec<_>>();
-
         NewScanRequestPb {
             tablet_id: tablet.to_string().into_bytes(),
-            projected_columns,
+            projected_columns: self
+                .projected_schema
+                .columns()
+                .iter()
+                .map(column_to_pb)
+                .collect(),
+            column_predicates: self.predicates.clone(),
             ..Default::default()
         }
     }
@@ -244,9 +300,13 @@ impl RowBatch {
         match num_rows.checked_mul(row_len) {
             Some(len) if len == data.len() => (),
             Some(_) => {
-                return Err(Error::Serialization(
-                        format!("RowwiseRowBlockPb.num_rows does not match row_sidecar length; num_rows: {}, row_sidecar.len: {}, row_len: {}",
-                                num_rows, data.len(), row_len)));
+                return Err(Error::Serialization(format!(
+                    "RowwiseRowBlockPb.num_rows does not match row_sidecar length; \
+                     num_rows: {}, row_sidecar.len: {}, row_len: {}",
+                    num_rows,
+                    data.len(),
+                    row_len
+                )));
             }
             None => {
                 return Err(Error::Serialization(format!(
@@ -256,6 +316,7 @@ impl RowBatch {
             }
         }
 
+        // Swizzle string and binary column pointers.
         if !projected_schema.var_len_column_offsets().is_empty() {
             for row in data.chunks_mut(row_len) {
                 for &offset in projected_schema.var_len_column_offsets() {
@@ -466,8 +527,6 @@ impl Stream for TabletScan {
 #[cfg(test)]
 mod test {
 
-    use std::iter;
-
     use super::*;
     use mini_cluster::MiniCluster;
     use Client;
@@ -533,10 +592,7 @@ mod test {
 
         let scan: Scan = runtime
             .block_on(::futures::future::lazy::<_, Result<Scan>>(|| {
-                Ok(table
-                    .scan_builder()
-                    .projected_columns(iter::empty::<usize>())?
-                    .build())
+                Ok(table.scan_builder().count().build())
             })).unwrap();
 
         let batches: Vec<RowBatch> = runtime
@@ -616,6 +672,83 @@ mod test {
         rows.sort();
 
         let expected = (0..num_rows).map(|i| (i, i)).collect::<Vec<_>>();
+
+        assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn filter() {
+        let _ = env_logger::try_init();
+        let mut cluster = MiniCluster::default();
+        let mut runtime = Runtime::new().unwrap();
+
+        let mut client = runtime
+            .block_on(Client::new(cluster.master_addrs(), Options::default()))
+            .expect("client");
+
+        let schema = SchemaBuilder::new()
+            .add_column(Column::new("key", DataType::Int32).set_not_null())
+            .add_column(Column::new("val", DataType::Int32))
+            .set_primary_key(vec!["key"])
+            .build()
+            .unwrap();
+
+        let mut table_builder = TableBuilder::new("count", schema.clone());
+        table_builder.add_hash_partitions(vec!["key"], 4);
+        table_builder.set_num_replicas(1);
+
+        // TODO: don't wait for table creation in order to test retry logic.
+        let table_id = runtime
+            .block_on(client.create_table(table_builder))
+            .unwrap();
+        let table = runtime.block_on(client.open_table_by_id(table_id)).unwrap();
+        let mut writer = table.new_writer(WriterConfig::default());
+        let num_rows = 10i32;
+
+        // TODO: remove lazy once apply no longer polls.
+        runtime
+            .block_on(future::lazy::<_, Result<()>>(|| {
+                // Insert a bunch of values
+                for i in 0..num_rows {
+                    let mut insert = table.schema().new_row();
+                    insert.set("key", i).unwrap();
+                    insert.set("val", i).unwrap();
+                    writer.insert(insert);
+                }
+                Ok(())
+            })).unwrap();
+        runtime
+            .block_on(future::poll_fn(|| writer.poll_flush()))
+            .unwrap();
+
+        let scan: Scan = runtime
+            .block_on(::futures::future::lazy::<_, Result<Scan>>(|| {
+                Ok(table
+                    .scan_builder()
+                    .filter("key", Filter::range(5i32..))?
+                    .build())
+            })).unwrap();
+
+        let batches = runtime
+            .block_on(::futures::future::lazy(|| scan.collect()))
+            .unwrap();
+
+        let mut rows = Vec::new();
+        for batch in batches {
+            for row in batch.into_iter() {
+                rows.push((
+                    row.get::<_, i32>("key").unwrap(),
+                    row.get::<_, i32>("val").unwrap(),
+                ));
+            }
+        }
+
+        rows.sort();
+
+        let expected = (0..num_rows)
+            .filter(|&i| i >= 5)
+            .map(|i| (i, i))
+            .collect::<Vec<_>>();
 
         assert_eq!(rows, expected);
     }

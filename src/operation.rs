@@ -226,25 +226,25 @@ impl<'a> Iterator for OperationDecoder<'a> {
                 let data = data.as_ptr().offset(*offset as isize);
                 match column.data_type() {
                     DataType::Bool => {
-                        row.set_unchecked(idx, bool::read(data).unwrap());
+                        row.set_unchecked(idx, bool::read_cell(data).unwrap());
                     }
                     DataType::Int8 => {
-                        row.set_unchecked(idx, i8::read(data).unwrap());
+                        row.set_unchecked(idx, i8::read_cell(data).unwrap());
                     }
                     DataType::Int16 => {
-                        row.set_unchecked(idx, i16::read(data).unwrap());
+                        row.set_unchecked(idx, i16::read_cell(data).unwrap());
                     }
                     DataType::Int32 => {
-                        row.set_unchecked(idx, i32::read(data).unwrap());
+                        row.set_unchecked(idx, i32::read_cell(data).unwrap());
                     }
                     DataType::Int64 | DataType::Timestamp => {
-                        row.set_unchecked(idx, i64::read(data).unwrap());
+                        row.set_unchecked(idx, i64::read_cell(data).unwrap());
                     }
                     DataType::Float => {
-                        row.set_unchecked(idx, f32::read(data).unwrap());
+                        row.set_unchecked(idx, f32::read_cell(data).unwrap());
                     }
                     DataType::Double => {
-                        row.set_unchecked(idx, f64::read(data).unwrap());
+                        row.set_unchecked(idx, f64::read_cell(data).unwrap());
                     }
                     DataType::Binary | DataType::String => {
                         let (ptr, len, _) = read_var_len_value(data);
