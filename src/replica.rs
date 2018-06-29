@@ -42,7 +42,7 @@ pub(crate) enum Selection {
 
 impl Selection {
     /// Sorts a set of replicas into a prioritized queue of offsets.
-    fn prioritize<R>(&self, replicas: &[R], backoff: Backoff) -> VecDeque<ReplicaState>
+    fn prioritize<R>(&self, replicas: &[R], backoff: &Backoff) -> VecDeque<ReplicaState>
     where
         R: Replica,
     {
@@ -166,7 +166,7 @@ where
         selection: Selection,
         backoff: Backoff,
     ) -> ReplicaRpc<Set, Req, Resp> {
-        let queue = selection.prioritize(replica_set.replicas(), backoff);
+        let queue = selection.prioritize(replica_set.replicas(), &backoff);
         ReplicaRpc {
             replica_set,
             call,
@@ -351,7 +351,7 @@ where
             // Check if all RPCs are failed.
 
             if self.queue.is_empty() && self.in_flight.is_empty() && self.backoff.is_empty() {
-                debug_assert!(self.failures.len() > 0);
+                debug_assert!(!self.failures.is_empty());
                 if self.failures.len() == 1 {
                     return Err(self.failures.pop().unwrap().failure.unwrap());
                 }

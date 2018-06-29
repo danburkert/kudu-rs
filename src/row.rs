@@ -654,7 +654,7 @@ unsafe fn bitmap_eq(a: *const u8, b: *const u8, bits: usize) -> bool {
     let bytes = bits >> 3;
     let bytes_eq = slice::from_raw_parts(a, bytes) == slice::from_raw_parts(b, bytes);
     let bytes = bytes as isize;
-    let remainder_eq = bits & 0x07 == 0 || *a.offset(bytes) & 0x07 == *b.offset(bytes) & 0x07;
+    let remainder_eq = bits.trailing_zeros() >= 3 || *a.offset(bytes) & 0x07 == *b.offset(bytes) & 0x07;
     bytes_eq && remainder_eq
 }
 

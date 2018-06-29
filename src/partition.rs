@@ -45,8 +45,8 @@ impl HashPartitionSchema {
     fn new(columns: Vec<usize>, buckets: u32, seed: u32) -> HashPartitionSchema {
         HashPartitionSchema {
             columns: columns.into_boxed_slice(),
-            buckets: buckets,
-            seed: seed,
+            buckets,
+            seed,
         }
     }
 

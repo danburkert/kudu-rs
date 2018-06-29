@@ -30,8 +30,8 @@ impl Backoff {
     pub fn with_duration_range(initial: u32, max: u32) -> Backoff {
         assert!(initial > 0, "round-trip time must be greater than 0");
         Backoff {
-            initial: initial,
-            max: max,
+            initial,
+            max,
             retries: 0,
         }
     }

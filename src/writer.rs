@@ -214,7 +214,7 @@ impl Writer {
         };
 
         match poll {
-            Ok(Async::Ready(Some(tablet))) => self.buffer_operation(tablet, op, encoded_len),
+            Ok(Async::Ready(Some(tablet))) => self.buffer_operation(tablet, &op, encoded_len),
             Ok(Async::Ready(None)) => self.fail_operation(op, Error::NoRangePartition),
             Ok(Async::NotReady) => {
                 let op = op.into_owned();
@@ -297,7 +297,7 @@ impl Writer {
         loop {
             match self.operations_in_lookup.poll() {
                 Ok(Async::Ready(Some((Some(tablet), op, encoded_len)))) => {
-                    self.buffer_operation(tablet, op, encoded_len)
+                    self.buffer_operation(tablet, &op, encoded_len)
                 }
                 Ok(Async::Ready(Some((None, op, _)))) => {
                     self.fail_operation(op, Error::NoRangePartition)
@@ -346,7 +346,7 @@ impl Writer {
     }
 
     /// Applies an operation to the appropriate tablet batch.
-    fn buffer_operation(&mut self, tablet: Arc<Tablet>, op: Operation, encoded_len: usize) {
+    fn buffer_operation(&mut self, tablet: Arc<Tablet>, op: &Operation, encoded_len: usize) {
         trace!(
             "{:?}: buffer_operation; tablet: {:?}, op: {:?}, len: {:?}",
             self,
@@ -565,7 +565,7 @@ impl Batch {
                         }
                         let error_idx = error.row_index as usize;
                         if error_idx < decoder_idx {
-                            return Err(Error::Serialization(format!("out-of-order row error")));
+                            return Err(Error::Serialization("out-of-order row error".to_string()));
                         }
 
                         let operation = decoder.nth(error_idx - decoder_idx).unwrap();
@@ -577,7 +577,7 @@ impl Batch {
                             error: Error::RowError(error.error.into()),
                         };
 
-                        if let Err(_) = error_sender.unbounded_send(error) {
+                        if error_sender.unbounded_send(error).is_err() {
                             // The receiver has been dropped, so no point in sending additional errors.
                             break;
                         }
@@ -590,7 +590,7 @@ impl Batch {
                 .map_err(move |error| BatchError {
                     call: call3,
                     stats,
-                    error: error.into(),
+                    error,
                 }),
         ));
     }

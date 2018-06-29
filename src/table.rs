@@ -169,7 +169,7 @@ impl TableBuilder {
     {
         TableBuilder {
             name: name.into(),
-            schema: schema,
+            schema,
             hash_partitions: Vec::new(),
             range_partition_columns: Vec::new(),
             range_partitions: Vec::new(),
@@ -292,7 +292,7 @@ impl TableBuilder {
                     HashBucketSchemaPb {
                         columns,
                         num_buckets: num_partitions as i32,
-                        seed: seed,
+                        seed,
                         ..Default::default()
                     }
                 })
@@ -342,7 +342,7 @@ impl AlterTableBuilder {
         self.pb.alter_schema_steps.push(Step {
             type_: Some(StepType::AddColumn as i32),
             add_column: Some(AddColumn {
-                schema: column.to_pb(false),
+                schema: column.into_pb(false),
             }),
             ..Default::default()
         });

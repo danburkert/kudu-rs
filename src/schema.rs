@@ -65,7 +65,7 @@ impl Column {
     {
         Column {
             name: name.into(),
-            data_type: data_type,
+            data_type,
             is_nullable: true,
             compression: CompressionType::Default,
             encoding: EncodingType::Auto,
@@ -98,9 +98,9 @@ impl Column {
         self
     }
 
-    pub(crate) fn to_pb(&self, is_key: bool) -> ColumnSchemaPb {
+    pub(crate) fn into_pb(self, is_key: bool) -> ColumnSchemaPb {
         ColumnSchemaPb {
-            name: self.name.clone(),
+            name: self.name,
             type_: self.data_type.to_pb(),
             is_nullable: Some(self.is_nullable),
             is_key: Some(is_key),
@@ -298,7 +298,7 @@ impl Schema {
         let mut pb = SchemaPb::default();
         for (idx, column) in self.inner.columns.iter().enumerate() {
             pb.columns
-                .push(column.to_pb(idx < self.inner.num_primary_key_columns));
+                .push(column.clone().into_pb(idx < self.inner.num_primary_key_columns));
         }
         pb
     }
