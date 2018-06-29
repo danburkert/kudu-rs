@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![feature(nll)]
 
 extern crate byteorder;
@@ -26,7 +25,6 @@ extern crate env_logger;
 extern crate tempdir;
 
 #[cfg(any(feature = "quickcheck", test))]
-#[macro_use]
 extern crate quickcheck;
 
 #[macro_use]

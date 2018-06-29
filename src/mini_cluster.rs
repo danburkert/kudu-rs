@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::env;
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Read, Write};

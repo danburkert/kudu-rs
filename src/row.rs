@@ -635,11 +635,6 @@ impl<'data> Drop for Row<'data> {
     }
 }
 
-/// Returns the number of bytes required to hold a number of bits.
-fn bitmap_len(num_bits: usize) -> usize {
-    (num_bits + 7) / 8
-}
-
 /// Returns the value of the bit at the index.
 unsafe fn bitmap_get(bits: *const u8, idx: usize) -> bool {
     *bits.offset((idx >> 3) as isize) & (1 << (idx & 7)) > 0

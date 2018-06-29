@@ -67,10 +67,6 @@ impl OperationEncoder {
         }
     }
 
-    pub fn encode_range_split(&mut self, row: &Row) {
-        self.encode_row(OperationTypePb::SplitRow, row);
-    }
-
     pub fn encode_range_partition(
         &mut self,
         lower: &RangePartitionBound,
@@ -170,15 +166,6 @@ impl OperationEncoder {
 
     pub fn len(&self) -> usize {
         self.data.len() + self.indirect_data.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.data.clear();
-        self.indirect_data.clear();
     }
 
     pub fn into_pb(self) -> RowOperationsPb {

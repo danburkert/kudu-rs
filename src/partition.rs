@@ -8,7 +8,7 @@ use std::sync::Arc;
 use byteorder::{BigEndian, ByteOrder};
 use pb::partition_schema_pb::column_identifier_pb::Identifier;
 use pb::partition_schema_pb::ColumnIdentifierPb;
-use pb::{PartitionPb, PartitionSchemaPb, SchemaPb};
+use pb::{PartitionSchemaPb, SchemaPb};
 
 use key;
 use util;
@@ -359,29 +359,6 @@ impl Partition {
             range_lower_bound,
             range_upper_bound,
         })
-    }
-
-    pub(crate) fn from_pb(
-        primary_key_schema: &Schema,
-        partition_schema: PartitionSchema,
-        mut partition: PartitionPb,
-    ) -> Result<Partition> {
-        let lower_bound = partition
-            .partition_key_start
-            .take()
-            .unwrap()
-            .into_partition_key();
-        let upper_bound = partition
-            .partition_key_end
-            .take()
-            .unwrap()
-            .into_partition_key();
-        Partition::from_bounds(
-            primary_key_schema,
-            partition_schema,
-            lower_bound,
-            upper_bound,
-        )
     }
 }
 

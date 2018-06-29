@@ -36,11 +36,6 @@ impl Backoff {
         }
     }
 
-    /// Resets the backoff to the initial state.
-    pub fn reset(&mut self) {
-        self.retries = 0;
-    }
-
     /// Retrieves the next backoff duration in milliseconds.
     pub fn next_backoff_ms(&mut self) -> u64 {
         // Prevent overflow by testing if the backoff will be greater than the
@@ -93,10 +88,5 @@ mod tests {
 
         let f = backoff.next_backoff_ms();
         assert!(f >= 18 && e <= 18);
-
-        backoff.reset();
-
-        let g = backoff.next_backoff_ms();
-        assert!(g >= 1 && g < 2);
     }
 }

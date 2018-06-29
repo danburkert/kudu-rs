@@ -107,6 +107,7 @@ struct Common {
     batches_in_flight: FuturesUnordered<Box<Future<Item = BatchStats, Error = BatchError> + Send>>,
 
     error_sender: UnboundedSender<OperationError>,
+    #[allow(dead_code)] // TODO: expose this in a nice API so applications can handle row errors.
     error_receiver: UnboundedReceiver<OperationError>,
 }
 
@@ -427,11 +428,6 @@ where
             }
         }
     }
-}
-
-pub(crate) struct ErrorCollector {
-    error_sender: UnboundedSender<OperationError>,
-    error_receiver: UnboundedReceiver<OperationError>,
 }
 
 struct TabletBatcher {

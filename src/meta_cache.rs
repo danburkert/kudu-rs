@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, Bound, HashMap};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -59,6 +58,7 @@ impl Entry {
         }
     }
 
+    #[cfg(test)]
     pub fn is_tablet(&self) -> bool {
         match *self {
             Entry::Tablet(_) => true,
@@ -90,20 +90,9 @@ impl Entry {
             && partition_key >= self.lower_bound()
     }
 
-    /// Returns `Ordering::Equal` if the entries intersect, `Ordering::Less` if this entry falls
-    /// before the other entry, or `Ordering::Greater` if this entry falls after the other entry.
-    fn cmp_entry(&self, other: &Entry) -> Ordering {
-        if !self.upper_bound().is_empty() && self.upper_bound() <= other.lower_bound() {
-            Ordering::Less
-        } else if !other.upper_bound().is_empty() && other.upper_bound() <= self.lower_bound() {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        }
-    }
-
     /// Returns `true` if the entries are `Tablet`s and the tablet IDs match, or if the entries are
     /// non-covered ranges and the lower and upper bounds match.
+    #[cfg(test)]
     fn equiv(&self, other: &Entry) -> bool {
         match (self, other) {
             (&Entry::Tablet(ref a), &Entry::Tablet(ref b)) => {
@@ -286,8 +275,6 @@ impl MetaCache {
                         TableLocations::new(
                             options,
                             id,
-                            schema.primary_key_projection(),
-                            partition_schema.clone(),
                             masters,
                             tablet_servers,
                         )
@@ -319,8 +306,6 @@ impl TableLocations {
     pub(crate) fn new(
         options: Options,
         table_id: TableId,
-        primary_key_schema: Schema,
-        partition_schema: PartitionSchema,
         masters: Arc<Box<[MasterReplica]>>,
         tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
     ) -> TableLocations {
@@ -332,8 +317,6 @@ impl TableLocations {
             entries: entries.clone(),
             tablet_servers,
             table_id,
-            primary_key_schema,
-            partition_schema,
             masters,
             receiver,
             requests: BTreeMap::new(),
@@ -344,16 +327,6 @@ impl TableLocations {
 
     pub(crate) fn entry(&self, partition_key: &[u8]) -> Lookup<Entry> {
         self.extract(partition_key, Entry::clone)
-    }
-
-    pub(crate) fn tablet_id(&self, partition_key: &[u8]) -> Lookup<Option<TabletId>> {
-        self.extract(partition_key, |entry| {
-            if let Entry::Tablet(ref tablet) = *entry {
-                Some(tablet.id())
-            } else {
-                None
-            }
-        })
     }
 
     pub(crate) fn tablet(&self, partition_key: &[u8]) -> Lookup<Option<Arc<Tablet>>> {
@@ -376,6 +349,7 @@ impl TableLocations {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn clear(&self) {
         self.entries.lock().clear()
     }
@@ -435,8 +409,6 @@ struct TableLocationsTask {
     tablet_servers: Arc<Mutex<HashMap<TabletServerId, krpc::Proxy>>>,
 
     table_id: TableId,
-    primary_key_schema: Schema,
-    partition_schema: PartitionSchema,
 
     /// Master repliacs..
     masters: Arc<Box<[MasterReplica]>>,

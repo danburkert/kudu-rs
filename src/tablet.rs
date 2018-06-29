@@ -5,8 +5,6 @@ use std::sync::Arc;
 use krpc;
 
 use partition::PartitionKey;
-use pb::master::{tablet_locations_pb::ReplicaPb, TabletLocationsPb};
-use pb::ExpectField;
 use replica::{Replica, ReplicaSet};
 use HostPort;
 use Partition;
@@ -172,31 +170,6 @@ impl TabletInfo {
     pub fn replicas(&self) -> &[ReplicaInfo] {
         &self.replicas
     }
-
-    /// Creates a new `TabletInfo` from a tablet locations protobuf message.
-    pub(crate) fn from_pb(
-        primary_key_schema: &Schema,
-        partition_schema: PartitionSchema,
-        pb: TabletLocationsPb,
-    ) -> Result<TabletInfo> {
-        let id = TabletId::parse_bytes(&pb.tablet_id)?;
-        let partition = Partition::from_pb(
-            primary_key_schema,
-            partition_schema,
-            pb.partition.expect_field("TabletLocationsPb", "partition")?,
-        )?;
-        let replicas = pb
-            .replicas
-            .into_iter()
-            .map(ReplicaInfo::from_pb)
-            .collect::<Result<Vec<_>>>()?
-            .into_boxed_slice();
-        Ok(TabletInfo {
-            id,
-            partition,
-            replicas,
-        })
-    }
 }
 
 /// Information about a tablet replica belonging to a tablet server.
@@ -221,23 +194,5 @@ impl ReplicaInfo {
     /// The Raft role of this replica.
     pub fn role(&self) -> RaftRole {
         self.role
-    }
-
-    /// Creates a new `ReplicaInfo` from a replica protobuf message.
-    pub(crate) fn from_pb(pb: ReplicaPb) -> Result<ReplicaInfo> {
-        let role = pb.role();
-        let id = TabletServerId::parse_bytes(&pb.ts_info.permanent_uuid)?;
-        let rpc_addrs = pb
-            .ts_info
-            .rpc_addresses
-            .into_iter()
-            .map(HostPort::from)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        Ok(ReplicaInfo {
-            id,
-            rpc_addrs,
-            role,
-        })
     }
 }

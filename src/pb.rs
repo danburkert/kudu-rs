@@ -4,6 +4,7 @@ use Error;
 use HostPort;
 use TableId;
 
+#[allow(dead_code)]
 mod kudu {
     include!(concat!(env!("OUT_DIR"), "/kudu.rs"));
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Returns the number of bytes required to hold a number of bits.
 pub fn len(num_bits: usize) -> usize {
     (num_bits + 7) / 8

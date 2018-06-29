@@ -444,8 +444,6 @@ impl AlterTableBuilder {
 #[cfg(test)]
 mod tests {
 
-    use std::time::{Duration, Instant};
-
     use env_logger;
     use futures::Stream;
     use tokio::runtime::current_thread::Runtime;
@@ -458,10 +456,6 @@ mod tests {
     use Options;
     use SchemaBuilder;
     use TableBuilder;
-
-    fn deadline() -> Instant {
-        Instant::now() + Duration::from_secs(5)
-    }
 
     #[test]
     fn create_table_builder() {

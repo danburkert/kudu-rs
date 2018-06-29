@@ -184,7 +184,7 @@ pub struct RowBatch {
     projected_schema: Schema,
     len: usize,
     data: Bytes,
-    indirect_data: Bytes,
+    _indirect_data: Bytes,
 }
 
 impl RowBatch {
@@ -273,7 +273,7 @@ impl RowBatch {
             projected_schema,
             len: block.num_rows() as usize,
             data: data.freeze(),
-            indirect_data,
+            _indirect_data: indirect_data,
         })
     }
 
