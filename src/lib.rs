@@ -15,23 +15,22 @@ extern crate url;
 extern crate uuid;
 extern crate vec_map;
 
-#[macro_use]
-extern crate prost_derive;
-
 #[cfg(test)]
 extern crate env_logger;
-#[cfg(test)]
-extern crate tempdir;
-
-#[cfg(any(feature = "quickcheck", test))]
-extern crate quickcheck;
-
 #[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate prost_derive;
+#[cfg(test)]
+extern crate tempdir;
+
+#[cfg(any(feature = "proptest", test))]
+#[macro_use]
+extern crate proptest;
 
 mod backoff;
 mod bitmap;
@@ -57,6 +56,9 @@ mod writer;
 
 #[cfg(test)]
 mod mini_cluster;
+
+#[cfg(any(feature = "proptest", test))]
+pub mod prop;
 
 pub use client::*;
 pub use error::*;
@@ -184,7 +186,6 @@ pub enum EncodingType {
     Auto,
     Plain,
     Prefix,
-    GroupVarint,
     RunLength,
     Dictionary,
     BitShuffle,
@@ -196,7 +197,6 @@ impl EncodingType {
             EncodingType::Auto => pb::EncodingType::AutoEncoding,
             EncodingType::Plain => pb::EncodingType::PlainEncoding,
             EncodingType::Prefix => pb::EncodingType::PrefixEncoding,
-            EncodingType::GroupVarint => pb::EncodingType::GroupVarint,
             EncodingType::RunLength => pb::EncodingType::Rle,
             EncodingType::Dictionary => pb::EncodingType::DictEncoding,
             EncodingType::BitShuffle => pb::EncodingType::BitShuffle,
@@ -209,50 +209,10 @@ impl EncodingType {
             pb::EncodingType::AutoEncoding => Ok(EncodingType::Auto),
             pb::EncodingType::PlainEncoding => Ok(EncodingType::Plain),
             pb::EncodingType::PrefixEncoding => Ok(EncodingType::Prefix),
-            pb::EncodingType::GroupVarint => Ok(EncodingType::GroupVarint),
             pb::EncodingType::Rle => Ok(EncodingType::RunLength),
             pb::EncodingType::DictEncoding => Ok(EncodingType::Dictionary),
             pb::EncodingType::BitShuffle => Ok(EncodingType::BitShuffle),
             _ => Err(Error::Serialization("unknown encoding type".to_string())),
-        }
-    }
-
-    #[cfg(any(feature = "quickcheck", test))]
-    pub fn arbitrary<G>(g: &mut G, data_type: DataType) -> EncodingType
-    where
-        G: quickcheck::Gen,
-    {
-        match data_type {
-            DataType::Bool => *g
-                .choose(&[
-                    EncodingType::Auto,
-                    EncodingType::Plain,
-                    EncodingType::RunLength,
-                ]).unwrap(),
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Timestamp => *g
-                .choose(&[
-                    EncodingType::Auto,
-                    EncodingType::Plain,
-                    EncodingType::RunLength,
-                    EncodingType::BitShuffle,
-                ]).unwrap(),
-            DataType::Float | DataType::Double => *g
-                .choose(&[
-                    EncodingType::Auto,
-                    EncodingType::Plain,
-                    EncodingType::BitShuffle,
-                ]).unwrap(),
-            DataType::Binary | DataType::String => *g
-                .choose(&[
-                    EncodingType::Auto,
-                    EncodingType::Plain,
-                    EncodingType::Prefix,
-                    EncodingType::Dictionary,
-                ]).unwrap(),
         }
     }
 }
@@ -287,22 +247,6 @@ impl CompressionType {
             pb::CompressionType::Zlib => Ok(CompressionType::Zlib),
             _ => Err(Error::Serialization("unknown compression type".to_string())),
         }
-    }
-}
-
-#[cfg(any(feature = "quickcheck", test))]
-impl quickcheck::Arbitrary for CompressionType {
-    fn arbitrary<G>(g: &mut G) -> CompressionType
-    where
-        G: quickcheck::Gen,
-    {
-        *g.choose(&[
-            CompressionType::Default,
-            CompressionType::None,
-            CompressionType::Snappy,
-            CompressionType::Lz4,
-            CompressionType::Zlib,
-        ]).unwrap()
     }
 }
 

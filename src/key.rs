@@ -481,9 +481,9 @@ mod test {
     #[test]
     fn primary_key_encode_decode() {
         let schema = SchemaBuilder::new()
-            .add_column(Column::builder("a", DataType::String).set_not_null())
-            .add_column(Column::builder("b", DataType::Int32).set_not_null())
-            .add_column(Column::builder("c", DataType::String).set_not_null())
+            .add_column(Column::new("a", DataType::String).set_not_null())
+            .add_column(Column::new("b", DataType::Int32).set_not_null())
+            .add_column(Column::new("c", DataType::String).set_not_null())
             .set_primary_key(vec!["a", "b", "c"])
             .build()
             .unwrap();

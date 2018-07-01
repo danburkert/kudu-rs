@@ -694,8 +694,8 @@ mod test {
             .expect("client");
 
         let schema = SchemaBuilder::new()
-            .add_column(Column::builder("key", DataType::Int32).set_not_null())
-            .add_column(Column::builder("val", DataType::Int32))
+            .add_column(Column::new("key", DataType::Int32).set_not_null())
+            .add_column(Column::new("val", DataType::Int32))
             .set_primary_key(vec!["key"])
             .build()
             .unwrap();

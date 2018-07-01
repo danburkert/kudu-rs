@@ -3,11 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use pb::{ColumnSchemaPb, SchemaPb};
-#[cfg(any(feature = "quickcheck", test))]
-use quickcheck;
-
 use bitmap;
+use pb::{ColumnSchemaPb, SchemaPb};
 use CompressionType;
 use DataType;
 use EncodingType;
@@ -15,9 +12,9 @@ use Error;
 use Result;
 use Row;
 
-/// `Column` instances hold metadata information about columns in a Kudu table.
+/// `Column` instances hold schema and metadata about a column in a Kudu table.
 ///
-/// `Column` also serves as a builder object for specifying new columns during create and alter
+/// `Column` also serves as a builder API for specifying new columns during create and alter
 /// table operations.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Column {
@@ -26,7 +23,7 @@ pub struct Column {
     is_nullable: bool,
     compression: CompressionType,
     encoding: EncodingType,
-    block_size: u32,
+    cfile_block_size: u32,
 }
 
 impl Column {
@@ -50,16 +47,16 @@ impl Column {
         self.compression
     }
 
-    pub fn block_size(&self) -> Option<u32> {
-        if self.block_size == 0 {
+    pub fn cfile_block_size(&self) -> Option<u32> {
+        if self.cfile_block_size == 0 {
             None
         } else {
-            Some(self.block_size)
+            Some(self.cfile_block_size)
         }
     }
 
-    /// Returns a new column builder.
-    pub fn builder<S>(name: S, data_type: DataType) -> Column
+    /// Returns a new column.
+    pub fn new<S>(name: S, data_type: DataType) -> Column
     where
         S: Into<String>,
     {
@@ -69,8 +66,13 @@ impl Column {
             is_nullable: true,
             compression: CompressionType::Default,
             encoding: EncodingType::Auto,
-            block_size: 0,
+            cfile_block_size: 0,
         }
+    }
+
+    pub fn set_is_nullable(mut self, is_nullable: bool) -> Column {
+        self.is_nullable = is_nullable;
+        self
     }
 
     pub fn set_nullable(mut self) -> Column {
@@ -93,8 +95,8 @@ impl Column {
         self
     }
 
-    pub fn set_block_size(mut self, block_size: u32) -> Column {
-        self.block_size = block_size;
+    pub fn set_cfile_block_size(mut self, cfile_block_size: u32) -> Column {
+        self.cfile_block_size = cfile_block_size;
         self
     }
 
@@ -107,7 +109,7 @@ impl Column {
             encoding: Some(self.encoding.to_pb()),
             compression: Some(self.compression.to_pb()),
             // TODO: checked cast.
-            cfile_block_size: Some(self.block_size as i32),
+            cfile_block_size: Some(self.cfile_block_size as i32),
             ..Default::default()
         }
     }
@@ -118,7 +120,7 @@ impl Column {
             data_type: DataType::from_pb(pb.type_())?,
             compression: CompressionType::from_pb(pb.compression())?,
             encoding: EncodingType::from_pb(pb.encoding())?,
-            block_size: pb.cfile_block_size() as u32,
+            cfile_block_size: pb.cfile_block_size() as u32,
             name: pb.name,
         })
     }
@@ -126,7 +128,7 @@ impl Column {
 
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} {:?}", self.name, self.data_type)?;
+        write!(f, "{:?} {:?}", self.name, self.data_type)?;
         if !self.is_nullable {
             write!(f, " NOT NULL")?;
         }
@@ -136,8 +138,8 @@ impl fmt::Debug for Column {
         if self.compression != CompressionType::Default {
             write!(f, " COMPRESSION {:?}", self.compression)?;
         }
-        if let Some(block_size) = self.block_size() {
-            write!(f, " BLOCK SIZE {}", block_size)?;
+        if let Some(cfile_block_size) = self.cfile_block_size() {
+            write!(f, " CFILE BLOCK SIZE {}", cfile_block_size)?;
         }
         Ok(())
     }
@@ -355,113 +357,10 @@ impl fmt::Debug for Schema {
     }
 }
 
-#[cfg(any(feature = "quickcheck", test))]
-impl quickcheck::Arbitrary for Schema {
-    fn arbitrary<G>(g: &mut G) -> Schema
-    where
-        G: quickcheck::Gen,
-    {
-        use std::collections::HashSet;
-
-        let mut builder = SchemaBuilder::new();
-
-        let mut primary_key_columns: HashSet<String> = HashSet::arbitrary(g);
-        while primary_key_columns.is_empty() {
-            primary_key_columns = HashSet::arbitrary(g);
-        }
-
-        let mut columns: HashSet<String> = HashSet::arbitrary(g);
-        while !primary_key_columns.is_disjoint(&columns) {
-            columns = HashSet::arbitrary(g);
-        }
-
-        let mut columns = primary_key_columns.union(&columns).collect::<Vec<_>>();
-        g.shuffle(&mut columns);
-
-        for column in columns {
-            let is_pk = primary_key_columns.contains(column);
-            let data_type = if is_pk {
-                DataType::arbitrary_primary_key(g)
-            } else {
-                DataType::arbitrary(g)
-            };
-
-            let column = Column::builder(column.as_str(), data_type);
-
-            let column = if is_pk || bool::arbitrary(g) {
-                column.set_not_null()
-            } else {
-                column.set_nullable()
-            };
-
-            let column = column.set_encoding(EncodingType::arbitrary(g, data_type));
-            let column = column.set_compression(CompressionType::arbitrary(g));
-            let column = if bool::arbitrary(g) {
-                // TODO: can Kudu support arbitrary block sizes?
-                column.set_block_size(u32::arbitrary(g))
-            } else {
-                column
-            };
-            builder = builder.add_column(column);
-        }
-
-        let mut primary_key_columns: Vec<String> = primary_key_columns.iter().cloned().collect();
-        g.shuffle(&mut primary_key_columns);
-
-        builder
-            .set_primary_key(primary_key_columns)
-            .build()
-            .unwrap()
-    }
-
-    /// Returns an iterator containing versions of the schema with columns removed.
-    fn shrink(&self) -> Box<Iterator<Item = Self>> {
-        if self.columns().len() == 1 {
-            return quickcheck::empty_shrinker();
-        }
-
-        let mut schemas: Vec<Schema> = Vec::new();
-        let start_idx = if self.num_primary_key_columns() > 1 {
-            0
-        } else {
-            1
-        };
-
-        for idx in (start_idx..self.columns().len()).rev() {
-            let mut builder = SchemaBuilder::new();
-
-            for column in self.columns()[..idx]
-                .iter()
-                .chain(self.columns()[idx + 1..].iter())
-                .cloned()
-            {
-                builder = builder.add_column(column);
-            }
-
-            let mut primary_key_columns = Vec::new();
-            for pk_idx in 0..self.num_primary_key_columns() {
-                if idx == pk_idx {
-                    continue;
-                }
-                primary_key_columns.push(self.columns()[pk_idx].name().to_owned());
-            }
-            schemas.push(
-                builder
-                    .set_primary_key(primary_key_columns)
-                    .build()
-                    .unwrap(),
-            );
-        }
-
-        Box::new(schemas.into_iter())
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SchemaBuilder {
     columns: Vec<Column>,
     primary_key: Vec<String>,
-    range_partition_columns: Vec<String>,
 }
 
 impl SchemaBuilder {
@@ -469,7 +368,6 @@ impl SchemaBuilder {
         SchemaBuilder {
             columns: Vec::new(),
             primary_key: Vec::new(),
-            range_partition_columns: Vec::new(),
         }
     }
 
@@ -524,8 +422,8 @@ pub mod tests {
 
     pub fn simple_schema() -> Schema {
         SchemaBuilder::new()
-            .add_column(Column::builder("key", DataType::String).set_not_null())
-            .add_column(Column::builder("val", DataType::String).set_not_null())
+            .add_column(Column::new("key", DataType::String).set_not_null())
+            .add_column(Column::new("val", DataType::String).set_not_null())
             .set_primary_key(vec!["key"])
             .build()
             .unwrap()
@@ -533,27 +431,27 @@ pub mod tests {
 
     pub fn all_types_schema() -> Schema {
         SchemaBuilder::new()
-            .add_column(Column::builder("key", DataType::Int32).set_not_null())
-            .add_column(Column::builder("bool", DataType::Bool).set_not_null())
-            .add_column(Column::builder("i8", DataType::Int8).set_not_null())
-            .add_column(Column::builder("i16", DataType::Int16).set_not_null())
-            .add_column(Column::builder("i32", DataType::Int32).set_not_null())
-            .add_column(Column::builder("i64", DataType::Int64).set_not_null())
-            .add_column(Column::builder("timestamp", DataType::Timestamp).set_not_null())
-            .add_column(Column::builder("f32", DataType::Float).set_not_null())
-            .add_column(Column::builder("f64", DataType::Double).set_not_null())
-            .add_column(Column::builder("binary", DataType::Binary).set_not_null())
-            .add_column(Column::builder("string", DataType::String).set_not_null())
-            .add_column(Column::builder("nullable_bool", DataType::Bool).set_nullable())
-            .add_column(Column::builder("nullable_i8", DataType::Int8).set_nullable())
-            .add_column(Column::builder("nullable_i16", DataType::Int16).set_nullable())
-            .add_column(Column::builder("nullable_i32", DataType::Int32).set_nullable())
-            .add_column(Column::builder("nullable_i64", DataType::Int64).set_nullable())
-            .add_column(Column::builder("nullable_timestamp", DataType::Timestamp).set_nullable())
-            .add_column(Column::builder("nullable_f32", DataType::Float).set_nullable())
-            .add_column(Column::builder("nullable_f64", DataType::Double).set_nullable())
-            .add_column(Column::builder("nullable_binary", DataType::Binary).set_nullable())
-            .add_column(Column::builder("nullable_string", DataType::String).set_nullable())
+            .add_column(Column::new("key", DataType::Int32).set_not_null())
+            .add_column(Column::new("bool", DataType::Bool).set_not_null())
+            .add_column(Column::new("i8", DataType::Int8).set_not_null())
+            .add_column(Column::new("i16", DataType::Int16).set_not_null())
+            .add_column(Column::new("i32", DataType::Int32).set_not_null())
+            .add_column(Column::new("i64", DataType::Int64).set_not_null())
+            .add_column(Column::new("timestamp", DataType::Timestamp).set_not_null())
+            .add_column(Column::new("f32", DataType::Float).set_not_null())
+            .add_column(Column::new("f64", DataType::Double).set_not_null())
+            .add_column(Column::new("binary", DataType::Binary).set_not_null())
+            .add_column(Column::new("string", DataType::String).set_not_null())
+            .add_column(Column::new("nullable_bool", DataType::Bool).set_nullable())
+            .add_column(Column::new("nullable_i8", DataType::Int8).set_nullable())
+            .add_column(Column::new("nullable_i16", DataType::Int16).set_nullable())
+            .add_column(Column::new("nullable_i32", DataType::Int32).set_nullable())
+            .add_column(Column::new("nullable_i64", DataType::Int64).set_nullable())
+            .add_column(Column::new("nullable_timestamp", DataType::Timestamp).set_nullable())
+            .add_column(Column::new("nullable_f32", DataType::Float).set_nullable())
+            .add_column(Column::new("nullable_f64", DataType::Double).set_nullable())
+            .add_column(Column::new("nullable_binary", DataType::Binary).set_nullable())
+            .add_column(Column::new("nullable_string", DataType::String).set_nullable())
             .set_primary_key(vec!["key"])
             .build()
             .unwrap()

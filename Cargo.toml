@@ -23,11 +23,11 @@ krpc = { path = "krpc", version = "0.1.0" }
 lazy_static = "1.0"
 log = "0.4"
 parking_lot = "0.6"
+proptest = { version = "0.8", optional = true }
 prost = "0.4"
 prost-derive = "0.4"
 prost-types = "0.4"
-quickcheck = { version = "0.6", optional = true }
-rand = "0.4"
+rand = "0.5"
 tokio = "0.1"
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"
@@ -44,6 +44,7 @@ tar = "0.4"
 krpc-build = { path = "krpc-build", version = "0.1.0" }
 
 [dev-dependencies]
-tempdir = "0.3"
 env_logger = "0.5"
-quickcheck = "0.6"
+proptest = "0.8"
+# TODO: replace with tempfile
+tempdir = "0.3"

@@ -357,8 +357,8 @@ mod tests {
             .expect("client");
 
         let schema = SchemaBuilder::new()
-            .add_column(Column::builder("key", DataType::Int32).set_not_null())
-            .add_column(Column::builder("val", DataType::Int32))
+            .add_column(Column::new("key", DataType::Int32).set_not_null())
+            .add_column(Column::new("val", DataType::Int32))
             .set_primary_key(vec!["key"])
             .build()
             .unwrap();
@@ -437,7 +437,7 @@ mod tests {
             .expect("create_table");
 
         let mut alter_builder = AlterTableBuilder::new();
-        alter_builder.add_column(Column::builder("c0", DataType::Int32));
+        alter_builder.add_column(Column::new("c0", DataType::Int32));
 
         let _ = runtime
             .block_on(client.alter_table("t", alter_builder))

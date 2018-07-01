@@ -5,9 +5,6 @@ use std::mem;
 use std::slice;
 use std::str;
 
-#[cfg(any(feature = "quickcheck", test))]
-use quickcheck;
-
 use util;
 use value::{read_var_len_value, write_var_len_value, Value};
 use ColumnSelector;
@@ -406,35 +403,6 @@ impl<'data> Row<'data> {
         }
         Ok(())
     }
-
-    #[cfg(any(feature = "quickcheck", test))]
-    pub fn arbitrary<G>(g: &mut G, schema: &Schema) -> Row<'static>
-    where
-        G: quickcheck::Gen,
-    {
-        use quickcheck::Arbitrary;
-        use DataType;
-        let mut row = schema.new_row();
-        for (idx, column) in schema.columns().iter().enumerate() {
-            // TODO: set null values.
-            unsafe {
-                // Use set_unchecked since the column type is already checked.
-                match column.data_type() {
-                    DataType::Bool => row.set_unchecked(idx, bool::arbitrary(g)),
-                    DataType::Int8 => row.set_unchecked(idx, i8::arbitrary(g)),
-                    DataType::Int16 => row.set_unchecked(idx, i16::arbitrary(g)),
-                    DataType::Int32 => row.set_unchecked(idx, i32::arbitrary(g)),
-                    DataType::Int64 => row.set_unchecked(idx, i64::arbitrary(g)),
-                    DataType::Timestamp => row.set_unchecked(idx, i64::arbitrary(g)),
-                    DataType::Float => row.set_unchecked(idx, f32::arbitrary(g)),
-                    DataType::Double => row.set_unchecked(idx, f64::arbitrary(g)),
-                    DataType::Binary => row.set_unchecked(idx, Vec::arbitrary(g)),
-                    DataType::String => row.set_unchecked(idx, String::arbitrary(g)),
-                };
-            }
-        }
-        row
-    }
 }
 
 impl<'data> Clone for Row<'data> {
@@ -523,8 +491,6 @@ impl<'data> cmp::PartialEq for Row<'data> {
         }
 
         if self.tagged_ptr == other.tagged_ptr {
-            // TODO: is this right?  Can't a row be compared to itself?
-            debug_assert!(self.is_contiguous_row());
             return true;
         }
 
@@ -663,8 +629,6 @@ unsafe fn bitmap_eq(a: *const u8, b: *const u8, bits: usize) -> bool {
 mod tests {
 
     use super::*;
-    use quickcheck::{quickcheck, StdGen, TestResult};
-    use rand;
     use schema;
 
     #[test]
@@ -870,37 +834,5 @@ mod tests {
             "{key: 12, string: \"foo_borrowed2\", nullable_i32: NULL}",
             &format!("{:?}", row.clone())
         );
-    }
-
-    #[test]
-    fn check_to_string() {
-        fn rows_to_string(schema: schema::Schema) -> TestResult {
-            let mut g = StdGen::new(rand::thread_rng(), 100);
-
-            for _ in 0..10 {
-                let row = Row::arbitrary(&mut g, &schema);
-                format!("{:?}", row);
-            }
-
-            TestResult::passed()
-        }
-
-        quickcheck(rows_to_string as fn(schema::Schema) -> TestResult);
-    }
-
-    #[test]
-    fn check_eq() {
-        fn rows_to_string(schema: schema::Schema) -> TestResult {
-            let mut g = StdGen::new(rand::thread_rng(), 100);
-
-            for _ in 0..10 {
-                let row = Row::arbitrary(&mut g, &schema);
-                assert_eq!(row, row.clone());
-            }
-
-            TestResult::passed()
-        }
-
-        quickcheck(rows_to_string as fn(schema::Schema) -> TestResult);
     }
 }

@@ -50,8 +50,8 @@ where
     Ok(())
 }
 
-fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
-    write!(f, "{}", DateTime::from(timestamp))
+fn fmt_timestamp(timestamp: SystemTime) -> impl fmt::Display {
+    DateTime::from(timestamp)
 }
 
 pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
@@ -66,7 +66,11 @@ pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
         DataType::Int16 => write!(f, "{}", row.get::<_, i16>(idx).unwrap()),
         DataType::Int32 => write!(f, "{}", row.get::<_, i32>(idx).unwrap()),
         DataType::Int64 => write!(f, "{}", row.get::<_, i64>(idx).unwrap()),
-        DataType::Timestamp => fmt_timestamp(f, row.get::<_, SystemTime>(idx).unwrap()),
+        DataType::Timestamp => write!(
+            f,
+            "{}",
+            fmt_timestamp(row.get::<_, SystemTime>(idx).unwrap())
+        ),
         DataType::Float => write!(f, "{}", row.get::<_, f32>(idx).unwrap()),
         DataType::Double => write!(f, "{}", row.get::<_, f64>(idx).unwrap()),
         DataType::Binary => fmt_hex(f, row.get::<_, &[u8]>(idx).unwrap()),
@@ -150,45 +154,11 @@ where
 mod tests {
 
     use std::net::ToSocketAddrs;
-    use std::time::{Duration, UNIX_EPOCH};
 
     use env_logger;
-    use quickcheck::{quickcheck, TestResult};
+    use proptest::prelude::*;
 
     use super::*;
-    use schema;
-
-    #[test]
-    fn timestamp_conversion() {
-        let _ = env_logger::try_init();
-
-        fn roundtrip(us: i64) -> TestResult {
-            TestResult::from_bool(us == time_to_us(us_to_time(us)))
-        }
-
-        quickcheck(roundtrip as fn(i64) -> TestResult);
-    }
-
-    #[test]
-    fn test_format_timestamp() {
-        let _ = env_logger::try_init();
-        let schema = schema::tests::all_types_schema();
-        let mut row = schema.new_row();
-
-        row.set("timestamp", UNIX_EPOCH - Duration::from_millis(1234))
-            .unwrap();
-        assert_eq!(
-            "{timestamp: 1969-12-31T23:59:58.766000Z}",
-            &format!("{:?}", row)
-        );
-
-        row.set("timestamp", UNIX_EPOCH + Duration::from_millis(1234))
-            .unwrap();
-        assert_eq!(
-            "{timestamp: 1970-01-01T00:00:01.234000Z}",
-            &format!("{:?}", row)
-        );
-    }
 
     #[test]
     fn test_is_local_addr() {
@@ -207,5 +177,24 @@ mod tests {
             .unwrap()
             .ip();
         assert!(is_local_addr(&addr));
+    }
+
+    proptest! {
+
+        #[test]
+        fn check_timestamp_micros_roundtrip(us in any::<i64>()) {
+            prop_assert_eq!(us, time_to_us(us_to_time(us)))
+        }
+
+        #[test]
+        fn check_systemtime_roundtrip(timestamp in any::<SystemTime>()) {
+            prop_assert_eq!(timestamp, us_to_time(time_to_us(timestamp)));
+        }
+
+        #[test]
+        fn check_format_timestamp(system_time in any::<SystemTime>()) {
+            let _ = env_logger::try_init();
+            format!("{}", fmt_timestamp(system_time));
+        }
     }
 }
