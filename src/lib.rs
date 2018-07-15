@@ -2,7 +2,6 @@
 
 extern crate byteorder;
 extern crate bytes;
-extern crate chrono;
 extern crate ieee754;
 extern crate ifaces;
 extern crate krpc;
@@ -51,6 +50,7 @@ mod schema;
 mod server;
 mod table;
 mod tablet;
+mod timestamp;
 mod util;
 mod value;
 mod writer;

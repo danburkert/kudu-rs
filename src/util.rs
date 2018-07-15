@@ -3,15 +3,15 @@ use std::fmt;
 use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono;
 use futures::{Async, Future, Poll};
 use ifaces;
 use url::Url;
 
-use pb::HostPortPb;
 use DataType;
 use Error;
 use Row;
+use pb::HostPortPb;
+use timestamp::DateTime;
 
 pub fn time_to_us(time: SystemTime) -> i64 {
     // TODO: do overflow checking
@@ -51,15 +51,7 @@ where
 }
 
 fn fmt_timestamp(f: &mut fmt::Formatter, timestamp: SystemTime) -> fmt::Result {
-    let datetime = if timestamp < UNIX_EPOCH {
-        chrono::NaiveDateTime::from_timestamp(0, 0)
-            - chrono::Duration::from_std(UNIX_EPOCH.duration_since(timestamp).unwrap()).unwrap()
-    } else {
-        chrono::NaiveDateTime::from_timestamp(0, 0)
-            + chrono::Duration::from_std(timestamp.duration_since(UNIX_EPOCH).unwrap()).unwrap()
-    };
-
-    write!(f, "{}", datetime.format("%Y-%m-%dT%H:%M:%S%.6fZ"))
+    write!(f, "{}", DateTime::from(timestamp))
 }
 
 pub fn fmt_cell(f: &mut fmt::Formatter, row: &Row, idx: usize) -> fmt::Result {
