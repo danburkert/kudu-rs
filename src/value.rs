@@ -65,9 +65,11 @@ macro_rules! int_value {
     ($ty:ty, $data_type:ident) => {
         impl<'data> Value<'data> for $ty {
             const DATA_TYPE: DataType = DataType::$data_type;
+            #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
             unsafe fn read(data: *const u8) -> Result<$ty> {
                 Ok((data as *const $ty).read_unaligned().to_le())
             }
+            #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
             unsafe fn write(self, data: *mut u8) {
                 (data as *mut $ty).write_unaligned(self.to_le());
             }
@@ -83,9 +85,11 @@ impl<'data> Value<'data> for i64 {
     fn can_write_to(data_type: DataType) -> bool {
         data_type == DataType::Timestamp || data_type == DataType::Int64
     }
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     unsafe fn read(data: *const u8) -> Result<i64> {
         Ok((data as *const i64).read_unaligned().to_le())
     }
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     unsafe fn write(self, data: *mut u8) {
         (data as *mut i64).write_unaligned(self.to_le());
     }
@@ -95,11 +99,13 @@ macro_rules! float_value {
     ($ty:ident, $data_type:ident, $unsigned_ty:ty) => {
         impl<'data> Value<'data> for $ty {
             const DATA_TYPE: DataType = DataType::$data_type;
+            #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
             unsafe fn read(data: *const u8) -> Result<$ty> {
                 Ok($ty::from_bits(
                     (data as *const $unsigned_ty).read_unaligned().to_le(),
                 ))
             }
+            #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
             unsafe fn write(self, data: *mut u8) {
                 (data as *mut $unsigned_ty).write_unaligned(self.to_bits().to_le());
             }
@@ -246,6 +252,7 @@ pub(crate) unsafe fn write_var_len_value(data: *mut u8, ptr: *const u8, len: usi
         "owned value capacity may not exceed u32::max_value()"
     );
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     let data = data as *mut u64;
 
     // The pointer.
@@ -259,6 +266,7 @@ pub(crate) unsafe fn write_var_len_value(data: *mut u8, ptr: *const u8, len: usi
 }
 
 pub(crate) unsafe fn read_var_len_value(data: *const u8) -> (*const u8, usize, usize) {
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     let data = data as *const u64;
 
     // Read the pointer.

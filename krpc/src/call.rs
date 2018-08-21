@@ -40,7 +40,7 @@ where
             method,
             required_feature_flags: &[],
             deadline,
-            request: request,
+            request,
             _marker: PhantomData::default(),
         }
     }

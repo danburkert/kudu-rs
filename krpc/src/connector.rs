@@ -85,7 +85,7 @@ impl Future for Connector {
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => break,
                 Err(error) => {
                     warn!("{}", error);
-                    self.errors.push(error.into())
+                    self.errors.push(error)
                 }
             }
         }
@@ -123,7 +123,7 @@ impl Future for Connector {
         // If all futures resulted in an error, return the error.
         if self.resolving.is_empty() && self.connecting.is_empty() && self.negotiating.is_empty() {
             if self.errors.len() == 1 {
-                return Err(self.errors.pop().unwrap().into());
+                return Err(self.errors.pop().unwrap());
             } else {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionRefused,

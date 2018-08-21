@@ -330,8 +330,8 @@ fn duration_to_ms(duration: Duration) -> u32 {
     let millis = duration
         .as_secs()
         .saturating_mul(1000)
-        .saturating_add(duration.subsec_nanos() as u64 / 1000_000);
-    if millis > u32::MAX as u64 {
+        .saturating_add(u64::from(duration.subsec_nanos()) / 1_000_000);
+    if millis > u64::from(u32::MAX) {
         u32::MAX
     } else {
         millis as u32

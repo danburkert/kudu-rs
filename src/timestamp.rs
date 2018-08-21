@@ -68,7 +68,7 @@ impl From<SystemTime> for DateTime {
         };
 
         // 2000-03-01 (mod 400 year, immediately after feb29
-        const LEAPOCH: i64 = 946684800 + 86400 * (31 + 29);
+        const LEAPOCH: i64 = 946_684_800 + 86400 * (31 + 29);
         const DAYS_PER_400Y: i32 = 365 * 400 + 97;
         const DAYS_PER_100Y: i32 = 365 * 100 + 24;
         const DAYS_PER_4Y: i32 = 365 * 4 + 1;
@@ -82,8 +82,8 @@ impl From<SystemTime> for DateTime {
             days -= 1
         }
 
-        let mut qc_cycles: i32 = (days / DAYS_PER_400Y as i64) as i32;
-        let mut remdays: i32 = (days % DAYS_PER_400Y as i64) as i32;
+        let mut qc_cycles: i32 = (days / i64::from(DAYS_PER_400Y)) as i32;
+        let mut remdays: i32 = (days % i64::from(DAYS_PER_400Y)) as i32;
         if remdays < 0 {
             remdays += DAYS_PER_400Y;
             qc_cycles -= 1;
@@ -107,12 +107,14 @@ impl From<SystemTime> for DateTime {
         }
         remdays -= remyears * 365;
 
-        let mut years: i64 =
-            remyears as i64 + 4 * q_cycles as i64 + 100 * c_cycles as i64 + 400 * qc_cycles as i64;
+        let mut years: i64 = i64::from(remyears)
+            + 4 * i64::from(q_cycles)
+            + 100 * i64::from(c_cycles)
+            + 400 * i64::from(qc_cycles);
 
         let mut months: i32 = 0;
-        while DAYS_IN_MONTH[months as usize] as i32 <= remdays {
-            remdays -= DAYS_IN_MONTH[months as usize] as i32;
+        while i32::from(DAYS_IN_MONTH[months as usize]) <= remdays {
+            remdays -= i32::from(DAYS_IN_MONTH[months as usize]);
             months += 1
         }
 

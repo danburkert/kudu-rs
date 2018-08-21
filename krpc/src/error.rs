@@ -180,9 +180,9 @@ impl From<ErrorStatusPb> for RpcError {
         let unsupported_feature_flags = error.unsupported_feature_flags;
 
         RpcError {
-            code: code,
-            message: message,
-            unsupported_feature_flags: unsupported_feature_flags,
+            code,
+            message,
+            unsupported_feature_flags,
         }
     }
 }

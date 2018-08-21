@@ -381,6 +381,7 @@ fn is_cell_equal(a: &Row, b: &Row, idx: usize) -> bool {
     }
 }
 
+#[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
 fn is_cell_incremented(lower: &Row, upper: &Row, idx: usize) -> bool {
     assert_eq!(lower.schema(), upper.schema());
 

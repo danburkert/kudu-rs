@@ -190,7 +190,7 @@ pub struct RowBatch {
 impl RowBatch {
     fn new(
         projected_schema: Schema,
-        block: RowwiseRowBlockPb,
+        block: &RowwiseRowBlockPb,
         mut sidecars: Vec<BytesMut>,
     ) -> Result<RowBatch> {
         trace!(
@@ -259,6 +259,7 @@ impl RowBatch {
         if !projected_schema.var_len_column_offsets().is_empty() {
             for row in data.chunks_mut(row_len) {
                 for &offset in projected_schema.var_len_column_offsets() {
+                    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
                     unsafe {
                         // TODO: sanity check the value length falls in the indirect data buf.
                         let ptr = row.as_mut_ptr().offset(offset as isize) as *mut u64;
@@ -414,7 +415,7 @@ impl Stream for TabletScan {
                 let (proxy, mut response, sidecars) = try_ready!(rpc.poll());
                 let batch = RowBatch::new(
                     projected_schema.clone(),
-                    response.data.take().unwrap_or_default(),
+                    &response.data.take().unwrap_or_default(),
                     sidecars,
                 )?;
                 *self = if response.has_more_results() {
@@ -440,7 +441,7 @@ impl Stream for TabletScan {
                 let (proxy, mut response, sidecars) = try_ready!(rpc.poll());
                 let batch = RowBatch::new(
                     projected_schema.clone(),
-                    response.data.take().unwrap_or_default(),
+                    &response.data.take().unwrap_or_default(),
                     sidecars,
                 )?;
 

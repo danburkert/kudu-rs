@@ -441,6 +441,12 @@ impl AlterTableBuilder {
     }
 }
 
+impl Default for AlterTableBuilder {
+    fn default() -> AlterTableBuilder {
+        AlterTableBuilder::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
