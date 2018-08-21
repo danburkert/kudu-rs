@@ -297,8 +297,11 @@ impl Schema {
     pub(crate) fn as_pb(&self) -> SchemaPb {
         let mut pb = SchemaPb::default();
         for (idx, column) in self.inner.columns.iter().enumerate() {
-            pb.columns
-                .push(column.clone().into_pb(idx < self.inner.num_primary_key_columns));
+            pb.columns.push(
+                column
+                    .clone()
+                    .into_pb(idx < self.inner.num_primary_key_columns),
+            );
         }
         pb
     }

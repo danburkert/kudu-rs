@@ -524,8 +524,7 @@ mod test {
                     writer.insert(insert);
                 }
                 Ok(())
-            }))
-            .unwrap();
+            })).unwrap();
 
         runtime
             .block_on(future::poll_fn(|| writer.poll_flush()))
@@ -537,8 +536,7 @@ mod test {
                     .scan_builder()
                     .projected_columns(iter::empty::<usize>())?
                     .build())
-            }))
-            .unwrap();
+            })).unwrap();
 
         let batches: Vec<RowBatch> = runtime
             .block_on(::futures::future::lazy(|| scan.collect()))
@@ -590,8 +588,7 @@ mod test {
                     writer.insert(insert);
                 }
                 Ok(())
-            }))
-            .unwrap();
+            })).unwrap();
         runtime
             .block_on(future::poll_fn(|| writer.poll_flush()))
             .unwrap();
@@ -599,8 +596,7 @@ mod test {
         let scan: Scan = runtime
             .block_on(::futures::future::lazy::<_, Result<Scan>>(|| {
                 Ok(table.scan_builder().build())
-            }))
-            .unwrap();
+            })).unwrap();
 
         let batches = runtime
             .block_on(::futures::future::lazy(|| scan.collect()))

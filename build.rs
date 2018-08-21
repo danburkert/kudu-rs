@@ -29,8 +29,7 @@ fn main() {
             .url(&format!(
                 "https://github.com/apache/kudu/archive/{}.tar.gz",
                 VERSION
-            ))
-            .expect("failed to configure Kudu tarball URL");
+            )).expect("failed to configure Kudu tarball URL");
         handle
             .follow_location(true)
             .expect("failed to configure follow location");
@@ -40,8 +39,7 @@ fn main() {
                 .write_function(|new_data| {
                     data.extend_from_slice(new_data);
                     Ok(new_data.len())
-                })
-                .expect("failed to write download data");
+                }).expect("failed to write download data");
             transfer
                 .perform()
                 .expect("failed to download Kudu source tarball");
@@ -64,6 +62,5 @@ fn main() {
                 dir.join("src/kudu/tserver/tserver_service.proto"),
             ],
             &[dir.join("src")],
-        )
-        .unwrap();
+        ).unwrap();
 }

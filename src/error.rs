@@ -99,7 +99,7 @@ impl error::Error for Error {
 
             Error::Negotiation(ref error) => error,
 
-            | Error::Serialization(ref description) | Error::Compound(ref description, _) => {
+            Error::Serialization(ref description) | Error::Compound(ref description, _) => {
                 description
             }
 
@@ -109,7 +109,7 @@ impl error::Error for Error {
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
-            | Error::InvalidArgument(_)
+            Error::InvalidArgument(_)
             | Error::Serialization(_)
             | Error::TimedOut
             | Error::Negotiation(_)

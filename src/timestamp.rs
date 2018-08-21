@@ -1,9 +1,6 @@
-use std::i64;
 use std::fmt;
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
+use std::i64;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A date/time type which exists primarily to convert `SystemTime` timestamps into an ISO 8601
 /// formatted string.
@@ -38,13 +35,16 @@ impl fmt::Display for DateTime {
             write!(f, "{:04}", self.year)?;
         }
 
-        write!(f, "-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
-               self.month,
-               self.day,
-               self.hour,
-               self.minute,
-               self.second,
-               self.nanos / 1_000)
+        write!(
+            f,
+            "-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+            self.month,
+            self.day,
+            self.hour,
+            self.minute,
+            self.second,
+            self.nanos / 1_000
+        )
     }
 }
 
@@ -54,7 +54,7 @@ impl From<SystemTime> for DateTime {
             Ok(duration) => {
                 debug_assert!(duration.as_secs() <= i64::MAX as u64);
                 (duration.as_secs() as i64, duration.subsec_nanos())
-            },
+            }
             Err(error) => {
                 let duration = error.duration();
                 debug_assert!(duration.as_secs() <= i64::MAX as u64);
@@ -64,7 +64,7 @@ impl From<SystemTime> for DateTime {
                 } else {
                     (-secs - 1, 1_000_000_000 - nanos)
                 }
-            },
+            }
         };
 
         // 2000-03-01 (mod 400 year, immediately after feb29
@@ -107,12 +107,10 @@ impl From<SystemTime> for DateTime {
         }
         remdays -= remyears * 365;
 
-        let mut years: i64 = remyears as i64
-                        + 4 * q_cycles as i64
-                        + 100 * c_cycles as i64
-                        + 400 * qc_cycles as i64;
+        let mut years: i64 =
+            remyears as i64 + 4 * q_cycles as i64 + 100 * c_cycles as i64 + 400 * qc_cycles as i64;
 
-        let mut months: i32  = 0;
+        let mut months: i32 = 0;
         while DAYS_IN_MONTH[months as usize] as i32 <= remdays {
             remdays -= DAYS_IN_MONTH[months as usize] as i32;
             months += 1
@@ -137,11 +135,8 @@ impl From<SystemTime> for DateTime {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{
-        Duration,
-        UNIX_EPOCH,
-    };
     use std::i32;
+    use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
 
@@ -153,8 +148,13 @@ mod tests {
             } else {
                 (UNIX_EPOCH - Duration::new(!secs as u64 + 1, 0)) + Duration::new(0, micros * 1_000)
             };
-            assert_eq!(expected, format!("{}", DateTime::from(timestamp)),
-                       "secs: {}, micros: {}", secs, micros)
+            assert_eq!(
+                expected,
+                format!("{}", DateTime::from(timestamp)),
+                "secs: {}, micros: {}",
+                secs,
+                micros
+            )
         };
 
         // Mostly generated with:
@@ -168,14 +168,22 @@ mod tests {
         case("1970-01-01T00:00:01.000001Z", 1, 1);
         case("1970-01-01T00:01:01.000001Z", 60 + 1, 1);
         case("1970-01-01T01:01:01.000001Z", 60 * 60 + 60 + 1, 1);
-        case("1970-01-02T01:01:01.000001Z", 24 * 60 * 60 + 60 * 60 + 60 + 1, 1);
+        case(
+            "1970-01-02T01:01:01.000001Z",
+            24 * 60 * 60 + 60 * 60 + 60 + 1,
+            1,
+        );
 
         case("1969-12-31T23:59:59.000000Z", -1, 0);
         case("1969-12-31T23:59:59.000001Z", -1, 1);
         case("1969-12-31T23:59:59.500000Z", -1, 500_000);
         case("1969-12-31T23:58:59.000001Z", -60 - 1, 1);
         case("1969-12-31T22:58:59.000001Z", -60 * 60 - 60 - 1, 1);
-        case("1969-12-30T22:58:59.000001Z", -24 * 60 * 60 - 60 * 60 - 60 - 1, 1);
+        case(
+            "1969-12-30T22:58:59.000001Z",
+            -24 * 60 * 60 - 60 * 60 - 60 - 1,
+            1,
+        );
 
         case("2038-01-19T03:14:07.000000Z", i32::MAX as i64, 0);
         case("2038-01-19T03:14:08.000000Z", i32::MAX as i64 + 1, 0);

@@ -83,8 +83,7 @@ pub struct Writer {
             Future<
                     Item = (Option<Arc<Tablet>>, Operation<'static>, usize),
                     Error = (Operation<'static>, Error),
-                >
-                + Send,
+                > + Send,
         >,
     >,
 
@@ -586,12 +585,11 @@ impl Batch {
 
                 stats.row_errors = row_errors;
                 Ok(stats)
-            })
-                .map_err(move |error| BatchError {
-                    call: call3,
-                    stats,
-                    error,
-                }),
+            }).map_err(move |error| BatchError {
+                call: call3,
+                stats,
+                error,
+            }),
         ));
     }
 }
@@ -742,8 +740,7 @@ mod test {
                     writer.insert(insert);
                 }
                 Ok(())
-            }))
-            .unwrap();
+            })).unwrap();
 
         let stats = runtime
             .block_on(future::poll_fn(|| writer.poll_flush()))

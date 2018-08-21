@@ -125,7 +125,8 @@ impl Stream for Tablets {
                 }
                 Entry::NonCoveredRange {
                     ref upper_bound, ..
-                } if upper_bound.is_empty() =>
+                }
+                    if upper_bound.is_empty() =>
                 {
                     return Ok(Async::Ready(None));
                 }
@@ -295,8 +296,7 @@ impl TableBuilder {
                         seed,
                         ..Default::default()
                     }
-                })
-                .collect(),
+                }).collect(),
             range_schema: Some(RangeSchemaPb {
                 columns: range_partition_columns
                     .into_iter()

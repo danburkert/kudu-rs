@@ -23,9 +23,9 @@ fn main() {
     let kudu_home = match env::var("KUDU_HOME") {
         Ok(kudu_home) => PathBuf::from(kudu_home),
         Err(_) => {
-            let kudu_home = PathBuf::from(
-                env::var("OUT_DIR").expect("OUT_DIR environment variable not set"),
-            ).join(format!("apache-kudu-{}", VERSION));
+            let kudu_home =
+                PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR environment variable not set"))
+                    .join(format!("apache-kudu-{}", VERSION));
 
             if !kudu_home.exists() {
                 download_protos(&kudu_home);
@@ -64,8 +64,7 @@ fn download_protos(target: &Path) {
                 url_base = URL_BASE,
                 version = VERSION,
                 proto = proto
-            ))
-            .expect("failed to configure Kudu URL");
+            )).expect("failed to configure Kudu URL");
         handle
             .follow_location(true)
             .expect("failed to configure follow location");
@@ -75,8 +74,7 @@ fn download_protos(target: &Path) {
                 .write_function(|new_data| {
                     data.extend_from_slice(new_data);
                     Ok(new_data.len())
-                })
-                .expect("failed to write download data");
+                }).expect("failed to write download data");
             transfer
                 .perform()
                 .expect("failed to download Kudu source tarball");

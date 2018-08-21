@@ -7,11 +7,11 @@ use futures::{Async, Future, Poll};
 use ifaces;
 use url::Url;
 
+use pb::HostPortPb;
+use timestamp::DateTime;
 use DataType;
 use Error;
 use Row;
-use pb::HostPortPb;
-use timestamp::DateTime;
 
 pub fn time_to_us(time: SystemTime) -> i64 {
     // TODO: do overflow checking
@@ -110,8 +110,7 @@ pub(crate) fn urls_from_pb(
                 hostport.host,
                 hostport.port
             )).map_err(From::from)
-        })
-        .collect()
+        }).collect()
 }
 
 pub struct ContextFuture<F, C> {

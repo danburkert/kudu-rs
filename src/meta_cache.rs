@@ -149,8 +149,7 @@ impl MasterReplica {
             hostport,
             proxy,
             is_leader: AtomicBool::new(false),
-        })
-            .map_err(Error::from)
+        }).map_err(Error::from)
     }
 }
 
@@ -191,8 +190,7 @@ impl fmt::Debug for MasterReplica {
                 } else {
                     &RaftRole::Follower
                 },
-            )
-            .finish()
+            ).finish()
     }
 }
 
@@ -271,14 +269,7 @@ impl MetaCache {
                 let table_locations = tables
                     .lock()
                     .entry(id)
-                    .or_insert_with(|| {
-                        TableLocations::new(
-                            options,
-                            id,
-                            masters,
-                            tablet_servers,
-                        )
-                    })
+                    .or_insert_with(|| TableLocations::new(options, id, masters, tablet_servers))
                     .clone();
 
                 Ok(Table::new(
@@ -498,7 +489,9 @@ impl TableLocationsTask {
         for pb in tablets {
             let id = TabletId::parse_bytes(&pb.tablet_id)?;
 
-            let partition = pb.partition.expect_field("TabletLocationsPB", "partition")?;
+            let partition = pb
+                .partition
+                .expect_field("TabletLocationsPB", "partition")?;
             let lower_bound = partition
                 .partition_key_start
                 .expect_field("PartitionPb", "partition_key_start")?
@@ -528,8 +521,7 @@ impl TableLocationsTask {
                         .entry(id)
                         .or_insert_with(|| {
                             krpc::Proxy::spawn(rpc_addrs.clone(), self.options.rpc.clone())
-                        })
-                        .clone();
+                        }).clone();
 
                     Ok(TabletReplica {
                         id,
@@ -538,8 +530,7 @@ impl TableLocationsTask {
                         is_stale: AtomicBool::new(false),
                         is_leader: AtomicBool::new(is_leader),
                     })
-                })
-                .collect::<Result<Vec<TabletReplica>>>()?;
+                }).collect::<Result<Vec<TabletReplica>>>()?;
 
             let tablet = Arc::new(Tablet {
                 id,
@@ -610,8 +601,8 @@ impl Future for TableLocationsTask {
                         let ttl = Duration::from_millis(u64::from(response.ttl_millis()));
                         let deadline = now + ttl;
                         let num_tablets = response.tablet_locations.len();
-                        let entries =
-                            self.tablet_locations_to_entries(
+                        let entries = self
+                            .tablet_locations_to_entries(
                                 &*partition_key,
                                 response.tablet_locations,
                                 deadline,
@@ -698,29 +689,26 @@ pub(crate) fn connect_to_cluster(
             .into_iter()
             .map(|hostport| MasterReplica::new(hostport, options)),
     ).collect()
-        .and_then(move |replicas: Vec<MasterReplica>| {
-            let replica_set = Arc::new(replicas.into_boxed_slice());
-            let mut call = MasterService::connect_to_master(
-                Default::default(),
-                Instant::now() + admin_timeout,
-            );
-            call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
+    .and_then(move |replicas: Vec<MasterReplica>| {
+        let replica_set = Arc::new(replicas.into_boxed_slice());
+        let mut call =
+            MasterService::connect_to_master(Default::default(), Instant::now() + admin_timeout);
+        call.set_required_feature_flags(&[MasterFeatures::ConnectToMaster as u32]);
 
-            ReplicaRpc::new(
-                replica_set.clone(),
-                call,
-                Speculation::Full,
-                Selection::Leader,
-                Backoff::with_duration_range(250, u32::max_value()),
-            ).map(move |_| replica_set)
-        })
-        .inspect(move |masters| {
-            info!(
-                "(re)connected to cluster; duration: {:?}, masters: {:?}",
-                Instant::now() - start,
-                masters
-            );
-        })
+        ReplicaRpc::new(
+            replica_set.clone(),
+            call,
+            Speculation::Full,
+            Selection::Leader,
+            Backoff::with_duration_range(250, u32::max_value()),
+        ).map(move |_| replica_set)
+    }).inspect(move |masters| {
+        info!(
+            "(re)connected to cluster; duration: {:?}, masters: {:?}",
+            Instant::now() - start,
+            masters
+        );
+    })
 }
 
 #[cfg(test)]
@@ -762,8 +750,7 @@ mod tests {
                 .block_on(connect_to_cluster(
                     cluster.master_addrs(),
                     &Options::default(),
-                ))
-                .unwrap();
+                )).unwrap();
 
             assert_eq!(masters.len(), num_masters as usize);
             assert_eq!(
@@ -823,8 +810,7 @@ mod tests {
             .block_on(connect_to_cluster(
                 cluster.master_addrs(),
                 &Options::default(),
-            ))
-            .unwrap();
+            )).unwrap();
 
         assert_eq!(3, cluster.master_addrs().len());
         assert_eq!(

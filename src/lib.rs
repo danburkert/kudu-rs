@@ -223,40 +223,36 @@ impl EncodingType {
         G: quickcheck::Gen,
     {
         match data_type {
-            DataType::Bool => {
-                *g.choose(&[
+            DataType::Bool => *g
+                .choose(&[
                     EncodingType::Auto,
                     EncodingType::Plain,
                     EncodingType::RunLength,
-                ]).unwrap()
-            }
+                ]).unwrap(),
             DataType::Int8
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
-            | DataType::Timestamp => {
-                *g.choose(&[
+            | DataType::Timestamp => *g
+                .choose(&[
                     EncodingType::Auto,
                     EncodingType::Plain,
                     EncodingType::RunLength,
                     EncodingType::BitShuffle,
-                ]).unwrap()
-            }
-            DataType::Float | DataType::Double => {
-                *g.choose(&[
+                ]).unwrap(),
+            DataType::Float | DataType::Double => *g
+                .choose(&[
                     EncodingType::Auto,
                     EncodingType::Plain,
                     EncodingType::BitShuffle,
-                ]).unwrap()
-            }
-            DataType::Binary | DataType::String => {
-                *g.choose(&[
+                ]).unwrap(),
+            DataType::Binary | DataType::String => *g
+                .choose(&[
                     EncodingType::Auto,
                     EncodingType::Plain,
                     EncodingType::Prefix,
                     EncodingType::Dictionary,
-                ]).unwrap()
-            }
+                ]).unwrap(),
         }
     }
 }

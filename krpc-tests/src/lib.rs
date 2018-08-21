@@ -55,8 +55,7 @@ fn proxy_errors(report: &tacho::Report) -> usize {
             } else {
                 0
             }
-        })
-        .sum()
+        }).sum()
 }
 
 #[test]

@@ -66,18 +66,17 @@ impl Client {
                 self.deadline(),
             ))
         })).flatten()
-            .and_then(|resp| {
-                TableId::parse_bytes(
-                    &resp
-                        .table_id
-                        .expect_field("CreateTableResponsePb", "table_id")?,
-                )
-            })
-            .and_then(move |table_id| {
-                client
-                    .wait_for_table_creation(table_id)
-                    .map(move |_| table_id)
-            })
+        .and_then(|resp| {
+            TableId::parse_bytes(
+                &resp
+                    .table_id
+                    .expect_field("CreateTableResponsePb", "table_id")?,
+            )
+        }).and_then(move |table_id| {
+            client
+                .wait_for_table_creation(table_id)
+                .map(move |_| table_id)
+        })
     }
 
     /// Returns a future which completes when the table is created.
@@ -100,8 +99,7 @@ impl Client {
             Delay::new(Instant::now() + state.backoff.next_backoff())
                 .map_err(|error| -> Error {
                     panic!("timer failed: {}", error);
-                })
-                .and_then(move |_| {
+                }).and_then(move |_| {
                     let call = MasterService::is_create_table_done(
                         Arc::new(IsCreateTableDoneRequestPb {
                             table: state.table.into(),
@@ -177,25 +175,24 @@ impl Client {
             let call = MasterService::alter_table(Arc::new(pb), self.deadline());
             self.meta_cache.master_rpc(call)
         })).flatten()
-            .and_then(move |resp| {
-                let table_id = str::from_utf8(resp.table_id())
-                    .map_err(|error| Error::Serialization(format!("{}", error)))
-                    .and_then(TableId::parse)?;
+        .and_then(move |resp| {
+            let table_id = str::from_utf8(resp.table_id())
+                .map_err(|error| Error::Serialization(format!("{}", error)))
+                .and_then(TableId::parse)?;
 
-                // If the table partitioning was altered and there is an existing meta cache for the
-                // table, clear it.
-                if schema.is_some() {
-                    // TODO
-                    // client.meta_cache.clear_table_locations(table_id);
-                }
+            // If the table partitioning was altered and there is an existing meta cache for the
+            // table, clear it.
+            if schema.is_some() {
+                // TODO
+                // client.meta_cache.clear_table_locations(table_id);
+            }
 
-                Ok((table_id, client))
-            })
-            .and_then(|(table_id, mut client): (TableId, Client)| {
-                client
-                    .wait_for_table_alteration(table_id)
-                    .map(move |_| table_id)
-            })
+            Ok((table_id, client))
+        }).and_then(|(table_id, mut client): (TableId, Client)| {
+            client
+                .wait_for_table_alteration(table_id)
+                .map(move |_| table_id)
+        })
     }
 
     /// Returns a future which completes when the table is altered.
@@ -221,8 +218,7 @@ impl Client {
             Delay::new(Instant::now() + state.backoff.next_backoff())
                 .map_err(|error| -> Error {
                     panic!("timer failed: {}", error);
-                })
-                .and_then(move |_| {
+                }).and_then(move |_| {
                     let call = MasterService::is_alter_table_done(
                         Arc::new(IsAlterTableDoneRequestPb {
                             table: state.table.into(),
@@ -475,8 +471,7 @@ mod tests {
             .add_range_partition(
                 &RangePartitionBound::Inclusive(lower_bound),
                 &RangePartitionBound::Exclusive(upper_bound),
-            )
-            .rename_table("u")
+            ).rename_table("u")
             .drop_column("c0");
         runtime
             .block_on(client.alter_table_by_id(table_id, alter_builder))

@@ -245,7 +245,7 @@ where
                     return Ok(Async::Ready((replica.proxy, response, sidecars)));
                 }
 
-                | Err(
+                Err(
                     error @ Error::TabletServer(TabletServerError {
                         code: TabletServerErrorCode::TabletNotFound,
                         ..
@@ -278,7 +278,7 @@ where
                     }
                 }
 
-                | Err(
+                Err(
                     error @ Error::Master(MasterError {
                         code: MasterErrorCode::NotTheLeader,
                         ..
@@ -310,7 +310,7 @@ where
                     self.backoff.push(context);
                 }
 
-                | Err(error @ Error::Io(..)) => {
+                Err(error @ Error::Io(..)) => {
                     // IO errors are non-retriable, however they are not fatal.
                     replica.failure = Some(error);
                     self.failures.push(replica);
