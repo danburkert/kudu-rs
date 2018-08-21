@@ -8,7 +8,6 @@ use futures::{Async, Poll};
 
 use transport::Transport;
 use Error;
-use Options;
 use Rpc;
 use RpcError;
 use RpcErrorCode;
@@ -38,7 +37,7 @@ pub(crate) struct Connection {
 impl Connection {
     /// Creates a new connection from the provided transport. Negotiation must already be
     /// complete.
-    pub fn new(transport: Transport, options: &Options) -> Connection {
+    pub fn new(transport: Transport) -> Connection {
         let throttle = transport.options().max_rpcs_in_flight;
         Connection {
             transport,
@@ -86,7 +85,7 @@ impl Connection {
 
     /// Ensure that there is capacity to send an RPC. If an error is returned, the connection must
     /// be dropped.
-    pub fn poll_ready(&mut self, now: Instant) -> Poll<(), ()> {
+    pub fn poll_ready(&mut self) -> Poll<(), ()> {
         trace!("{:?}: poll_ready", self);
 
         // Make sure the transport is ready.
@@ -99,7 +98,7 @@ impl Connection {
             Ok(Async::Ready(()))
         } else {
             // Try to clear the in-flight RPCs.
-            self.poll(now)?;
+            self.poll()?;
             if self.in_flight_rpcs.len() < self.throttle as usize {
                 Ok(Async::Ready(()))
             } else {
@@ -140,7 +139,7 @@ impl Connection {
 
     /// Poll the connection, completing in-flight RPCs if possible.
     /// If an error is returned, the connection must be dropped.
-    pub fn poll(&mut self, now: Instant) -> Result<(), ()> {
+    pub fn poll(&mut self) -> Result<(), ()> {
         trace!("{:?}: poll", self);
         loop {
             match self.transport.poll() {

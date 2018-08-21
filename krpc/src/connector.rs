@@ -4,9 +4,8 @@ use std::str::FromStr;
 use std::vec;
 
 use futures::stream::FuturesUnordered;
-use futures::{self, future, Async, Future, Poll, Stream};
+use futures::{self, Async, Future, Poll, Stream};
 use itertools::Itertools;
-use threadpool;
 
 use connection::Connection;
 use negotiator::Negotiator;
@@ -110,7 +109,7 @@ impl Future for Connector {
         loop {
             match self.negotiating.poll() {
                 Ok(Async::Ready(Some(transport))) => {
-                    return Ok(Async::Ready(Connection::new(transport, &self.options)));
+                    return Ok(Async::Ready(Connection::new(transport)));
                 }
                 // No futures are ready.
                 Ok(Async::Ready(None)) | Ok(Async::NotReady) => break,

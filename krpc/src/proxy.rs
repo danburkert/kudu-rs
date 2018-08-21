@@ -227,7 +227,7 @@ impl Future for ProxyTask {
                     // the connection has no more send capacity, or there are no more messages to
                     // send.  If any message fails to send, the result of the loop is the error.
                     let send_result: Result<(), ()> = loop {
-                        match conn.poll_ready(now) {
+                        match conn.poll_ready() {
                             // The connection has capacity to send an RPC.
                             Ok(Async::Ready(_)) => {
                                 // Take an RPC from the buffer or queue.
@@ -264,7 +264,7 @@ impl Future for ProxyTask {
                     };
 
                     // Poll the connection in order to complete in-flight RPCs.
-                    match send_result.and_then(|_| conn.poll(now)) {
+                    match send_result.and_then(|_| conn.poll()) {
                         Ok(_) => return Ok(Async::NotReady),
                         Err(_) => {
                             buffer.extend(
